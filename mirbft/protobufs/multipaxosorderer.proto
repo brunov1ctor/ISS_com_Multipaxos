@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+option go_package = "./;protobufs";
+package protobufs;
+
+message MPxInstanceId {
+  int32 sn     = 1; // sequence number do segmento
+  int32 bucket = 2; // opcional: bucket/shard
+}
+
+message MPxValue {
+  MPxInstanceId id  = 1;
+  bytes         batch = 2; // payload agregado (batch serializado)
+  bytes         digest = 3; // hash do batch (ex.: sha256)
+}
+
+message MPxPrepare {
+  MPxInstanceId id   = 1;
+  uint64        ballot = 2;
+}
+
+message MPxPromise {
+  MPxInstanceId id        = 1;
+  uint64        ballot    = 2;
+  bool          hasAccepted = 3;
+  uint64        acc_ballot  = 4;
+  MPxValue      acc_value   = 5;
+}
+
+message MPxAccept {
+  MPxInstanceId id    = 1;
+  uint64        ballot = 2;
+  MPxValue      value  = 3;
+}
+
+message MPxAccepted {
+  MPxInstanceId id    = 1;
+  uint64        ballot = 2;
+}
+
+message MPxCommit {
+  MPxInstanceId id    = 1;
+  MPxValue      value = 2;
+}
+
+message MPxMsg {
+  oneof type {
+    MPxPrepare  prepare  = 10;
+    MPxPromise  promise  = 11;
+    MPxAccept   accept   = 12;
+    MPxAccepted accepted = 13;
+    MPxCommit   commit   = 14;
+  }
+}
+
