@@ -1,0 +1,15 @@
+17:39:34.749 INF Connecting to orderer. addrStr=127.0.0.1:10000 peerId=0
+17:39:34.750 INF Connecting to orderer. addrStr=127.0.0.1:10033 peerId=3
+17:39:34.750 INF Connecting to orderer. addrStr=127.0.0.1:10022 peerId=2
+17:39:34.750 INF Connecting to orderer. addrStr=127.0.0.1:10011 peerId=1
+17:39:34.934 INF Connected to orderer. addrStr=127.0.0.1:10000 id=0
+17:39:34.955 INF Connected to orderer. addrStr=127.0.0.1:10033 id=3
+17:39:34.960 INF Connected to orderer. addrStr=127.0.0.1:10022 id=2
+17:39:34.964 INF Connected to orderer. addrStr=127.0.0.1:10011 id=1
+17:39:34.991 INF Connected to orderers.
+17:39:34.991 INF Setting up client timeout. clientRunTime=30000
+17:39:34.991 INF Starting to submit requests. numRequests=7680
+17:39:34.992 INF Updating bucket assignment. epoch=0
+17:39:34.992 INF Resubmitted Requests. epoch=0 n=0
+17:40:04.992 INF Stopping client on timeout. clientRunTime=30000
+17:40:04.998 INF Finished submitting requests. nReq=3842

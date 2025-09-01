@@ -1,0 +1,132 @@
+{"level":"debug","Logging":"info","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","UseTLS":true,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","CACertFile":"tls-data/ca.pem","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","KeyFile":"tls-data/auth.key","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","CertFile":"tls-data/auth.pem","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","PriorityConnections":2,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","BasicConnections":4,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","TestConnections":false,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ExcessConnections":1,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ConnectionTestMsgs":4,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ConnectionTestPayload":131072,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","OutMessageBufsize":1024,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","OutMessageBufsize":1,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ThroughputCap":131072000,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","StragglerTolerance":1000,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","BatchSizeIncrement":256,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","Orderer":"MultiPaxos","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","Manager":"Mir","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","Failures":0,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","CrashTiming":"EpochStart","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","CheckpointInterval":256,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","WatermarkWindowSize":256,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","EpochLength":256,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","SegmentLength":256,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","WaitForCheckpoints":true,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ClientWatermarkWindowSize":4194304,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ClientRequestBacklogSize":4194304,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","RandomSeed":4737,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","NodeToLeaderRatio":1,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","LeaderPolicy":"Single","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","DefaultLeaderBan":2,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","NumBuckets":16,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","BatchSize":1000,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","DisabledViewChange":false,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ViewChangeTimeout":60000,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ClientTraceSampling":10,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","EventBufferSize":2097152,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","TraceSampling":1,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ClientsPerProcess":1,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","RequestsPerClient":15360,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ClientRunTime":30000,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","RequestRate":256,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","HardRequestRateLimit":false,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","RequestPayloadSize":500,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","SignRequests":true,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ClientPrivKeyFile":"tls-data/client-ecdsa-256.key","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","ClientPubKeyFile":"tls-data/client-ecdsa-256.pem","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","PrecomputeRequests":false,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","RequestHandlerThreads":32,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","RequestInputChannelBuffer":8192,"time":"2025-09-01T17:45:56-03:00","message":"Config"}
+{"level":"debug","BatchVerifier":"external","time":"2025-09-01T17:45:56-03:00","message":"Config"}
+17:45:56.967 INF Registered with discovery server. numPeers=4 ownID=0
+17:45:56.968 INF Profiling enabled.
+17:45:56.968 INF Setting up profiling.
+17:45:56.968 INF Started Profiler: CPU
+17:45:56.968 INF Started Profiler: BLOCK
+17:45:56.968 INF Started Profiler: MUTEX
+17:45:56.968 INF Profiler will stop on signal. exit=true
+17:45:56.969 INF Tracing will stop on signal. exit=false
+17:45:56.969 INF Started tracing. traceFile=experiment-output/0003/slave-003/peer.trc
+17:45:56.970 INF MultiPaxosOrderer initialized
+17:45:56.970 INF Listening for connections. port=10000 useTLS=true
+17:45:56.981 INF Connecting to peer. addr=127.0.0.1:10011 basicConns=4 priorityConns=2
+17:45:56.981 INF Connecting to peer. addr=127.0.0.1:10033 basicConns=4 priorityConns=2
+17:45:56.982 INF Connecting to peer. addr=127.0.0.1:10022 basicConns=4 priorityConns=2
+17:45:56.983 INF Connecting to peer. addr=127.0.0.1:10000 basicConns=4 priorityConns=2
+17:45:57.582 INF Incoming connection for protocol messages. addr=127.0.0.1:48994
+17:45:57.605 INF Incoming connection for protocol messages. addr=127.0.0.1:48962
+17:45:57.606 INF Incoming connection for protocol messages. addr=127.0.0.1:49026
+17:45:57.652 INF Incoming connection for protocol messages. addr=127.0.0.1:49000
+17:45:57.729 INF Incoming connection for protocol messages. addr=127.0.0.1:49010
+17:45:57.736 INF Incoming connection for protocol messages. addr=127.0.0.1:48992
+17:45:57.891 INF Incoming connection for protocol messages. addr=127.0.0.1:48986
+17:45:57.913 INF Incoming connection for protocol messages. addr=127.0.0.1:48970
+17:45:58.211 INF Incoming connection for protocol messages. addr=127.0.0.1:50314
+17:45:58.212 INF Incoming connection for protocol messages. addr=127.0.0.1:50328
+17:45:58.221 INF Incoming connection for protocol messages. addr=127.0.0.1:50360
+17:45:58.224 INF Incoming connection for protocol messages. addr=127.0.0.1:50296
+17:45:58.230 INF Incoming connection for protocol messages. addr=127.0.0.1:50392
+17:45:58.231 INF Incoming connection for protocol messages. addr=127.0.0.1:50368
+17:45:58.237 INF Incoming connection for protocol messages. addr=127.0.0.1:50418
+17:45:58.252 INF Incoming connection for protocol messages. addr=127.0.0.1:50344
+17:45:58.252 INF Incoming connection for protocol messages. addr=127.0.0.1:50388
+17:45:58.255 INF Connected to all peers.
+17:45:58.255 INF Incoming connection for protocol messages. addr=127.0.0.1:50420
+17:45:58.255 INF Incoming connection for protocol messages. addr=127.0.0.1:50396
+17:45:58.261 INF Incoming connection for protocol messages. addr=127.0.0.1:50404
+17:45:58.261 INF Incoming connection for protocol messages. addr=127.0.0.1:50374
+17:45:58.265 INF Incoming connection for protocol messages. addr=127.0.0.1:50356
+17:45:58.267 INF Incoming connection for protocol messages. addr=127.0.0.1:50294
+17:45:58.270 INF Incoming connection for protocol messages. addr=127.0.0.1:50298
+17:45:58.273 INF All peers finished connecting. Starting ISS.
+17:45:58.274 INF MultiPaxosOrderer started
+17:46:00.499 INF Incoming connection for requests. addr=127.0.0.1:50424
+17:48:00.384 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:50424
+17:48:00.385 ERR Expected EOF on Buckets RPC. error="rpc error: code = Canceled desc = context canceled"
+17:48:00.391 INF Stopping profiler.
+17:48:00.391 INF Stopping Tracer. events=246 fileName=experiment-output/0003/slave-003/peer.trc
+==================
+WARNING: DATA RACE
+Read at 0x00c000926648 by goroutine 99:
+  github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).Stop()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/tracing/bufferedtrace.go:237 +0x35c
+  github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).StopOnSignal.func1()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/tracing/bufferedtrace.go:298 +0x47
+
+Previous write at 0x00c000926648 by goroutine 98:
+  github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).Event()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/tracing/bufferedtrace.go:105 +0x2e7
+  github.com/hyperledger-labs/mirbft/profiling.StartCPUTracing.func1()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/profiling/cpuusage.go:31 +0xa1
+
+Goroutine 99 (running) created at:
+  github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).StopOnSignal()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/tracing/bufferedtrace.go:292 +0x185
+  main.setUpTracing()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/cmd/orderingpeer/main.go:204 +0xee
+  main.main()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/cmd/orderingpeer/main.go:98 +0xa44
+
+Goroutine 98 (running) created at:
+  github.com/hyperledger-labs/mirbft/profiling.StartCPUTracing()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/profiling/cpuusage.go:28 +0xbd
+  main.setUpTracing()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/cmd/orderingpeer/main.go:196 +0x7e
+  main.main()
+      /opt/gopath/src/github.com/hyperledger-labs/mirbft/cmd/orderingpeer/main.go:98 +0xa44
+==================
+17:48:00.394 INF Trace data written.
+17:48:00.399 INF Profile data written. filename=experiment-output/0003/slave-003/prof.mutex name=mutex
+17:48:00.572 INF Profile data written. filename=experiment-output/0003/slave-003/prof.cpu name=cpu
+17:48:00.585 INF Profile data written. filename=experiment-output/0003/slave-003/prof.block name=block
