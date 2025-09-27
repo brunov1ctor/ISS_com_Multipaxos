@@ -178,28 +178,66 @@ func registerClientConnection(srv pb.Messenger_RequestServer, clientID int32) {
 // Sends a response to a client request.
 func RespondToClient(clientID int32, response *pb.ClientResponse) {
 
-	// WARNING: If a simulate crash, the peer ignores all messages
+	// Se o peer está "crashed", não envia nada.
 	if Crashed {
+		fmt.Printf("[MESSENGER][DROP] crashed=1 client=%d (não enviou)\n", clientID)
 		return
 	}
 
-	// Check whether the client connection is present.
-	if srv, ok := clientConnections.Load(clientID); ok {
-
-		// Try sending the response.
-		if err := srv.(pb.Messenger_RequestServer).Send(response); err != nil {
-
-			// Log sending error.
-			logger.Error().
-				Err(err).
-				Int32("clientID", clientID).
-				Msg("Error responding to client. No connection present.")
-		}
-	} else {
-		// Log error if connection is not present.
-		logger.Error().Int32("clientID", clientID).Msg("Not respondig to client. No connection present.")
+	// Sanidade do objeto de resposta.
+	if response == nil {
+		logger.Error().Int32("clientID", clientID).Msg("Not responding to client. Nil response.")
+		fmt.Printf("[MESSENGER][ERR] client=%d nil response (drop)\n", clientID)
+		return
 	}
+
+	// Extraímos os campos para logar mesmo se o envio falhar.
+	orderSn := response.GetOrderSn()
+	clientSn := response.GetClientSn()
+
+	// Verifica se há conexão registrada para esse clientID.
+	srv, ok := clientConnections.Load(clientID)
+	if !ok || srv == nil {
+		logger.Error().
+			Int32("clientID", clientID).
+			Int32("clientSn", clientSn).
+			Int32("orderSn", orderSn).
+			Msg("Not responding to client. No connection present.")
+		fmt.Printf("[MESSENGER][ERR] client=%d not connected (drop clientSn=%d sn=%d)\n",
+			clientID, clientSn, orderSn)
+		return
+	}
+
+	// Confere o tipo da conexão (defensivo).
+	rs, ok := srv.(pb.Messenger_RequestServer)
+	if !ok || rs == nil {
+		logger.Error().
+			Int32("clientID", clientID).
+			Msg("Not responding to client. Invalid connection type.")
+		fmt.Printf("[MESSENGER][ERR] client=%d invalid connection type (drop clientSn=%d sn=%d)\n",
+			clientID, clientSn, orderSn)
+		return
+	}
+
+	// Tenta enviar a resposta.
+	if err := rs.Send(response); err != nil {
+		logger.Error().
+			Err(err).
+			Int32("clientID", clientID).
+			Int32("clientSn", clientSn).
+			Int32("orderSn", orderSn).
+			Msg("Error responding to client.")
+		fmt.Printf("[MESSENGER][ERR] send failed client=%d clientSn=%d sn=%d err=%v\n",
+			clientID, clientSn, orderSn, err)
+		return
+	}
+
+	// Sucesso.
+	// (Este log é crucial para fechar o "fio" RESPONDER→MESSENGER→CLIENTE.)
+	fmt.Printf("[MESSENGER][OK] client=%d deliver clientSn=%d sn=%d\n",
+		clientID, clientSn, orderSn)
 }
+
 
 // Creates connections to all the orderers and returns them as a slice of gRPC client stubs.
 // This function is used by the client.

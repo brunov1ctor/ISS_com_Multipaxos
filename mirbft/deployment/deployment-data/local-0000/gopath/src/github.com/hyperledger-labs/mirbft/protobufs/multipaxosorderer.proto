@@ -3,53 +3,36 @@ syntax = "proto3";
 option go_package = "./;protobufs";
 package protobufs;
 
+// Identificação do slot (aqui só SN; adapte se quiser epoch/segment).
 message MPxInstanceId {
-  int32 sn     = 1; // sequence number do segmento
-  int32 bucket = 2; // opcional: bucket/shard
+  int32  sn   = 1;
+  uint64 lead = 2; // nodeId do líder proponente (opcional)
 }
 
 message MPxValue {
-  MPxInstanceId id  = 1;
-  bytes         batch = 2; // payload agregado (batch serializado)
-  bytes         digest = 3; // hash do batch (ex.: sha256)
-}
-
-message MPxPrepare {
   MPxInstanceId id   = 1;
-  uint64        ballot = 2;
+  bytes         batch = 2;  // protobuf-encoded Batch; vazio => ⊥
 }
 
-message MPxPromise {
-  MPxInstanceId id        = 1;
-  uint64        ballot    = 2;
-  bool          hasAccepted = 3;
-  uint64        acc_ballot  = 4;
-  MPxValue      acc_value   = 5;
-}
+// Fase 1 (opcional nesta versão simplificada CFT)
+message MPxPrepare  { MPxInstanceId id = 1; uint64 ballot = 2; }
+message MPxPromise  { MPxInstanceId id = 1; uint64 ballot = 2; bool ok = 3; }
 
-message MPxAccept {
-  MPxInstanceId id    = 1;
-  uint64        ballot = 2;
-  MPxValue      value  = 3;
-}
+// Fase 2 (efetiva)
+message MPxAccept   { MPxInstanceId id = 1; uint64 ballot = 2; MPxValue value = 3; }
+message MPxAccepted { MPxInstanceId id = 1; uint64 ballot = 2; bool ok = 3; }
 
-message MPxAccepted {
-  MPxInstanceId id    = 1;
-  uint64        ballot = 2;
-}
+// Commit/announce (opcional; serve para convergência)
+message MPxCommit   { MPxInstanceId id = 1; MPxValue value = 2; }
 
-message MPxCommit {
-  MPxInstanceId id    = 1;
-  MPxValue      value = 2;
-}
-
+// Envelope
 message MPxMsg {
   oneof type {
-    MPxPrepare  prepare  = 10;
-    MPxPromise  promise  = 11;
-    MPxAccept   accept   = 12;
-    MPxAccepted accepted = 13;
-    MPxCommit   commit   = 14;
+    MPxPrepare  prepare  = 1;
+    MPxPromise  promise  = 2;
+    MPxAccept   accept   = 3;
+    MPxAccepted accepted = 4;
+    MPxCommit   commit   = 5;
   }
 }
 

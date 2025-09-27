@@ -1,17 +1,20 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 	logger "github.com/rs/zerolog/log"
+
 	"github.com/hyperledger-labs/mirbft/checkpoint"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/crypto"
 	"github.com/hyperledger-labs/mirbft/discovery"
 	"github.com/hyperledger-labs/mirbft/manager"
+	mirlog "github.com/hyperledger-labs/mirbft/log"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
 	"github.com/hyperledger-labs/mirbft/orderer"
@@ -26,7 +29,15 @@ import (
 // TODO: This is ugly and dirty. Implement graceful shutdown!
 var profilingEnabled = false
 
+// local interface to avoid importing manager internals
+type entryHandlerRegistrar interface {
+	RegisterEntryHandler(func(*mirlog.Entry))
+}
+
 func main() {
+
+	exe, _ := os.Executable()
+	fmt.Printf("[BIN] orderingpeer exe=%s\n", exe)
 
 	// Get command line arguments
 	configFileName := os.Args[1]
@@ -42,13 +53,8 @@ func main() {
 	logger.Logger = logger.Output(zerolog.ConsoleWriter{
 		Out:        os.Stdout,
 		NoColor:    true,
-		TimeFormat: "15:04:05.000"})
-	//zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMs
-	//logger.Logger = logger.Output(zerolog.ConsoleWriter{
-	//	Out:        os.Stdout,
-	//	NoColor:    true,
-	//	TimeFormat: "15:04:05.000",
-	//})
+		TimeFormat: "15:04:05.000",
+	})
 
 	// Initialize packages that need the configuration to be loaded for initialization
 	membership.Init()
@@ -72,7 +78,7 @@ func main() {
 		Int("numPeers", len(nodeIdentities)).
 		Msg("Registered with discovery server.")
 
-	// Desirialize TBLS keys
+	// Deserialize TBLS keys
 	TBLSPubKey, err := crypto.TBLSPubKeyFromBytes(serializedTBLSPubKey)
 	if err != nil {
 		logger.Fatal().Msgf("Could not deserialize TBLS public key %s", err.Error())
@@ -112,14 +118,14 @@ func main() {
 
 	// Initialize modules.
 	// No outgoing messages must be produced even after initialization,
-	// but the modules must be raady to process incoming messages.
+	// but the modules must be ready to process incoming messages.
 	ord.Init(mngr)
 	chkp.Init(mngr)
 
-	//// Make adjustments if this peer simulates a faulty one
-	//if membership.OwnID < int32(config.Config.Failures) {
-	//	config.Config.ViewChangeTimeout = 100
-	//}
+	// >>> Registra SOMENTE o handler do orderer (o Responder lê do log global)
+	if reg, ok := mngr.(entryHandlerRegistrar); ok {
+		reg.RegisterEntryHandler(ord.HandleEntry)
+	}
 
 	// Register message and entry handlers
 	messenger.CheckpointMsgHandler = chkp.HandleMessage
@@ -163,7 +169,7 @@ func main() {
 	// The order of the calls must not matter, as they are all concurrent. If it does, it's a bug.
 	// By now all the modules must be initialized and ready to process messages.
 	// After starting, the modules will produce messages on their own.
-	go rsp.Start(&wg)
+	go rsp.Start(&wg)  // Responder observa mirlog.Entries() e chama messenger.RespondToClient(...)
 	go chkp.Start(&wg)
 	go mngr.Start(&wg)
 	go ord.Start(&wg)
@@ -187,7 +193,6 @@ func setUpProfiling(outFilePrefix string) {
 
 // Sets up tracing of events.
 func setUpTracing(outFileName string, ownID int32) {
-
 	// Initialize tracing with output file name given at command line
 	tracing.MainTrace.Start(outFileName, ownID)
 
@@ -228,7 +233,7 @@ func setOrderer(ordererType string) (ord orderer.Orderer) {
 		ord = &orderer.HotStuffOrderer{}
 	case "Raft":
 		ord = &orderer.RaftOrderer{}
-	case "MultiPaxos": // <-- NOVO
+	case "MultiPaxos":
 		ord = &orderer.MultiPaxosOrderer{}
 	default:
 		logger.Fatal().Msg("Unsupported orderer type")
@@ -247,3 +252,4 @@ func setCheckpointer(managerType string) (chkp checkpoint.Checkpointer) {
 	}
 	return chkp
 }
+

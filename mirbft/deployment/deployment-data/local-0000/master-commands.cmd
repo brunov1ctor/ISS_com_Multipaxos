@@ -29,7 +29,7 @@ discover-wait
 wait for 2s
 # Run clients locally and wait for them to stop.
 exec-start 1client experiment-output/0000/slave-__id__/clients.log orderingclient experiment-output/0000/slave-__id__/config/config.yml 127.0.0.1:9999 experiment-output/0000/slave-__id__/client experiment-output/0000/slave-__id__/prof-client
-exec-wait 1client 60000 exec-start 1client experiment-output/0000/slave-__id__/FAILED echo Client failed or timed out; exec-wait 1client 2000
+exec-wait 1client 480000 exec-start 1client experiment-output/0000/slave-__id__/FAILED echo Client failed or timed out; exec-wait 1client 2000
 sync 1client
 
 # Stop peers.
@@ -69,7 +69,7 @@ discover-wait
 wait for 2s
 # Run clients locally and wait for them to stop.
 exec-start 1client experiment-output/0001/slave-__id__/clients.log orderingclient experiment-output/0001/slave-__id__/config/config.yml 127.0.0.1:9999 experiment-output/0001/slave-__id__/client experiment-output/0001/slave-__id__/prof-client
-exec-wait 1client 60000 exec-start 1client experiment-output/0001/slave-__id__/FAILED echo Client failed or timed out; exec-wait 1client 2000
+exec-wait 1client 480000 exec-start 1client experiment-output/0001/slave-__id__/FAILED echo Client failed or timed out; exec-wait 1client 2000
 sync 1client
 
 # Stop peers.
@@ -109,7 +109,7 @@ discover-wait
 wait for 2s
 # Run clients locally and wait for them to stop.
 exec-start 1client experiment-output/0002/slave-__id__/clients.log orderingclient experiment-output/0002/slave-__id__/config/config.yml 127.0.0.1:9999 experiment-output/0002/slave-__id__/client experiment-output/0002/slave-__id__/prof-client
-exec-wait 1client 60000 exec-start 1client experiment-output/0002/slave-__id__/FAILED echo Client failed or timed out; exec-wait 1client 2000
+exec-wait 1client 480000 exec-start 1client experiment-output/0002/slave-__id__/FAILED echo Client failed or timed out; exec-wait 1client 2000
 sync 1client
 
 # Stop peers.
@@ -149,7 +149,7 @@ discover-wait
 wait for 2s
 # Run clients locally and wait for them to stop.
 exec-start 1client experiment-output/0003/slave-__id__/clients.log orderingclient experiment-output/0003/slave-__id__/config/config.yml 127.0.0.1:9999 experiment-output/0003/slave-__id__/client experiment-output/0003/slave-__id__/prof-client
-exec-wait 1client 60000 exec-start 1client experiment-output/0003/slave-__id__/FAILED echo Client failed or timed out; exec-wait 1client 2000
+exec-wait 1client 480000 exec-start 1client experiment-output/0003/slave-__id__/FAILED echo Client failed or timed out; exec-wait 1client 2000
 sync 1client
 
 # Stop peers.
@@ -167,7 +167,7 @@ write-file master-status 0003
 # Wait for all slaves, even if they were not involved in experiments.
 # Wait for slaves.
 wait for slaves 1client 1
-wait for slaves peers 4
+wait for slaves peers 128
 
 # Stop all slaves.
 stop __all__

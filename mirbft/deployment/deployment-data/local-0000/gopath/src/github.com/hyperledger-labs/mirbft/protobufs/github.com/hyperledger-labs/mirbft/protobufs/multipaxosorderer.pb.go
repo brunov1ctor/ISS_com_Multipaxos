@@ -23,8 +23,10 @@ const (
 
 type MPxInstanceId struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sn            int32                  `protobuf:"varint,1,opt,name=sn,proto3" json:"sn,omitempty"`         // sequence number do segmento
-	Bucket        int32                  `protobuf:"varint,2,opt,name=bucket,proto3" json:"bucket,omitempty"` // opcional: bucket/shard
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Segment       uint64                 `protobuf:"varint,2,opt,name=segment,proto3" json:"segment,omitempty"`
+	Sn            int32                  `protobuf:"varint,3,opt,name=sn,proto3" json:"sn,omitempty"`
+	LeaderNodeId  uint64                 `protobuf:"varint,4,opt,name=leader_node_id,json=leaderNodeId,proto3" json:"leader_node_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -59,6 +61,20 @@ func (*MPxInstanceId) Descriptor() ([]byte, []int) {
 	return file_multipaxosorderer_proto_rawDescGZIP(), []int{0}
 }
 
+func (x *MPxInstanceId) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *MPxInstanceId) GetSegment() uint64 {
+	if x != nil {
+		return x.Segment
+	}
+	return 0
+}
+
 func (x *MPxInstanceId) GetSn() int32 {
 	if x != nil {
 		return x.Sn
@@ -66,9 +82,9 @@ func (x *MPxInstanceId) GetSn() int32 {
 	return 0
 }
 
-func (x *MPxInstanceId) GetBucket() int32 {
+func (x *MPxInstanceId) GetLeaderNodeId() uint64 {
 	if x != nil {
-		return x.Bucket
+		return x.LeaderNodeId
 	}
 	return 0
 }
@@ -76,8 +92,8 @@ func (x *MPxInstanceId) GetBucket() int32 {
 type MPxValue struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Batch         []byte                 `protobuf:"bytes,2,opt,name=batch,proto3" json:"batch,omitempty"`   // payload agregado
-	Digest        []byte                 `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"` // hash do batch (sha256, por exemplo)
+	Batch         []byte                 `protobuf:"bytes,2,opt,name=batch,proto3" json:"batch,omitempty"`   // protobuf-encoded Batch
+	Digest        []byte                 `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"` // hash do batch (ex.: SHA-256)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -137,6 +153,8 @@ type MPxPrepare struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Ballot        uint64                 `protobuf:"varint,2,opt,name=ballot,proto3" json:"ballot,omitempty"`
+	LeaderNodeId  uint64                 `protobuf:"varint,3,opt,name=leader_node_id,json=leaderNodeId,proto3" json:"leader_node_id,omitempty"` // quem inicia o Prepare
+	FromNodeId    uint64                 `protobuf:"varint,4,opt,name=from_node_id,json=fromNodeId,proto3" json:"from_node_id,omitempty"`       // remetente desta mensagem
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -185,16 +203,29 @@ func (x *MPxPrepare) GetBallot() uint64 {
 	return 0
 }
 
+func (x *MPxPrepare) GetLeaderNodeId() uint64 {
+	if x != nil {
+		return x.LeaderNodeId
+	}
+	return 0
+}
+
+func (x *MPxPrepare) GetFromNodeId() uint64 {
+	if x != nil {
+		return x.FromNodeId
+	}
+	return 0
+}
+
 type MPxPromise struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Id     *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Ballot uint64                 `protobuf:"varint,2,opt,name=ballot,proto3" json:"ballot,omitempty"`
-	// Se já tiver valor aceito
-	HasAccepted   bool      `protobuf:"varint,3,opt,name=hasAccepted,proto3" json:"hasAccepted,omitempty"`
-	AccBallot     uint64    `protobuf:"varint,4,opt,name=acc_ballot,json=accBallot,proto3" json:"acc_ballot,omitempty"`
-	AccValue      *MPxValue `protobuf:"bytes,5,opt,name=acc_value,json=accValue,proto3" json:"acc_value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Id             *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Ballot         uint64                 `protobuf:"varint,2,opt,name=ballot,proto3" json:"ballot,omitempty"`                                       // ballot do Prepare ao qual responde
+	FromNodeId     uint64                 `protobuf:"varint,3,opt,name=from_node_id,json=fromNodeId,proto3" json:"from_node_id,omitempty"`           // quem está prometendo
+	AcceptedBallot uint64                 `protobuf:"varint,4,opt,name=accepted_ballot,json=acceptedBallot,proto3" json:"accepted_ballot,omitempty"` // maior ballot previamente aceito (se houver)
+	AcceptedValue  *MPxValue              `protobuf:"bytes,5,opt,name=accepted_value,json=acceptedValue,proto3" json:"accepted_value,omitempty"`     // valor previamente aceito (opcional)
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *MPxPromise) Reset() {
@@ -241,23 +272,23 @@ func (x *MPxPromise) GetBallot() uint64 {
 	return 0
 }
 
-func (x *MPxPromise) GetHasAccepted() bool {
+func (x *MPxPromise) GetFromNodeId() uint64 {
 	if x != nil {
-		return x.HasAccepted
-	}
-	return false
-}
-
-func (x *MPxPromise) GetAccBallot() uint64 {
-	if x != nil {
-		return x.AccBallot
+		return x.FromNodeId
 	}
 	return 0
 }
 
-func (x *MPxPromise) GetAccValue() *MPxValue {
+func (x *MPxPromise) GetAcceptedBallot() uint64 {
 	if x != nil {
-		return x.AccValue
+		return x.AcceptedBallot
+	}
+	return 0
+}
+
+func (x *MPxPromise) GetAcceptedValue() *MPxValue {
+	if x != nil {
+		return x.AcceptedValue
 	}
 	return nil
 }
@@ -267,6 +298,7 @@ type MPxAccept struct {
 	Id            *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Ballot        uint64                 `protobuf:"varint,2,opt,name=ballot,proto3" json:"ballot,omitempty"`
 	Value         *MPxValue              `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	FromNodeId    uint64                 `protobuf:"varint,4,opt,name=from_node_id,json=fromNodeId,proto3" json:"from_node_id,omitempty"` // remetente (normalmente o líder)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -322,10 +354,18 @@ func (x *MPxAccept) GetValue() *MPxValue {
 	return nil
 }
 
+func (x *MPxAccept) GetFromNodeId() uint64 {
+	if x != nil {
+		return x.FromNodeId
+	}
+	return 0
+}
+
 type MPxAccepted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Ballot        uint64                 `protobuf:"varint,2,opt,name=ballot,proto3" json:"ballot,omitempty"`
+	FromNodeId    uint64                 `protobuf:"varint,3,opt,name=from_node_id,json=fromNodeId,proto3" json:"from_node_id,omitempty"` // quem aceitou
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -374,10 +414,19 @@ func (x *MPxAccepted) GetBallot() uint64 {
 	return 0
 }
 
+func (x *MPxAccepted) GetFromNodeId() uint64 {
+	if x != nil {
+		return x.FromNodeId
+	}
+	return 0
+}
+
 type MPxCommit struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Value         *MPxValue              `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Ballot        uint64                 `protobuf:"varint,2,opt,name=ballot,proto3" json:"ballot,omitempty"`
+	Value         *MPxValue              `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	FromNodeId    uint64                 `protobuf:"varint,4,opt,name=from_node_id,json=fromNodeId,proto3" json:"from_node_id,omitempty"` // quem difunde o commit
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -419,11 +468,85 @@ func (x *MPxCommit) GetId() *MPxInstanceId {
 	return nil
 }
 
+func (x *MPxCommit) GetBallot() uint64 {
+	if x != nil {
+		return x.Ballot
+	}
+	return 0
+}
+
 func (x *MPxCommit) GetValue() *MPxValue {
 	if x != nil {
 		return x.Value
 	}
 	return nil
+}
+
+func (x *MPxCommit) GetFromNodeId() uint64 {
+	if x != nil {
+		return x.FromNodeId
+	}
+	return 0
+}
+
+type MPxInit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	LeaderNodeId  uint64                 `protobuf:"varint,2,opt,name=leader_node_id,json=leaderNodeId,proto3" json:"leader_node_id,omitempty"`
+	FromNodeId    uint64                 `protobuf:"varint,3,opt,name=from_node_id,json=fromNodeId,proto3" json:"from_node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MPxInit) Reset() {
+	*x = MPxInit{}
+	mi := &file_multipaxosorderer_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MPxInit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MPxInit) ProtoMessage() {}
+
+func (x *MPxInit) ProtoReflect() protoreflect.Message {
+	mi := &file_multipaxosorderer_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MPxInit.ProtoReflect.Descriptor instead.
+func (*MPxInit) Descriptor() ([]byte, []int) {
+	return file_multipaxosorderer_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *MPxInit) GetId() *MPxInstanceId {
+	if x != nil {
+		return x.Id
+	}
+	return nil
+}
+
+func (x *MPxInit) GetLeaderNodeId() uint64 {
+	if x != nil {
+		return x.LeaderNodeId
+	}
+	return 0
+}
+
+func (x *MPxInit) GetFromNodeId() uint64 {
+	if x != nil {
+		return x.FromNodeId
+	}
+	return 0
 }
 
 type MPxMsg struct {
@@ -435,6 +558,7 @@ type MPxMsg struct {
 	//	*MPxMsg_Accept
 	//	*MPxMsg_Accepted
 	//	*MPxMsg_Commit
+	//	*MPxMsg_Init
 	Type          isMPxMsg_Type `protobuf_oneof:"type"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -442,7 +566,7 @@ type MPxMsg struct {
 
 func (x *MPxMsg) Reset() {
 	*x = MPxMsg{}
-	mi := &file_multipaxosorderer_proto_msgTypes[7]
+	mi := &file_multipaxosorderer_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -454,7 +578,7 @@ func (x *MPxMsg) String() string {
 func (*MPxMsg) ProtoMessage() {}
 
 func (x *MPxMsg) ProtoReflect() protoreflect.Message {
-	mi := &file_multipaxosorderer_proto_msgTypes[7]
+	mi := &file_multipaxosorderer_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -467,7 +591,7 @@ func (x *MPxMsg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MPxMsg.ProtoReflect.Descriptor instead.
 func (*MPxMsg) Descriptor() ([]byte, []int) {
-	return file_multipaxosorderer_proto_rawDescGZIP(), []int{7}
+	return file_multipaxosorderer_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *MPxMsg) GetType() isMPxMsg_Type {
@@ -522,28 +646,41 @@ func (x *MPxMsg) GetCommit() *MPxCommit {
 	return nil
 }
 
+func (x *MPxMsg) GetInit() *MPxInit {
+	if x != nil {
+		if x, ok := x.Type.(*MPxMsg_Init); ok {
+			return x.Init
+		}
+	}
+	return nil
+}
+
 type isMPxMsg_Type interface {
 	isMPxMsg_Type()
 }
 
 type MPxMsg_Prepare struct {
-	Prepare *MPxPrepare `protobuf:"bytes,10,opt,name=prepare,proto3,oneof"`
+	Prepare *MPxPrepare `protobuf:"bytes,1,opt,name=prepare,proto3,oneof"`
 }
 
 type MPxMsg_Promise struct {
-	Promise *MPxPromise `protobuf:"bytes,11,opt,name=promise,proto3,oneof"`
+	Promise *MPxPromise `protobuf:"bytes,2,opt,name=promise,proto3,oneof"`
 }
 
 type MPxMsg_Accept struct {
-	Accept *MPxAccept `protobuf:"bytes,12,opt,name=accept,proto3,oneof"`
+	Accept *MPxAccept `protobuf:"bytes,3,opt,name=accept,proto3,oneof"`
 }
 
 type MPxMsg_Accepted struct {
-	Accepted *MPxAccepted `protobuf:"bytes,13,opt,name=accepted,proto3,oneof"`
+	Accepted *MPxAccepted `protobuf:"bytes,4,opt,name=accepted,proto3,oneof"`
 }
 
 type MPxMsg_Commit struct {
-	Commit *MPxCommit `protobuf:"bytes,14,opt,name=commit,proto3,oneof"`
+	Commit *MPxCommit `protobuf:"bytes,5,opt,name=commit,proto3,oneof"`
+}
+
+type MPxMsg_Init struct {
+	Init *MPxInit `protobuf:"bytes,6,opt,name=init,proto3,oneof"`
 }
 
 func (*MPxMsg_Prepare) isMPxMsg_Type() {}
@@ -556,47 +693,66 @@ func (*MPxMsg_Accepted) isMPxMsg_Type() {}
 
 func (*MPxMsg_Commit) isMPxMsg_Type() {}
 
+func (*MPxMsg_Init) isMPxMsg_Type() {}
+
 var File_multipaxosorderer_proto protoreflect.FileDescriptor
 
 const file_multipaxosorderer_proto_rawDesc = "" +
 	"\n" +
-	"\x17multipaxosorderer.proto\x12\x10mirbft.protobufs\"7\n" +
-	"\rMPxInstanceId\x12\x0e\n" +
-	"\x02sn\x18\x01 \x01(\x05R\x02sn\x12\x16\n" +
-	"\x06bucket\x18\x02 \x01(\x05R\x06bucket\"i\n" +
-	"\bMPxValue\x12/\n" +
-	"\x02id\x18\x01 \x01(\v2\x1f.mirbft.protobufs.MPxInstanceIdR\x02id\x12\x14\n" +
+	"\x17multipaxosorderer.proto\x12\tprotobufs\"u\n" +
+	"\rMPxInstanceId\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x18\n" +
+	"\asegment\x18\x02 \x01(\x04R\asegment\x12\x0e\n" +
+	"\x02sn\x18\x03 \x01(\x05R\x02sn\x12$\n" +
+	"\x0eleader_node_id\x18\x04 \x01(\x04R\fleaderNodeId\"b\n" +
+	"\bMPxValue\x12(\n" +
+	"\x02id\x18\x01 \x01(\v2\x18.protobufs.MPxInstanceIdR\x02id\x12\x14\n" +
 	"\x05batch\x18\x02 \x01(\fR\x05batch\x12\x16\n" +
-	"\x06digest\x18\x03 \x01(\fR\x06digest\"U\n" +
+	"\x06digest\x18\x03 \x01(\fR\x06digest\"\x96\x01\n" +
 	"\n" +
-	"MPxPrepare\x12/\n" +
-	"\x02id\x18\x01 \x01(\v2\x1f.mirbft.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
-	"\x06ballot\x18\x02 \x01(\x04R\x06ballot\"\xcf\x01\n" +
+	"MPxPrepare\x12(\n" +
+	"\x02id\x18\x01 \x01(\v2\x18.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
+	"\x06ballot\x18\x02 \x01(\x04R\x06ballot\x12$\n" +
+	"\x0eleader_node_id\x18\x03 \x01(\x04R\fleaderNodeId\x12 \n" +
+	"\ffrom_node_id\x18\x04 \x01(\x04R\n" +
+	"fromNodeId\"\xd5\x01\n" +
 	"\n" +
-	"MPxPromise\x12/\n" +
-	"\x02id\x18\x01 \x01(\v2\x1f.mirbft.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
+	"MPxPromise\x12(\n" +
+	"\x02id\x18\x01 \x01(\v2\x18.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
 	"\x06ballot\x18\x02 \x01(\x04R\x06ballot\x12 \n" +
-	"\vhasAccepted\x18\x03 \x01(\bR\vhasAccepted\x12\x1d\n" +
-	"\n" +
-	"acc_ballot\x18\x04 \x01(\x04R\taccBallot\x127\n" +
-	"\tacc_value\x18\x05 \x01(\v2\x1a.mirbft.protobufs.MPxValueR\baccValue\"\x86\x01\n" +
-	"\tMPxAccept\x12/\n" +
-	"\x02id\x18\x01 \x01(\v2\x1f.mirbft.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
-	"\x06ballot\x18\x02 \x01(\x04R\x06ballot\x120\n" +
-	"\x05value\x18\x03 \x01(\v2\x1a.mirbft.protobufs.MPxValueR\x05value\"V\n" +
-	"\vMPxAccepted\x12/\n" +
-	"\x02id\x18\x01 \x01(\v2\x1f.mirbft.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
-	"\x06ballot\x18\x02 \x01(\x04R\x06ballot\"n\n" +
-	"\tMPxCommit\x12/\n" +
-	"\x02id\x18\x01 \x01(\v2\x1f.mirbft.protobufs.MPxInstanceIdR\x02id\x120\n" +
-	"\x05value\x18\x02 \x01(\v2\x1a.mirbft.protobufs.MPxValueR\x05value\"\xaf\x02\n" +
-	"\x06MPxMsg\x128\n" +
-	"\aprepare\x18\n" +
-	" \x01(\v2\x1c.mirbft.protobufs.MPxPrepareH\x00R\aprepare\x128\n" +
-	"\apromise\x18\v \x01(\v2\x1c.mirbft.protobufs.MPxPromiseH\x00R\apromise\x125\n" +
-	"\x06accept\x18\f \x01(\v2\x1b.mirbft.protobufs.MPxAcceptH\x00R\x06accept\x12;\n" +
-	"\baccepted\x18\r \x01(\v2\x1d.mirbft.protobufs.MPxAcceptedH\x00R\baccepted\x125\n" +
-	"\x06commit\x18\x0e \x01(\v2\x1b.mirbft.protobufs.MPxCommitH\x00R\x06commitB\x06\n" +
+	"\ffrom_node_id\x18\x03 \x01(\x04R\n" +
+	"fromNodeId\x12'\n" +
+	"\x0faccepted_ballot\x18\x04 \x01(\x04R\x0eacceptedBallot\x12:\n" +
+	"\x0eaccepted_value\x18\x05 \x01(\v2\x13.protobufs.MPxValueR\racceptedValue\"\x9a\x01\n" +
+	"\tMPxAccept\x12(\n" +
+	"\x02id\x18\x01 \x01(\v2\x18.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
+	"\x06ballot\x18\x02 \x01(\x04R\x06ballot\x12)\n" +
+	"\x05value\x18\x03 \x01(\v2\x13.protobufs.MPxValueR\x05value\x12 \n" +
+	"\ffrom_node_id\x18\x04 \x01(\x04R\n" +
+	"fromNodeId\"q\n" +
+	"\vMPxAccepted\x12(\n" +
+	"\x02id\x18\x01 \x01(\v2\x18.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
+	"\x06ballot\x18\x02 \x01(\x04R\x06ballot\x12 \n" +
+	"\ffrom_node_id\x18\x03 \x01(\x04R\n" +
+	"fromNodeId\"\x9a\x01\n" +
+	"\tMPxCommit\x12(\n" +
+	"\x02id\x18\x01 \x01(\v2\x18.protobufs.MPxInstanceIdR\x02id\x12\x16\n" +
+	"\x06ballot\x18\x02 \x01(\x04R\x06ballot\x12)\n" +
+	"\x05value\x18\x03 \x01(\v2\x13.protobufs.MPxValueR\x05value\x12 \n" +
+	"\ffrom_node_id\x18\x04 \x01(\x04R\n" +
+	"fromNodeId\"{\n" +
+	"\aMPxInit\x12(\n" +
+	"\x02id\x18\x01 \x01(\v2\x18.protobufs.MPxInstanceIdR\x02id\x12$\n" +
+	"\x0eleader_node_id\x18\x02 \x01(\x04R\fleaderNodeId\x12 \n" +
+	"\ffrom_node_id\x18\x03 \x01(\x04R\n" +
+	"fromNodeId\"\xb6\x02\n" +
+	"\x06MPxMsg\x121\n" +
+	"\aprepare\x18\x01 \x01(\v2\x15.protobufs.MPxPrepareH\x00R\aprepare\x121\n" +
+	"\apromise\x18\x02 \x01(\v2\x15.protobufs.MPxPromiseH\x00R\apromise\x12.\n" +
+	"\x06accept\x18\x03 \x01(\v2\x14.protobufs.MPxAcceptH\x00R\x06accept\x124\n" +
+	"\baccepted\x18\x04 \x01(\v2\x16.protobufs.MPxAcceptedH\x00R\baccepted\x12.\n" +
+	"\x06commit\x18\x05 \x01(\v2\x14.protobufs.MPxCommitH\x00R\x06commit\x12(\n" +
+	"\x04init\x18\x06 \x01(\v2\x12.protobufs.MPxInitH\x00R\x04initB\x06\n" +
 	"\x04typeB8Z6github.com/hyperledger-labs/mirbft/protobufs;protobufsb\x06proto3"
 
 var (
@@ -611,37 +767,40 @@ func file_multipaxosorderer_proto_rawDescGZIP() []byte {
 	return file_multipaxosorderer_proto_rawDescData
 }
 
-var file_multipaxosorderer_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_multipaxosorderer_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_multipaxosorderer_proto_goTypes = []any{
-	(*MPxInstanceId)(nil), // 0: mirbft.protobufs.MPxInstanceId
-	(*MPxValue)(nil),      // 1: mirbft.protobufs.MPxValue
-	(*MPxPrepare)(nil),    // 2: mirbft.protobufs.MPxPrepare
-	(*MPxPromise)(nil),    // 3: mirbft.protobufs.MPxPromise
-	(*MPxAccept)(nil),     // 4: mirbft.protobufs.MPxAccept
-	(*MPxAccepted)(nil),   // 5: mirbft.protobufs.MPxAccepted
-	(*MPxCommit)(nil),     // 6: mirbft.protobufs.MPxCommit
-	(*MPxMsg)(nil),        // 7: mirbft.protobufs.MPxMsg
+	(*MPxInstanceId)(nil), // 0: protobufs.MPxInstanceId
+	(*MPxValue)(nil),      // 1: protobufs.MPxValue
+	(*MPxPrepare)(nil),    // 2: protobufs.MPxPrepare
+	(*MPxPromise)(nil),    // 3: protobufs.MPxPromise
+	(*MPxAccept)(nil),     // 4: protobufs.MPxAccept
+	(*MPxAccepted)(nil),   // 5: protobufs.MPxAccepted
+	(*MPxCommit)(nil),     // 6: protobufs.MPxCommit
+	(*MPxInit)(nil),       // 7: protobufs.MPxInit
+	(*MPxMsg)(nil),        // 8: protobufs.MPxMsg
 }
 var file_multipaxosorderer_proto_depIdxs = []int32{
-	0,  // 0: mirbft.protobufs.MPxValue.id:type_name -> mirbft.protobufs.MPxInstanceId
-	0,  // 1: mirbft.protobufs.MPxPrepare.id:type_name -> mirbft.protobufs.MPxInstanceId
-	0,  // 2: mirbft.protobufs.MPxPromise.id:type_name -> mirbft.protobufs.MPxInstanceId
-	1,  // 3: mirbft.protobufs.MPxPromise.acc_value:type_name -> mirbft.protobufs.MPxValue
-	0,  // 4: mirbft.protobufs.MPxAccept.id:type_name -> mirbft.protobufs.MPxInstanceId
-	1,  // 5: mirbft.protobufs.MPxAccept.value:type_name -> mirbft.protobufs.MPxValue
-	0,  // 6: mirbft.protobufs.MPxAccepted.id:type_name -> mirbft.protobufs.MPxInstanceId
-	0,  // 7: mirbft.protobufs.MPxCommit.id:type_name -> mirbft.protobufs.MPxInstanceId
-	1,  // 8: mirbft.protobufs.MPxCommit.value:type_name -> mirbft.protobufs.MPxValue
-	2,  // 9: mirbft.protobufs.MPxMsg.prepare:type_name -> mirbft.protobufs.MPxPrepare
-	3,  // 10: mirbft.protobufs.MPxMsg.promise:type_name -> mirbft.protobufs.MPxPromise
-	4,  // 11: mirbft.protobufs.MPxMsg.accept:type_name -> mirbft.protobufs.MPxAccept
-	5,  // 12: mirbft.protobufs.MPxMsg.accepted:type_name -> mirbft.protobufs.MPxAccepted
-	6,  // 13: mirbft.protobufs.MPxMsg.commit:type_name -> mirbft.protobufs.MPxCommit
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	0,  // 0: protobufs.MPxValue.id:type_name -> protobufs.MPxInstanceId
+	0,  // 1: protobufs.MPxPrepare.id:type_name -> protobufs.MPxInstanceId
+	0,  // 2: protobufs.MPxPromise.id:type_name -> protobufs.MPxInstanceId
+	1,  // 3: protobufs.MPxPromise.accepted_value:type_name -> protobufs.MPxValue
+	0,  // 4: protobufs.MPxAccept.id:type_name -> protobufs.MPxInstanceId
+	1,  // 5: protobufs.MPxAccept.value:type_name -> protobufs.MPxValue
+	0,  // 6: protobufs.MPxAccepted.id:type_name -> protobufs.MPxInstanceId
+	0,  // 7: protobufs.MPxCommit.id:type_name -> protobufs.MPxInstanceId
+	1,  // 8: protobufs.MPxCommit.value:type_name -> protobufs.MPxValue
+	0,  // 9: protobufs.MPxInit.id:type_name -> protobufs.MPxInstanceId
+	2,  // 10: protobufs.MPxMsg.prepare:type_name -> protobufs.MPxPrepare
+	3,  // 11: protobufs.MPxMsg.promise:type_name -> protobufs.MPxPromise
+	4,  // 12: protobufs.MPxMsg.accept:type_name -> protobufs.MPxAccept
+	5,  // 13: protobufs.MPxMsg.accepted:type_name -> protobufs.MPxAccepted
+	6,  // 14: protobufs.MPxMsg.commit:type_name -> protobufs.MPxCommit
+	7,  // 15: protobufs.MPxMsg.init:type_name -> protobufs.MPxInit
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_multipaxosorderer_proto_init() }
@@ -649,12 +808,13 @@ func file_multipaxosorderer_proto_init() {
 	if File_multipaxosorderer_proto != nil {
 		return
 	}
-	file_multipaxosorderer_proto_msgTypes[7].OneofWrappers = []any{
+	file_multipaxosorderer_proto_msgTypes[8].OneofWrappers = []any{
 		(*MPxMsg_Prepare)(nil),
 		(*MPxMsg_Promise)(nil),
 		(*MPxMsg_Accept)(nil),
 		(*MPxMsg_Accepted)(nil),
 		(*MPxMsg_Commit)(nil),
+		(*MPxMsg_Init)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -662,7 +822,7 @@ func file_multipaxosorderer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_multipaxosorderer_proto_rawDesc), len(file_multipaxosorderer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
