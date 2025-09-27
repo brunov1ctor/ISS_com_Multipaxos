@@ -40,15 +40,15 @@ faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 da
 clients1="1"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
-systemSizes="4" # Must be sorted in ascending order!
-failureCounts=(0) # For each system size, the corresponding failure count (on top of the correct nodes)
+systemSizes="4 16 64 128" #"4"  Must be sorted in ascending order!
+failureCounts=(0 0 0 0) # For each system size, the corresponding failure count (on top of the correct nodes)
 reuseFaulty=true  # If true, both correct and faulty peers will have the same tag and will be launched together, with the same config file.
                   # The failure count is only expressed as a parameter in (every peer's) config file, and even the faulty peers will see
                   # Faulty=false in their config file. They need to derive their behavior from the Failures config field (and potentially
                   # the RandomSeed field).
 
 # Low-level system parameters
-loggingLevel="info"
+loggingLevel="debug" #"info"
 peerTag="peers"
 faultyPeerTag="faultyPeers"
 minConcurrentRequests=$((256 * 16384)) # Based on empirical data. At saturation, makes the throughput-latency plot nicely go up (as it is equivalent to may concurrent clients).
@@ -62,12 +62,12 @@ throughputCap=131072000     # The system will always be proposing requests at a 
                             # Used to prevent view changes when too many batches accumulate in a bucket.
 
 # System composition
-orderers="MultiPaxos"             # Possible values: Pbft HotStuff Raft Dummy
+orderers="MultiPaxos"             # Possible values: MultiPaxos Pbft HotStuff Raft Dummy
 checkpointers="Signing"
 
 # Parameters chosen for experiments
 durations="30"             # [s]   !!! Don't forget to change the timeout in generate-master-commands.py if increasing this value !!!
-bandwidths="1gbit"         # any value accepted by the tc command or "unlimited" !!! ATTENTION: Adapt MaxProposeDataRate in config accordingly !!!
+bandwidths="unlimited" #"1gbit"         # any value accepted by the tc command or "unlimited" !!! ATTENTION: Adapt MaxProposeDataRate in config accordingly !!!
 payloadSizes="500"         # [Bytes]
 fixedEpochLength=false
 auths="true"
@@ -142,7 +142,7 @@ throughputsNoAuthSinglePbft[64]=""
 throughputsNoAuthSinglePbft[128]=""
 
 throughputsAuthHotStuff=$()
-throughputsAuthHotStuff[4]=""
+throughputsAuthHotStuff[4]="128 256"
 throughputsAuthHotStuff[8]=""
 throughputsAuthHotStuff[16]=""
 throughputsAuthHotStuff[32]=""
@@ -158,7 +158,7 @@ throughputsNoAuthHotStuff[64]=""
 throughputsNoAuthHotStuff[128]=""
 
 throughputsAuthSingleHotStuff=$()
-throughputsAuthSingleHotStuff[4]=""
+throughputsAuthSingleHotStuff[4]="128 256"
 throughputsAuthSingleHotStuff[8]=""
 throughputsAuthSingleHotStuff[16]=""
 throughputsAuthSingleHotStuff[32]=""
@@ -174,7 +174,7 @@ throughputsNoAuthSingleHotStuff[64]=""
 throughputsNoAuthSingleHotStuff[128]=""
 
 throughputsAuthRaft=$()
-throughputsAuthRaft[4]=""
+throughputsAuthRaft[4]="128 256"
 throughputsAuthRaft[8]=""
 throughputsAuthRaft[16]=""
 throughputsAuthRaft[32]=""
@@ -190,7 +190,7 @@ throughputsNoAuthRaft[64]=""
 throughputsNoAuthRaft[128]=""
 
 throughputsAuthSingleRaft=$()
-throughputsAuthSingleRaft[4]=""
+throughputsAuthSingleRaft[4]="128 256"
 throughputsAuthSingleRaft[8]=""
 throughputsAuthSingleRaft[16]=""
 throughputsAuthSingleRaft[32]=""
