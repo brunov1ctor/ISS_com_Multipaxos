@@ -82,12 +82,12 @@ type MultiPaxosOrderer struct {
 	emit     func(pm *pb.ProtocolMessage)
 	announce AnnounceFn
 
-	maxBatchSize   int
-	proposeEvery   time.Duration
-	view           int32 // view atual
-	stopWg         sync.WaitGroup
-	sbNilAfter     time.Duration // timeout para ⊥ (default: 3x BatchTimeout)
-	enableNilDeliver bool        // liga/desliga SB-⊥
+	maxBatchSize     int
+	proposeEvery     time.Duration
+	view             int32 // view atual
+	stopWg           sync.WaitGroup
+	sbNilAfter       time.Duration // timeout para ⊥ (default: 3x BatchTimeout)
+	enableNilDeliver bool          // liga/desliga SB-⊥
 }
 
 // líder do SEGMENTO (não por slot)
@@ -238,7 +238,8 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		}
 	}
 
-	// pipeline conduzido por UM líder do segmento
+	// pipeline conduzido por UM líder do segmento,
+	// mas **todos** os nós fazem tick para permitir SB-⊥ local.
 	go func() {
 		t := time.NewTicker(o.proposeEvery)
 		defer t.Stop()
@@ -248,6 +249,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			now := time.Now()
 
 			if isSegmentLeader(seg, membership.OwnID, o.view) {
+				// líder: propõe e faz tick
 				for sn := nextSN; sn <= seg.LastSN(); sn++ {
 					inst, _ := o.dispatcher.load(sn)
 					if inst == nil {
@@ -263,7 +265,15 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					return
 				}
 			} else {
-				// seguidores somente processam mensagens recebidas.
+				// *** CORREÇÃO: seguidores também fazem tick ***
+				for sn := nextSN; sn <= seg.LastSN(); sn++ {
+					inst, _ := o.dispatcher.load(sn)
+					if inst != nil {
+						// permite que cada réplica acione SB-⊥ localmente
+						// mesmo sem progresso do líder
+						inst.tick(now)
+					}
+				}
 				if nextSN > seg.LastSN() {
 					return
 				}
