@@ -21,6 +21,7 @@ import (
 	"github.com/hyperledger-labs/mirbft/crypto"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/tracing"
+	logger "github.com/rs/zerolog/log"
 )
 
 // TODO: It's inefficient to hash a request every time it is needed to get the request ID
@@ -42,15 +43,29 @@ func HandleRequest(req *pb.ClientRequest) {
 
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
 
+	// Log VISÍVEL de chegada da request (client → peer)
+	// Obs.: GetBucketByHashing abaixo é determinístico, então podemos logar antes de enfileirar.
+	b := GetBucketByHashing(req)
+	logger.Info().
+		Int32("clientID", req.RequestId.ClientId).
+		Int32("clientSn", req.RequestId.ClientSn).
+		Int("bucketID", b.GetId()).
+		Msg("[REQ] ClientRequest received -> bucket")
+
 	if config.Config.RequestHandlerThreads > 0 {
-		// Write request to the corresponding input channel for further processing by a request handler thread.
-		// There is a fixed number of request handler threads (should be at most as many as there are physical cores)
-		// to avoid cache contention on the request Buffers. To avoid this contention, it is also crucial that requests from
-		// the same client (there is a separate Buffer per client) are handled by the same request handler thread.
 		requestInputChannels[int(req.RequestId.ClientId)%config.Config.RequestHandlerThreads] <- req
 	} else {
 		AddReqMsg(req)
 	}
+
+	// Após enfileirar, logar o tamanho aproximado do bucket
+	// (como AddReqMsg adiciona, podemos estimar novamente)
+	// Obs.: por simplicidade, recomputamos; para precisão, mover log p/ dentro de AddReqMsg.
+	b2 := GetBucketByHashing(req)
+	logger.Debug().
+		Int("bucketID", b2.GetId()).
+		Int("bucketLenApprox", b2.Len()).
+		Msg("[REQ] Bucket size after enqueue")
 }
 
 func GetBucketByHashing(req *pb.ClientRequest) *Bucket {

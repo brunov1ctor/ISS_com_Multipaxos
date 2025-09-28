@@ -122,7 +122,9 @@ func AnnounceBucketAssignment(assignment *pb.BucketAssignment) {
 
 	// Update current bucket assignment.
 	bucketAssignmentMsg = assignment
-
+	logger.Info().
+	Int("numPeers", len(assignment.Buckets)).
+	Msg("[CL] AnnounceBucketAssignment to clients")
 	// Announce new assignment to all subscribers.
 	for clID, msgSink := range bucketSubscriptions {
 		if err := msgSink.Send(bucketAssignmentMsg); err != nil {
@@ -336,6 +338,7 @@ func connectToOrderer(ordererID int32, ownClientID int32, clientLog zerolog.Logg
 	// Perform an initial handshake with the server, exchanging one dummy request and one dummy response.
 	// TODO: Is this still necessary when using secure connections? (Probably yes.)
 	performServerHandshake(reqClient, ownClientID)
+	logger.Info().Msg("[CL] Client handshake OK (dummy request/response)")
 	clientLog.Info().Int32("id", identity.NodeId).Str("addrStr", addrString).Msg("Connected to orderer.")
 
 	// Return gRPC message sinks and connections.
