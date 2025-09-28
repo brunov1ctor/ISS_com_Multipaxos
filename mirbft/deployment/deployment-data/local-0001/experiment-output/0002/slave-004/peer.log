@@ -1,137 +1,132 @@
 [BIN] orderingpeer exe=/root/go/bin/orderingpeer
-{"level":"debug","Logging":"debug","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","UseTLS":true,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","CACertFile":"tls-data/ca.pem","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","KeyFile":"tls-data/auth.key","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","CertFile":"tls-data/auth.pem","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","PriorityConnections":2,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","BasicConnections":4,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","TestConnections":false,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ExcessConnections":1,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ConnectionTestMsgs":4,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ConnectionTestPayload":131072,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","OutMessageBufsize":1024,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","OutMessageBufsize":1,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ThroughputCap":131072000,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","StragglerTolerance":1000,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","BatchSizeIncrement":256,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","Orderer":"Pbft","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","Manager":"Mir","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","Failures":0,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","CrashTiming":"EpochStart","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","CheckpointInterval":256,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","WatermarkWindowSize":256,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","EpochLength":256,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","SegmentLength":256,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","WaitForCheckpoints":true,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ClientWatermarkWindowSize":4194304,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ClientRequestBacklogSize":4194304,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","RandomSeed":16606,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","NodeToLeaderRatio":1,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","LeaderPolicy":"Single","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","DefaultLeaderBan":2,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","NumBuckets":16,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","BatchSize":1000,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","DisabledViewChange":false,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ViewChangeTimeout":60000,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ClientTraceSampling":10,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","EventBufferSize":2097152,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","TraceSampling":1,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ClientsPerProcess":1,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","RequestsPerClient":7680,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ClientRunTime":30000,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","RequestRate":128,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","HardRequestRateLimit":false,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","RequestPayloadSize":500,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","SignRequests":true,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ClientPrivKeyFile":"tls-data/client-ecdsa-256.key","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","ClientPubKeyFile":"tls-data/client-ecdsa-256.pem","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","PrecomputeRequests":false,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","RequestHandlerThreads":32,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","RequestInputChannelBuffer":8192,"time":"2025-09-27T14:11:14-03:00","message":"Config"}
-{"level":"debug","BatchVerifier":"external","time":"2025-09-27T14:11:14-03:00","message":"Config"}
-14:11:14.688 INF Registered with discovery server. numPeers=4 ownID=0
-14:11:14.689 INF Profiling enabled.
-14:11:14.689 INF Setting up profiling.
-14:11:14.689 INF Started Profiler: CPU
-14:11:14.689 INF Started Profiler: BLOCK
-14:11:14.690 INF Started Profiler: MUTEX
-14:11:14.690 INF Profiler will stop on signal. exit=true
-14:11:14.692 INF Tracing will stop on signal. exit=false
-14:11:14.693 INF Started tracing. traceFile=experiment-output/0002/slave-004/peer.trc
-[RESPONDER][VER] RESPONDER+SEND-LOGS-v1.1-2025-09-22 started at 2025-09-27T14:11:14.693582414-03:00
-14:11:14.703 INF Connecting to peer. addr=127.0.0.1:10011 basicConns=4 priorityConns=2
-14:11:14.696 INF Listening for connections. port=10000 useTLS=true
-14:11:14.704 INF Connecting to peer. addr=127.0.0.1:10000 basicConns=4 priorityConns=2
-14:11:14.705 INF Connecting to peer. addr=127.0.0.1:10033 basicConns=4 priorityConns=2
-14:11:14.697 DBG Starting backlog.
-14:11:14.716 INF Connecting to peer. addr=127.0.0.1:10022 basicConns=4 priorityConns=2
-14:11:15.290 DBG Connected. peerID=1
-14:11:15.469 INF Incoming connection for protocol messages. addr=127.0.0.1:40500
-14:11:15.483 INF Incoming connection for protocol messages. addr=127.0.0.1:40512
-14:11:15.651 DBG Connected. peerID=2
-14:11:15.667 INF Incoming connection for protocol messages. addr=127.0.0.1:40510
-14:11:15.699 DBG Connected. peerID=3
-14:11:15.709 INF Incoming connection for protocol messages. addr=127.0.0.1:40524
-14:11:15.944 INF Incoming connection for protocol messages. addr=127.0.0.1:40556
-14:11:15.944 INF Incoming connection for protocol messages. addr=127.0.0.1:40534
-14:11:15.956 INF Incoming connection for protocol messages. addr=127.0.0.1:40686
-14:11:15.962 INF Incoming connection for protocol messages. addr=127.0.0.1:40590
-14:11:15.973 INF Incoming connection for protocol messages. addr=127.0.0.1:40708
-14:11:15.976 INF Incoming connection for protocol messages. addr=127.0.0.1:40710
-14:11:15.977 INF Incoming connection for protocol messages. addr=127.0.0.1:40702
-14:11:15.983 INF Incoming connection for protocol messages. addr=127.0.0.1:40540
-14:11:15.985 INF Incoming connection for protocol messages. addr=127.0.0.1:40634
-14:11:15.989 INF Incoming connection for protocol messages. addr=127.0.0.1:40566
-14:11:15.991 INF Incoming connection for protocol messages. addr=127.0.0.1:40606
-14:11:15.993 INF Incoming connection for protocol messages. addr=127.0.0.1:40584
-14:11:15.998 INF Incoming connection for protocol messages. addr=127.0.0.1:40582
-14:11:16.001 INF Incoming connection for protocol messages. addr=127.0.0.1:40666
-14:11:16.003 INF Incoming connection for protocol messages. addr=127.0.0.1:40558
-14:11:16.006 INF Incoming connection for protocol messages. addr=127.0.0.1:40678
-14:11:16.017 INF Incoming connection for protocol messages. addr=127.0.0.1:40642
-14:11:16.026 INF Incoming connection for protocol messages. addr=127.0.0.1:40724
-14:11:16.029 INF Incoming connection for protocol messages. addr=127.0.0.1:40620
-14:11:16.040 INF Incoming connection for protocol messages. addr=127.0.0.1:40656
-14:11:16.040 DBG Connected. peerID=0
-14:11:16.040 INF Connected to all peers.
-14:11:16.044 INF All peers finished connecting. Starting ISS.
-14:11:16.044 DBG Buckets for 0-th leader 0: [0 4 8 12 1 5 9 13 2 6 10 14 3 7 11 15]
-14:11:16.044 INF PbftOrderer received a new segment: [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 150 151 152 153 154 155 156 157 158 159 160 161 162 163 164 165 166 167 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 207 208 209 210 211 212 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 233 234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255] first leader=0 firstSN=0 lastSN=255 len=256 length=256 segId=0
-14:11:16.045 INF Starting new view. segID=0 timeout=60000 view=0
-14:11:16.045 DBG Starting timer. sn=0 view=0
-14:11:16.046 INF Starting PBFT instance. first=0 last=255 segID=0
-14:11:16.046 DBG Leading segment. segID=0
-14:11:16.046 INF Starting serialized message processing. segID=0
-14:11:16.046 DBG Waiting for batch. batchSize=4096
-14:11:16.046 DBG Subscribing to backlog. segID=0
-14:11:17.047 DBG Batch ready. batchSize=4096
-14:11:17.047 DBG Batch cut. left=0 nBuckets=16 nReq=0 next=0
-14:11:17.047 INF Sending PREPREPARE. nReq=0 senderID=0 sn=0 view=0
-14:11:17.047 DBG Waiting for batch. batchSize=4096
-14:11:17.054 DBG Sending COMMIT. senderID=0 sn=0 view=0
-14:11:17.056 INF Committed entry. latency=0 nReq=0 sn=0
-14:11:17.056 INF Delivered batch. nReq=0 sn=0
+{"level":"debug","Logging":"debug","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","UseTLS":true,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","CACertFile":"tls-data/ca.pem","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","KeyFile":"tls-data/auth.key","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","CertFile":"tls-data/auth.pem","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","PriorityConnections":2,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","BasicConnections":4,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","TestConnections":false,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ExcessConnections":1,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ConnectionTestMsgs":4,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ConnectionTestPayload":131072,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","OutMessageBufsize":1024,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","OutMessageBufsize":1,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ThroughputCap":131072000,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","StragglerTolerance":1000,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","BatchSizeIncrement":256,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","Orderer":"Pbft","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","Manager":"Mir","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","Failures":0,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","CrashTiming":"EpochStart","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","CheckpointInterval":256,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","WatermarkWindowSize":256,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","EpochLength":256,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","SegmentLength":256,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","WaitForCheckpoints":true,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ClientWatermarkWindowSize":4194304,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ClientRequestBacklogSize":4194304,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","RandomSeed":20027,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","NodeToLeaderRatio":1,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","LeaderPolicy":"Single","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","DefaultLeaderBan":2,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","NumBuckets":16,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","BatchSize":1000,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","DisabledViewChange":false,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ViewChangeTimeout":60000,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ClientTraceSampling":10,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","EventBufferSize":2097152,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","TraceSampling":1,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ClientsPerProcess":1,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","RequestsPerClient":7680,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ClientRunTime":30000,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","RequestRate":128,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","HardRequestRateLimit":false,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","RequestPayloadSize":500,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","SignRequests":true,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ClientPrivKeyFile":"tls-data/client-ecdsa-256.key","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","ClientPubKeyFile":"tls-data/client-ecdsa-256.pem","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","PrecomputeRequests":false,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","RequestHandlerThreads":32,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","RequestInputChannelBuffer":8192,"time":"2025-09-27T21:02:33-03:00","message":"Config"}
+{"level":"debug","BatchVerifier":"external","time":"2025-09-27T21:02:33-03:00","message":"Config"}
+21:02:33.884 INF Registered with discovery server. numPeers=4 ownID=3
+21:02:33.885 INF Profiling enabled.
+21:02:33.885 INF Setting up profiling.
+21:02:33.885 INF Started Profiler: CPU
+21:02:33.885 INF Started Profiler: BLOCK
+21:02:33.885 INF Started Profiler: MUTEX
+21:02:33.885 INF Profiler will stop on signal. exit=true
+21:02:33.887 INF Tracing will stop on signal. exit=false
+21:02:33.887 INF Started tracing. traceFile=experiment-output/0002/slave-004/peer.trc
+[RESPONDER][VER] RESPONDER+SEND-LOGS-v1.1-2025-09-22 started at 2025-09-27T21:02:33.887722941-03:00
+21:02:33.888 DBG Starting backlog.
+21:02:33.888 INF Listening for connections. port=10033 useTLS=true
+21:02:33.894 INF Connecting to peer. addr=127.0.0.1:10033 basicConns=4 priorityConns=2
+21:02:33.894 INF Connecting to peer. addr=127.0.0.1:10000 basicConns=4 priorityConns=2
+21:02:33.897 INF Connecting to peer. addr=127.0.0.1:10011 basicConns=4 priorityConns=2
+21:02:33.899 INF Connecting to peer. addr=127.0.0.1:10022 basicConns=4 priorityConns=2
+21:02:34.441 INF Incoming connection for protocol messages. addr=127.0.0.1:36934
+21:02:34.604 INF Incoming connection for protocol messages. addr=127.0.0.1:36952
+21:02:34.644 INF Incoming connection for protocol messages. addr=127.0.0.1:36968
+21:02:34.684 INF Incoming connection for protocol messages. addr=127.0.0.1:36920
+21:02:34.694 INF Incoming connection for protocol messages. addr=127.0.0.1:36972
+21:02:34.758 INF Incoming connection for protocol messages. addr=127.0.0.1:37014
+21:02:34.775 INF Incoming connection for protocol messages. addr=127.0.0.1:37056
+21:02:34.808 INF Incoming connection for protocol messages. addr=127.0.0.1:37010
+21:02:34.856 INF Incoming connection for protocol messages. addr=127.0.0.1:37040
+21:02:34.880 INF Incoming connection for protocol messages. addr=127.0.0.1:36988
+21:02:34.886 INF Incoming connection for protocol messages. addr=127.0.0.1:36978
+21:02:34.924 INF Incoming connection for protocol messages. addr=127.0.0.1:36966
+21:02:34.986 INF Incoming connection for protocol messages. addr=127.0.0.1:37028
+21:02:34.995 INF Incoming connection for protocol messages. addr=127.0.0.1:37076
+21:02:35.005 DBG Connected. peerID=2
+21:02:35.012 INF Incoming connection for protocol messages. addr=127.0.0.1:36996
+21:02:35.040 INF Incoming connection for protocol messages. addr=127.0.0.1:36950
+21:02:35.082 INF Incoming connection for protocol messages. addr=127.0.0.1:37068
+21:02:35.093 DBG Connected. peerID=0
+21:02:35.153 DBG Connected. peerID=1
+21:02:35.160 INF Incoming connection for protocol messages. addr=127.0.0.1:37048
+21:02:35.163 INF Incoming connection for protocol messages. addr=127.0.0.1:37092
+21:02:35.211 INF Incoming connection for protocol messages. addr=127.0.0.1:37120
+21:02:35.219 INF Incoming connection for protocol messages. addr=127.0.0.1:37106
+21:02:35.251 DBG Connected. peerID=3
+21:02:35.251 INF Connected to all peers.
+21:02:35.251 INF Incoming connection for protocol messages. addr=127.0.0.1:37122
+21:02:35.259 INF Incoming connection for protocol messages. addr=127.0.0.1:37098
+21:02:35.261 INF Incoming connection for protocol messages. addr=127.0.0.1:37114
+21:02:35.280 INF All peers finished connecting. Starting ISS.
+21:02:35.280 DBG Buckets for 0-th leader 0: [0 4 8 12 1 5 9 13 2 6 10 14 3 7 11 15]
+21:02:35.281 INF PbftOrderer received a new segment: [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 150 151 152 153 154 155 156 157 158 159 160 161 162 163 164 165 166 167 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 207 208 209 210 211 212 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 233 234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255] first leader=0 firstSN=0 lastSN=255 len=256 length=256 segId=0
+21:02:35.281 INF Starting new view. segID=0 timeout=60000 view=0
+21:02:35.282 DBG Starting timer. sn=0 view=0
+21:02:35.283 INF Starting PBFT instance. first=0 last=255 segID=0
+21:02:35.283 INF Starting serialized message processing. segID=0
+21:02:35.283 DBG Subscribing to backlog. segID=0
+21:02:36.289 INF Handling PREPREPARE. nReq=0 senderID=0 sn=0
+21:02:36.289 DBG Creating new Batch. nReq=0
+21:02:36.289 DBG Sending PREPARE. senderID=3 sn=0 view=0
+21:02:36.291 DBG Sending COMMIT. senderID=3 sn=0 view=0
+21:02:36.292 INF Committed entry. latency=0 nReq=0 sn=0
+21:02:36.292 INF Delivered batch. nReq=0 sn=0
+21:02:36.292 DBG Starting timer. sn=1 view=0
 [RESPONDER][WARN] sn=0 batch vazio ou nil — nada a enviar
-14:11:17.056 DBG Starting timer. sn=1 view=0
-14:11:18.047 DBG Batch ready. batchSize=4096
-14:11:18.048 DBG Batch cut. left=0 nBuckets=16 nReq=0 next=0
-14:11:18.048 INF Sending PREPREPARE. nReq=0 senderID=0 sn=1 view=0
-14:11:18.048 DBG Waiting for batch. batchSize=4096
-14:11:18.050 DBG Sending COMMIT. senderID=0 sn=1 view=0
-14:11:18.052 INF Committed entry. latency=0 nReq=0 sn=1
-14:11:18.052 INF Delivered batch. nReq=0 sn=1
+21:02:37.285 INF Handling PREPREPARE. nReq=0 senderID=0 sn=1
+21:02:37.285 DBG Creating new Batch. nReq=0
+21:02:37.286 DBG Sending PREPARE. senderID=3 sn=1 view=0
+21:02:37.287 DBG Sending COMMIT. senderID=3 sn=1 view=0
+21:02:37.289 INF Committed entry. latency=0 nReq=0 sn=1
+21:02:37.289 INF Delivered batch. nReq=0 sn=1
+21:02:37.289 DBG Starting timer. sn=2 view=0
 [RESPONDER][WARN] sn=1 batch vazio ou nil — nada a enviar
-14:11:18.052 DBG Starting timer. sn=2 view=0
-14:11:18.273 INF Incoming connection for requests. addr=127.0.0.1:40726
-14:11:19.048 DBG Batch ready. batchSize=4096
-14:11:19.049 DBG Batch cut. left=0 nBuckets=16 nReq=91 next=0
-14:11:19.049 DBG Waiting for batch. batchSize=4096
-14:11:19.051 INF Sending PREPREPARE. nReq=91 senderID=0 sn=2 view=0
-14:11:19.082 DBG Sending COMMIT. senderID=0 sn=2 view=0
-14:11:19.083 INF Committed entry. latency=0 nReq=91 sn=2
-14:11:19.083 INF Delivered batch. nReq=91 sn=2
-[RESPONDER][ENTRY] sn=2 nreq=91
+21:02:37.529 INF Incoming connection for requests. addr=127.0.0.1:37130
+21:02:38.294 INF Handling PREPREPARE. nReq=92 senderID=0 sn=2
+21:02:38.294 DBG Creating new Batch. nReq=92
+21:02:38.319 DBG Sending PREPARE. senderID=3 sn=2 view=0
+21:02:38.320 DBG Sending COMMIT. senderID=3 sn=2 view=0
+21:02:38.322 INF Committed entry. latency=0 nReq=92 sn=2
+21:02:38.322 INF Delivered batch. nReq=92 sn=2
+[RESPONDER][ENTRY] sn=2 nreq=92
 [RESPONDER][SEND] sn=2 client=0 req=0 msg=ClientResponse{orderSn=2,clientSn=0}
 [MESSENGER][OK] client=0 deliver clientSn=0 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=16 msg=ClientResponse{orderSn=2,clientSn=16}
@@ -156,7 +151,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=2 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=18 msg=ClientResponse{orderSn=2,clientSn=18}
 [MESSENGER][OK] client=0 deliver clientSn=18 sn=2
-14:11:19.083 DBG Starting timer. sn=3 view=0
 [RESPONDER][SEND] sn=2 client=0 req=34 msg=ClientResponse{orderSn=2,clientSn=34}
 [MESSENGER][OK] client=0 deliver clientSn=34 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=50 msg=ClientResponse{orderSn=2,clientSn=50}
@@ -168,6 +162,7 @@
 [RESPONDER][SEND] sn=2 client=0 req=19 msg=ClientResponse{orderSn=2,clientSn=19}
 [MESSENGER][OK] client=0 deliver clientSn=19 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=35 msg=ClientResponse{orderSn=2,clientSn=35}
+21:02:38.322 DBG Starting timer. sn=3 view=0
 [MESSENGER][OK] client=0 deliver clientSn=35 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=51 msg=ClientResponse{orderSn=2,clientSn=51}
 [MESSENGER][OK] client=0 deliver clientSn=51 sn=2
@@ -315,17 +310,18 @@
 [MESSENGER][OK] client=0 deliver clientSn=89 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=90 msg=ClientResponse{orderSn=2,clientSn=90}
 [MESSENGER][OK] client=0 deliver clientSn=90 sn=2
-[RESPONDER][ENTRY][DONE] sn=2 sent=91/91
-14:11:20.050 DBG Batch ready. batchSize=4096
-14:11:20.050 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:20.052 DBG Waiting for batch. batchSize=4096
-14:11:20.053 INF Sending PREPREPARE. nReq=128 senderID=0 sn=3 view=0
-14:11:20.076 DBG Sending COMMIT. senderID=0 sn=3 view=0
-14:11:20.079 INF Committed entry. latency=0 nReq=128 sn=3
-14:11:20.079 INF Delivered batch. nReq=128 sn=3
-14:11:20.079 DBG Starting timer. sn=4 view=0
+[RESPONDER][SEND] sn=2 client=0 req=91 msg=ClientResponse{orderSn=2,clientSn=91}
+[MESSENGER][OK] client=0 deliver clientSn=91 sn=2
+[RESPONDER][ENTRY][DONE] sn=2 sent=92/92
+21:02:39.298 INF Handling PREPREPARE. nReq=128 senderID=0 sn=3
+21:02:39.298 DBG Creating new Batch. nReq=128
+21:02:39.307 DBG Sending PREPARE. senderID=3 sn=3 view=0
+21:02:39.308 DBG Sending COMMIT. senderID=3 sn=3 view=0
+21:02:39.309 INF Committed entry. latency=0 nReq=128 sn=3
+21:02:39.309 INF Delivered batch. nReq=128 sn=3
 [RESPONDER][ENTRY] sn=3 nreq=128
 [RESPONDER][SEND] sn=3 client=0 req=96 msg=ClientResponse{orderSn=3,clientSn=96}
+21:02:39.310 DBG Starting timer. sn=4 view=0
 [MESSENGER][OK] client=0 deliver clientSn=96 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=112 msg=ClientResponse{orderSn=3,clientSn=112}
 [MESSENGER][OK] client=0 deliver clientSn=112 sn=3
@@ -501,8 +497,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=202 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=218 msg=ClientResponse{orderSn=3,clientSn=218}
 [MESSENGER][OK] client=0 deliver clientSn=218 sn=3
-[RESPONDER][SEND] sn=3 client=0 req=91 msg=ClientResponse{orderSn=3,clientSn=91}
-[MESSENGER][OK] client=0 deliver clientSn=91 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=107 msg=ClientResponse{orderSn=3,clientSn=107}
 [MESSENGER][OK] client=0 deliver clientSn=107 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=123 msg=ClientResponse{orderSn=3,clientSn=123}
@@ -517,6 +511,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=187 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=203 msg=ClientResponse{orderSn=3,clientSn=203}
 [MESSENGER][OK] client=0 deliver clientSn=203 sn=3
+[RESPONDER][SEND] sn=3 client=0 req=219 msg=ClientResponse{orderSn=3,clientSn=219}
+[MESSENGER][OK] client=0 deliver clientSn=219 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=92 msg=ClientResponse{orderSn=3,clientSn=92}
 [MESSENGER][OK] client=0 deliver clientSn=92 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=108 msg=ClientResponse{orderSn=3,clientSn=108}
@@ -582,16 +578,15 @@
 [RESPONDER][SEND] sn=3 client=0 req=207 msg=ClientResponse{orderSn=3,clientSn=207}
 [MESSENGER][OK] client=0 deliver clientSn=207 sn=3
 [RESPONDER][ENTRY][DONE] sn=3 sent=128/128
-14:11:21.054 DBG Batch ready. batchSize=4096
-14:11:21.054 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:21.055 DBG Waiting for batch. batchSize=4096
-14:11:21.057 INF Sending PREPREPARE. nReq=128 senderID=0 sn=4 view=0
-14:11:21.072 DBG Sending COMMIT. senderID=0 sn=4 view=0
-14:11:21.074 INF Committed entry. latency=0 nReq=128 sn=4
-14:11:21.074 INF Delivered batch. nReq=128 sn=4
+21:02:40.299 INF Handling PREPREPARE. nReq=128 senderID=0 sn=4
+21:02:40.299 DBG Creating new Batch. nReq=128
+21:02:40.307 DBG Sending PREPARE. senderID=3 sn=4 view=0
+21:02:40.307 DBG Sending COMMIT. senderID=3 sn=4 view=0
+21:02:40.309 INF Committed entry. latency=0 nReq=128 sn=4
+21:02:40.309 INF Delivered batch. nReq=128 sn=4
+21:02:40.309 DBG Starting timer. sn=5 view=0
 [RESPONDER][ENTRY] sn=4 nreq=128
 [RESPONDER][SEND] sn=4 client=0 req=224 msg=ClientResponse{orderSn=4,clientSn=224}
-14:11:21.074 DBG Starting timer. sn=5 view=0
 [MESSENGER][OK] client=0 deliver clientSn=224 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=240 msg=ClientResponse{orderSn=4,clientSn=240}
 [MESSENGER][OK] client=0 deliver clientSn=240 sn=4
@@ -767,8 +762,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=330 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=346 msg=ClientResponse{orderSn=4,clientSn=346}
 [MESSENGER][OK] client=0 deliver clientSn=346 sn=4
-[RESPONDER][SEND] sn=4 client=0 req=219 msg=ClientResponse{orderSn=4,clientSn=219}
-[MESSENGER][OK] client=0 deliver clientSn=219 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=235 msg=ClientResponse{orderSn=4,clientSn=235}
 [MESSENGER][OK] client=0 deliver clientSn=235 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=251 msg=ClientResponse{orderSn=4,clientSn=251}
@@ -783,6 +776,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=315 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=331 msg=ClientResponse{orderSn=4,clientSn=331}
 [MESSENGER][OK] client=0 deliver clientSn=331 sn=4
+[RESPONDER][SEND] sn=4 client=0 req=347 msg=ClientResponse{orderSn=4,clientSn=347}
+[MESSENGER][OK] client=0 deliver clientSn=347 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=220 msg=ClientResponse{orderSn=4,clientSn=220}
 [MESSENGER][OK] client=0 deliver clientSn=220 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=236 msg=ClientResponse{orderSn=4,clientSn=236}
@@ -848,17 +843,16 @@
 [RESPONDER][SEND] sn=4 client=0 req=335 msg=ClientResponse{orderSn=4,clientSn=335}
 [MESSENGER][OK] client=0 deliver clientSn=335 sn=4
 [RESPONDER][ENTRY][DONE] sn=4 sent=128/128
-14:11:22.055 DBG Batch ready. batchSize=4096
-14:11:22.055 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:22.056 DBG Waiting for batch. batchSize=4096
-14:11:22.058 INF Sending PREPREPARE. nReq=128 senderID=0 sn=5 view=0
-14:11:22.075 DBG Sending COMMIT. senderID=0 sn=5 view=0
-14:11:22.075 INF Committed entry. latency=0 nReq=128 sn=5
-14:11:22.075 INF Delivered batch. nReq=128 sn=5
+21:02:41.298 INF Handling PREPREPARE. nReq=128 senderID=0 sn=5
+21:02:41.298 DBG Creating new Batch. nReq=128
+21:02:41.304 DBG Sending PREPARE. senderID=3 sn=5 view=0
+21:02:41.309 DBG Sending COMMIT. senderID=3 sn=5 view=0
+21:02:41.310 INF Committed entry. latency=0 nReq=128 sn=5
+21:02:41.310 INF Delivered batch. nReq=128 sn=5
+21:02:41.310 DBG Starting timer. sn=6 view=0
 [RESPONDER][ENTRY] sn=5 nreq=128
 [RESPONDER][SEND] sn=5 client=0 req=352 msg=ClientResponse{orderSn=5,clientSn=352}
 [MESSENGER][OK] client=0 deliver clientSn=352 sn=5
-14:11:22.075 DBG Starting timer. sn=6 view=0
 [RESPONDER][SEND] sn=5 client=0 req=368 msg=ClientResponse{orderSn=5,clientSn=368}
 [MESSENGER][OK] client=0 deliver clientSn=368 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=384 msg=ClientResponse{orderSn=5,clientSn=384}
@@ -1033,8 +1027,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=458 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=474 msg=ClientResponse{orderSn=5,clientSn=474}
 [MESSENGER][OK] client=0 deliver clientSn=474 sn=5
-[RESPONDER][SEND] sn=5 client=0 req=347 msg=ClientResponse{orderSn=5,clientSn=347}
-[MESSENGER][OK] client=0 deliver clientSn=347 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=363 msg=ClientResponse{orderSn=5,clientSn=363}
 [MESSENGER][OK] client=0 deliver clientSn=363 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=379 msg=ClientResponse{orderSn=5,clientSn=379}
@@ -1049,6 +1041,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=443 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=459 msg=ClientResponse{orderSn=5,clientSn=459}
 [MESSENGER][OK] client=0 deliver clientSn=459 sn=5
+[RESPONDER][SEND] sn=5 client=0 req=475 msg=ClientResponse{orderSn=5,clientSn=475}
+[MESSENGER][OK] client=0 deliver clientSn=475 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=348 msg=ClientResponse{orderSn=5,clientSn=348}
 [MESSENGER][OK] client=0 deliver clientSn=348 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=364 msg=ClientResponse{orderSn=5,clientSn=364}
@@ -1114,16 +1108,15 @@
 [RESPONDER][SEND] sn=5 client=0 req=463 msg=ClientResponse{orderSn=5,clientSn=463}
 [MESSENGER][OK] client=0 deliver clientSn=463 sn=5
 [RESPONDER][ENTRY][DONE] sn=5 sent=128/128
-14:11:23.056 DBG Batch ready. batchSize=4096
-14:11:23.057 DBG Batch cut. left=0 nBuckets=16 nReq=129 next=0
-14:11:23.057 DBG Waiting for batch. batchSize=4096
-14:11:23.060 INF Sending PREPREPARE. nReq=129 senderID=0 sn=6 view=0
-14:11:23.076 DBG Sending COMMIT. senderID=0 sn=6 view=0
-14:11:23.078 INF Committed entry. latency=0 nReq=129 sn=6
-14:11:23.078 INF Delivered batch. nReq=129 sn=6
-[RESPONDER][ENTRY] sn=6 nreq=129
+21:02:42.300 INF Handling PREPREPARE. nReq=128 senderID=0 sn=6
+21:02:42.300 DBG Creating new Batch. nReq=128
+21:02:42.307 DBG Sending PREPARE. senderID=3 sn=6 view=0
+21:02:42.307 DBG Sending COMMIT. senderID=3 sn=6 view=0
+21:02:42.312 INF Committed entry. latency=0 nReq=128 sn=6
+21:02:42.312 INF Delivered batch. nReq=128 sn=6
+21:02:42.312 DBG Starting timer. sn=7 view=0
+[RESPONDER][ENTRY] sn=6 nreq=128
 [RESPONDER][SEND] sn=6 client=0 req=480 msg=ClientResponse{orderSn=6,clientSn=480}
-14:11:23.078 DBG Starting timer. sn=7 view=0
 [MESSENGER][OK] client=0 deliver clientSn=480 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=496 msg=ClientResponse{orderSn=6,clientSn=496}
 [MESSENGER][OK] client=0 deliver clientSn=496 sn=6
@@ -1299,8 +1292,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=586 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=602 msg=ClientResponse{orderSn=6,clientSn=602}
 [MESSENGER][OK] client=0 deliver clientSn=602 sn=6
-[RESPONDER][SEND] sn=6 client=0 req=475 msg=ClientResponse{orderSn=6,clientSn=475}
-[MESSENGER][OK] client=0 deliver clientSn=475 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=491 msg=ClientResponse{orderSn=6,clientSn=491}
 [MESSENGER][OK] client=0 deliver clientSn=491 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=507 msg=ClientResponse{orderSn=6,clientSn=507}
@@ -1315,6 +1306,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=571 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=587 msg=ClientResponse{orderSn=6,clientSn=587}
 [MESSENGER][OK] client=0 deliver clientSn=587 sn=6
+[RESPONDER][SEND] sn=6 client=0 req=603 msg=ClientResponse{orderSn=6,clientSn=603}
+[MESSENGER][OK] client=0 deliver clientSn=603 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=476 msg=ClientResponse{orderSn=6,clientSn=476}
 [MESSENGER][OK] client=0 deliver clientSn=476 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=492 msg=ClientResponse{orderSn=6,clientSn=492}
@@ -1379,18 +1372,15 @@
 [MESSENGER][OK] client=0 deliver clientSn=575 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=591 msg=ClientResponse{orderSn=6,clientSn=591}
 [MESSENGER][OK] client=0 deliver clientSn=591 sn=6
-[RESPONDER][SEND] sn=6 client=0 req=603 msg=ClientResponse{orderSn=6,clientSn=603}
-[MESSENGER][OK] client=0 deliver clientSn=603 sn=6
-[RESPONDER][ENTRY][DONE] sn=6 sent=129/129
-14:11:24.058 DBG Batch ready. batchSize=4096
-14:11:24.058 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:24.061 DBG Waiting for batch. batchSize=4096
-14:11:24.061 INF Sending PREPREPARE. nReq=128 senderID=0 sn=7 view=0
-14:11:24.076 DBG Sending COMMIT. senderID=0 sn=7 view=0
-14:11:24.077 INF Committed entry. latency=0 nReq=128 sn=7
-14:11:24.078 INF Delivered batch. nReq=128 sn=7
-14:11:24.078 DBG Starting timer. sn=8 view=0
-[RESPONDER][ENTRY] sn=7 nreq=128
+[RESPONDER][ENTRY][DONE] sn=6 sent=128/128
+21:02:43.303 INF Handling PREPREPARE. nReq=129 senderID=0 sn=7
+21:02:43.303 DBG Creating new Batch. nReq=129
+21:02:43.311 DBG Sending PREPARE. senderID=3 sn=7 view=0
+21:02:43.312 DBG Sending COMMIT. senderID=3 sn=7 view=0
+21:02:43.314 INF Committed entry. latency=0 nReq=129 sn=7
+21:02:43.314 INF Delivered batch. nReq=129 sn=7
+21:02:43.314 DBG Starting timer. sn=8 view=0
+[RESPONDER][ENTRY] sn=7 nreq=129
 [RESPONDER][SEND] sn=7 client=0 req=608 msg=ClientResponse{orderSn=7,clientSn=608}
 [MESSENGER][OK] client=0 deliver clientSn=608 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=624 msg=ClientResponse{orderSn=7,clientSn=624}
@@ -1647,15 +1637,16 @@
 [MESSENGER][OK] client=0 deliver clientSn=703 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=719 msg=ClientResponse{orderSn=7,clientSn=719}
 [MESSENGER][OK] client=0 deliver clientSn=719 sn=7
-[RESPONDER][ENTRY][DONE] sn=7 sent=128/128
-14:11:25.062 DBG Batch ready. batchSize=4096
-14:11:25.062 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:25.062 DBG Waiting for batch. batchSize=4096
-14:11:25.065 INF Sending PREPREPARE. nReq=128 senderID=0 sn=8 view=0
-14:11:25.114 DBG Sending COMMIT. senderID=0 sn=8 view=0
-14:11:25.114 INF Committed entry. latency=0 nReq=128 sn=8
-14:11:25.114 INF Delivered batch. nReq=128 sn=8
-14:11:25.115 DBG Starting timer. sn=9 view=0
+[RESPONDER][SEND] sn=7 client=0 req=732 msg=ClientResponse{orderSn=7,clientSn=732}
+[MESSENGER][OK] client=0 deliver clientSn=732 sn=7
+[RESPONDER][ENTRY][DONE] sn=7 sent=129/129
+21:02:44.304 INF Handling PREPREPARE. nReq=128 senderID=0 sn=8
+21:02:44.304 DBG Creating new Batch. nReq=128
+21:02:44.312 DBG Sending PREPARE. senderID=3 sn=8 view=0
+21:02:44.312 DBG Sending COMMIT. senderID=3 sn=8 view=0
+21:02:44.315 INF Committed entry. latency=0 nReq=128 sn=8
+21:02:44.315 INF Delivered batch. nReq=128 sn=8
+21:02:44.315 DBG Starting timer. sn=9 view=0
 [RESPONDER][ENTRY] sn=8 nreq=128
 [RESPONDER][SEND] sn=8 client=0 req=736 msg=ClientResponse{orderSn=8,clientSn=736}
 [MESSENGER][OK] client=0 deliver clientSn=736 sn=8
@@ -1849,8 +1840,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=843 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=859 msg=ClientResponse{orderSn=8,clientSn=859}
 [MESSENGER][OK] client=0 deliver clientSn=859 sn=8
-[RESPONDER][SEND] sn=8 client=0 req=732 msg=ClientResponse{orderSn=8,clientSn=732}
-[MESSENGER][OK] client=0 deliver clientSn=732 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=748 msg=ClientResponse{orderSn=8,clientSn=748}
 [MESSENGER][OK] client=0 deliver clientSn=748 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=764 msg=ClientResponse{orderSn=8,clientSn=764}
@@ -1865,6 +1854,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=828 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=844 msg=ClientResponse{orderSn=8,clientSn=844}
 [MESSENGER][OK] client=0 deliver clientSn=844 sn=8
+[RESPONDER][SEND] sn=8 client=0 req=860 msg=ClientResponse{orderSn=8,clientSn=860}
+[MESSENGER][OK] client=0 deliver clientSn=860 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=733 msg=ClientResponse{orderSn=8,clientSn=733}
 [MESSENGER][OK] client=0 deliver clientSn=733 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=749 msg=ClientResponse{orderSn=8,clientSn=749}
@@ -1914,16 +1905,15 @@
 [RESPONDER][SEND] sn=8 client=0 req=847 msg=ClientResponse{orderSn=8,clientSn=847}
 [MESSENGER][OK] client=0 deliver clientSn=847 sn=8
 [RESPONDER][ENTRY][DONE] sn=8 sent=128/128
-14:11:26.063 DBG Batch ready. batchSize=4096
-14:11:26.063 DBG Batch cut. left=0 nBuckets=16 nReq=129 next=0
-14:11:26.063 DBG Waiting for batch. batchSize=4096
-14:11:26.066 INF Sending PREPREPARE. nReq=129 senderID=0 sn=9 view=0
-14:11:26.082 DBG Sending COMMIT. senderID=0 sn=9 view=0
-14:11:26.084 INF Committed entry. latency=0 nReq=129 sn=9
-14:11:26.084 INF Delivered batch. nReq=129 sn=9
-[RESPONDER][ENTRY] sn=9 nreq=129
+21:02:45.307 INF Handling PREPREPARE. nReq=128 senderID=0 sn=9
+21:02:45.307 DBG Creating new Batch. nReq=128
+21:02:45.314 DBG Sending PREPARE. senderID=3 sn=9 view=0
+21:02:45.315 DBG Sending COMMIT. senderID=3 sn=9 view=0
+21:02:45.318 INF Committed entry. latency=0 nReq=128 sn=9
+21:02:45.318 INF Delivered batch. nReq=128 sn=9
+21:02:45.319 DBG Starting timer. sn=10 view=0
+[RESPONDER][ENTRY] sn=9 nreq=128
 [RESPONDER][SEND] sn=9 client=0 req=864 msg=ClientResponse{orderSn=9,clientSn=864}
-14:11:26.084 DBG Starting timer. sn=10 view=0
 [MESSENGER][OK] client=0 deliver clientSn=864 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=880 msg=ClientResponse{orderSn=9,clientSn=880}
 [MESSENGER][OK] client=0 deliver clientSn=880 sn=9
@@ -2115,8 +2105,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=971 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=987 msg=ClientResponse{orderSn=9,clientSn=987}
 [MESSENGER][OK] client=0 deliver clientSn=987 sn=9
-[RESPONDER][SEND] sn=9 client=0 req=860 msg=ClientResponse{orderSn=9,clientSn=860}
-[MESSENGER][OK] client=0 deliver clientSn=860 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=876 msg=ClientResponse{orderSn=9,clientSn=876}
 [MESSENGER][OK] client=0 deliver clientSn=876 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=892 msg=ClientResponse{orderSn=9,clientSn=892}
@@ -2131,6 +2119,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=956 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=972 msg=ClientResponse{orderSn=9,clientSn=972}
 [MESSENGER][OK] client=0 deliver clientSn=972 sn=9
+[RESPONDER][SEND] sn=9 client=0 req=988 msg=ClientResponse{orderSn=9,clientSn=988}
+[MESSENGER][OK] client=0 deliver clientSn=988 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=861 msg=ClientResponse{orderSn=9,clientSn=861}
 [MESSENGER][OK] client=0 deliver clientSn=861 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=877 msg=ClientResponse{orderSn=9,clientSn=877}
@@ -2179,17 +2169,15 @@
 [MESSENGER][OK] client=0 deliver clientSn=959 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=975 msg=ClientResponse{orderSn=9,clientSn=975}
 [MESSENGER][OK] client=0 deliver clientSn=975 sn=9
-[RESPONDER][SEND] sn=9 client=0 req=988 msg=ClientResponse{orderSn=9,clientSn=988}
-[MESSENGER][OK] client=0 deliver clientSn=988 sn=9
-[RESPONDER][ENTRY][DONE] sn=9 sent=129/129
-14:11:27.064 DBG Batch ready. batchSize=4096
-14:11:27.065 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:27.067 DBG Waiting for batch. batchSize=4096
-14:11:27.067 INF Sending PREPREPARE. nReq=128 senderID=0 sn=10 view=0
-14:11:27.083 DBG Sending COMMIT. senderID=0 sn=10 view=0
-14:11:27.085 INF Committed entry. latency=0 nReq=128 sn=10
-14:11:27.086 INF Delivered batch. nReq=128 sn=10
-[RESPONDER][ENTRY] sn=10 nreq=128
+[RESPONDER][ENTRY][DONE] sn=9 sent=128/128
+21:02:46.310 INF Handling PREPREPARE. nReq=129 senderID=0 sn=10
+21:02:46.310 DBG Creating new Batch. nReq=129
+21:02:46.318 DBG Sending PREPARE. senderID=3 sn=10 view=0
+21:02:46.319 DBG Sending COMMIT. senderID=3 sn=10 view=0
+21:02:46.320 INF Committed entry. latency=0 nReq=129 sn=10
+21:02:46.321 INF Delivered batch. nReq=129 sn=10
+21:02:46.321 DBG Starting timer. sn=11 view=0
+[RESPONDER][ENTRY] sn=10 nreq=129
 [RESPONDER][SEND] sn=10 client=0 req=992 msg=ClientResponse{orderSn=10,clientSn=992}
 [MESSENGER][OK] client=0 deliver clientSn=992 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=1008 msg=ClientResponse{orderSn=10,clientSn=1008}
@@ -2213,7 +2201,6 @@
 [RESPONDER][SEND] sn=10 client=0 req=1025 msg=ClientResponse{orderSn=10,clientSn=1025}
 [MESSENGER][OK] client=0 deliver clientSn=1025 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=1041 msg=ClientResponse{orderSn=10,clientSn=1041}
-14:11:27.086 DBG Starting timer. sn=11 view=0
 [MESSENGER][OK] client=0 deliver clientSn=1041 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=1057 msg=ClientResponse{orderSn=10,clientSn=1057}
 [MESSENGER][OK] client=0 deliver clientSn=1057 sn=10
@@ -2447,17 +2434,17 @@
 [MESSENGER][OK] client=0 deliver clientSn=1087 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=1103 msg=ClientResponse{orderSn=10,clientSn=1103}
 [MESSENGER][OK] client=0 deliver clientSn=1103 sn=10
-[RESPONDER][ENTRY][DONE] sn=10 sent=128/128
-14:11:28.068 DBG Batch ready. batchSize=4096
-14:11:28.068 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:28.068 DBG Waiting for batch. batchSize=4096
-14:11:28.071 INF Sending PREPREPARE. nReq=128 senderID=0 sn=11 view=0
-14:11:28.087 DBG Sending COMMIT. senderID=0 sn=11 view=0
-14:11:28.088 INF Committed entry. latency=0 nReq=128 sn=11
-14:11:28.088 INF Delivered batch. nReq=128 sn=11
+[RESPONDER][SEND] sn=10 client=0 req=1117 msg=ClientResponse{orderSn=10,clientSn=1117}
+[MESSENGER][OK] client=0 deliver clientSn=1117 sn=10
+[RESPONDER][ENTRY][DONE] sn=10 sent=129/129
+21:02:47.310 INF Handling PREPREPARE. nReq=128 senderID=0 sn=11
+21:02:47.311 DBG Creating new Batch. nReq=128
+21:02:47.316 DBG Sending PREPARE. senderID=3 sn=11 view=0
+21:02:47.319 DBG Sending COMMIT. senderID=3 sn=11 view=0
+21:02:47.321 INF Committed entry. latency=0 nReq=128 sn=11
+21:02:47.322 INF Delivered batch. nReq=128 sn=11
 [RESPONDER][ENTRY] sn=11 nreq=128
 [RESPONDER][SEND] sn=11 client=0 req=1120 msg=ClientResponse{orderSn=11,clientSn=1120}
-14:11:28.088 DBG Starting timer. sn=12 view=0
 [MESSENGER][OK] client=0 deliver clientSn=1120 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1136 msg=ClientResponse{orderSn=11,clientSn=1136}
 [MESSENGER][OK] client=0 deliver clientSn=1136 sn=11
@@ -2508,6 +2495,7 @@
 [RESPONDER][SEND] sn=11 client=0 req=1123 msg=ClientResponse{orderSn=11,clientSn=1123}
 [MESSENGER][OK] client=0 deliver clientSn=1123 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1139 msg=ClientResponse{orderSn=11,clientSn=1139}
+21:02:47.322 DBG Starting timer. sn=12 view=0
 [MESSENGER][OK] client=0 deliver clientSn=1139 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1155 msg=ClientResponse{orderSn=11,clientSn=1155}
 [MESSENGER][OK] client=0 deliver clientSn=1155 sn=11
@@ -2665,8 +2653,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=1228 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1244 msg=ClientResponse{orderSn=11,clientSn=1244}
 [MESSENGER][OK] client=0 deliver clientSn=1244 sn=11
-[RESPONDER][SEND] sn=11 client=0 req=1117 msg=ClientResponse{orderSn=11,clientSn=1117}
-[MESSENGER][OK] client=0 deliver clientSn=1117 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1133 msg=ClientResponse{orderSn=11,clientSn=1133}
 [MESSENGER][OK] client=0 deliver clientSn=1133 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1149 msg=ClientResponse{orderSn=11,clientSn=1149}
@@ -2681,6 +2667,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=1213 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1229 msg=ClientResponse{orderSn=11,clientSn=1229}
 [MESSENGER][OK] client=0 deliver clientSn=1229 sn=11
+[RESPONDER][SEND] sn=11 client=0 req=1245 msg=ClientResponse{orderSn=11,clientSn=1245}
+[MESSENGER][OK] client=0 deliver clientSn=1245 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1118 msg=ClientResponse{orderSn=11,clientSn=1118}
 [MESSENGER][OK] client=0 deliver clientSn=1118 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=1134 msg=ClientResponse{orderSn=11,clientSn=1134}
@@ -2714,18 +2702,17 @@
 [RESPONDER][SEND] sn=11 client=0 req=1231 msg=ClientResponse{orderSn=11,clientSn=1231}
 [MESSENGER][OK] client=0 deliver clientSn=1231 sn=11
 [RESPONDER][ENTRY][DONE] sn=11 sent=128/128
-14:11:29.069 DBG Batch ready. batchSize=4096
-14:11:29.070 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:29.071 DBG Waiting for batch. batchSize=4096
-14:11:29.073 INF Sending PREPREPARE. nReq=128 senderID=0 sn=12 view=0
-14:11:29.088 DBG Sending COMMIT. senderID=0 sn=12 view=0
-14:11:29.089 INF Committed entry. latency=0 nReq=128 sn=12
-14:11:29.090 INF Delivered batch. nReq=128 sn=12
+21:02:48.314 INF Handling PREPREPARE. nReq=128 senderID=0 sn=12
+21:02:48.314 DBG Creating new Batch. nReq=128
+21:02:48.321 DBG Sending PREPARE. senderID=3 sn=12 view=0
+21:02:48.322 DBG Sending COMMIT. senderID=3 sn=12 view=0
+21:02:48.324 INF Committed entry. latency=0 nReq=128 sn=12
+21:02:48.325 INF Delivered batch. nReq=128 sn=12
+21:02:48.325 DBG Starting timer. sn=13 view=0
 [RESPONDER][ENTRY] sn=12 nreq=128
 [RESPONDER][SEND] sn=12 client=0 req=1248 msg=ClientResponse{orderSn=12,clientSn=1248}
 [MESSENGER][OK] client=0 deliver clientSn=1248 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=1264 msg=ClientResponse{orderSn=12,clientSn=1264}
-14:11:29.090 DBG Starting timer. sn=13 view=0
 [MESSENGER][OK] client=0 deliver clientSn=1264 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=1280 msg=ClientResponse{orderSn=12,clientSn=1280}
 [MESSENGER][OK] client=0 deliver clientSn=1280 sn=12
@@ -2931,8 +2918,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=1356 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=1372 msg=ClientResponse{orderSn=12,clientSn=1372}
 [MESSENGER][OK] client=0 deliver clientSn=1372 sn=12
-[RESPONDER][SEND] sn=12 client=0 req=1245 msg=ClientResponse{orderSn=12,clientSn=1245}
-[MESSENGER][OK] client=0 deliver clientSn=1245 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=1261 msg=ClientResponse{orderSn=12,clientSn=1261}
 [MESSENGER][OK] client=0 deliver clientSn=1261 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=1277 msg=ClientResponse{orderSn=12,clientSn=1277}
@@ -2947,6 +2932,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=1341 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=1357 msg=ClientResponse{orderSn=12,clientSn=1357}
 [MESSENGER][OK] client=0 deliver clientSn=1357 sn=12
+[RESPONDER][SEND] sn=12 client=0 req=1373 msg=ClientResponse{orderSn=12,clientSn=1373}
+[MESSENGER][OK] client=0 deliver clientSn=1373 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=1246 msg=ClientResponse{orderSn=12,clientSn=1246}
 [MESSENGER][OK] client=0 deliver clientSn=1246 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=1262 msg=ClientResponse{orderSn=12,clientSn=1262}
@@ -2980,15 +2967,14 @@
 [RESPONDER][SEND] sn=12 client=0 req=1359 msg=ClientResponse{orderSn=12,clientSn=1359}
 [MESSENGER][OK] client=0 deliver clientSn=1359 sn=12
 [RESPONDER][ENTRY][DONE] sn=12 sent=128/128
-14:11:30.071 DBG Batch ready. batchSize=4096
-14:11:30.071 DBG Batch cut. left=0 nBuckets=16 nReq=129 next=0
-14:11:30.072 DBG Waiting for batch. batchSize=4096
-14:11:30.074 INF Sending PREPREPARE. nReq=129 senderID=0 sn=13 view=0
-14:11:30.090 DBG Sending COMMIT. senderID=0 sn=13 view=0
-14:11:30.090 INF Committed entry. latency=0 nReq=129 sn=13
-14:11:30.090 INF Delivered batch. nReq=129 sn=13
-14:11:30.091 DBG Starting timer. sn=14 view=0
-[RESPONDER][ENTRY] sn=13 nreq=129
+21:02:49.316 INF Handling PREPREPARE. nReq=128 senderID=0 sn=13
+21:02:49.316 DBG Creating new Batch. nReq=128
+21:02:49.325 DBG Sending PREPARE. senderID=3 sn=13 view=0
+21:02:49.325 DBG Sending COMMIT. senderID=3 sn=13 view=0
+21:02:49.328 INF Committed entry. latency=0 nReq=128 sn=13
+21:02:49.328 INF Delivered batch. nReq=128 sn=13
+21:02:49.328 DBG Starting timer. sn=14 view=0
+[RESPONDER][ENTRY] sn=13 nreq=128
 [RESPONDER][SEND] sn=13 client=0 req=1376 msg=ClientResponse{orderSn=13,clientSn=1376}
 [MESSENGER][OK] client=0 deliver clientSn=1376 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=1392 msg=ClientResponse{orderSn=13,clientSn=1392}
@@ -3197,8 +3183,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=1484 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=1500 msg=ClientResponse{orderSn=13,clientSn=1500}
 [MESSENGER][OK] client=0 deliver clientSn=1500 sn=13
-[RESPONDER][SEND] sn=13 client=0 req=1373 msg=ClientResponse{orderSn=13,clientSn=1373}
-[MESSENGER][OK] client=0 deliver clientSn=1373 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=1389 msg=ClientResponse{orderSn=13,clientSn=1389}
 [MESSENGER][OK] client=0 deliver clientSn=1389 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=1405 msg=ClientResponse{orderSn=13,clientSn=1405}
@@ -3213,6 +3197,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=1469 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=1485 msg=ClientResponse{orderSn=13,clientSn=1485}
 [MESSENGER][OK] client=0 deliver clientSn=1485 sn=13
+[RESPONDER][SEND] sn=13 client=0 req=1501 msg=ClientResponse{orderSn=13,clientSn=1501}
+[MESSENGER][OK] client=0 deliver clientSn=1501 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=1374 msg=ClientResponse{orderSn=13,clientSn=1374}
 [MESSENGER][OK] client=0 deliver clientSn=1374 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=1390 msg=ClientResponse{orderSn=13,clientSn=1390}
@@ -3245,19 +3231,16 @@
 [MESSENGER][OK] client=0 deliver clientSn=1471 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=1487 msg=ClientResponse{orderSn=13,clientSn=1487}
 [MESSENGER][OK] client=0 deliver clientSn=1487 sn=13
-[RESPONDER][SEND] sn=13 client=0 req=1501 msg=ClientResponse{orderSn=13,clientSn=1501}
-[MESSENGER][OK] client=0 deliver clientSn=1501 sn=13
-[RESPONDER][ENTRY][DONE] sn=13 sent=129/129
-14:11:31.072 DBG Batch ready. batchSize=4096
-14:11:31.072 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:31.072 DBG Waiting for batch. batchSize=4096
-14:11:31.075 INF Sending PREPREPARE. nReq=128 senderID=0 sn=14 view=0
-14:11:31.089 DBG Sending COMMIT. senderID=0 sn=14 view=0
-14:11:31.091 INF Committed entry. latency=0 nReq=128 sn=14
-14:11:31.091 INF Delivered batch. nReq=128 sn=14
-[RESPONDER][ENTRY] sn=14 nreq=128
+[RESPONDER][ENTRY][DONE] sn=13 sent=128/128
+21:02:50.317 INF Handling PREPREPARE. nReq=129 senderID=0 sn=14
+21:02:50.317 DBG Creating new Batch. nReq=129
+21:02:50.325 DBG Sending PREPARE. senderID=3 sn=14 view=0
+21:02:50.327 DBG Sending COMMIT. senderID=3 sn=14 view=0
+21:02:50.328 INF Committed entry. latency=0 nReq=129 sn=14
+21:02:50.328 INF Delivered batch. nReq=129 sn=14
+[RESPONDER][ENTRY] sn=14 nreq=129
+21:02:50.328 DBG Starting timer. sn=15 view=0
 [RESPONDER][SEND] sn=14 client=0 req=1504 msg=ClientResponse{orderSn=14,clientSn=1504}
-14:11:31.091 DBG Starting timer. sn=15 view=0
 [MESSENGER][OK] client=0 deliver clientSn=1504 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=1520 msg=ClientResponse{orderSn=14,clientSn=1520}
 [MESSENGER][OK] client=0 deliver clientSn=1520 sn=14
@@ -3513,17 +3496,18 @@
 [MESSENGER][OK] client=0 deliver clientSn=1599 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=1615 msg=ClientResponse{orderSn=14,clientSn=1615}
 [MESSENGER][OK] client=0 deliver clientSn=1615 sn=14
-[RESPONDER][ENTRY][DONE] sn=14 sent=128/128
-14:11:32.073 DBG Batch ready. batchSize=4096
-14:11:32.073 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:32.073 DBG Waiting for batch. batchSize=4096
-14:11:32.076 INF Sending PREPREPARE. nReq=128 senderID=0 sn=15 view=0
-14:11:32.091 DBG Sending COMMIT. senderID=0 sn=15 view=0
-14:11:32.092 INF Committed entry. latency=0 nReq=128 sn=15
-14:11:32.092 INF Delivered batch. nReq=128 sn=15
-14:11:32.092 DBG Starting timer. sn=16 view=0
+[RESPONDER][SEND] sn=14 client=0 req=1630 msg=ClientResponse{orderSn=14,clientSn=1630}
+[MESSENGER][OK] client=0 deliver clientSn=1630 sn=14
+[RESPONDER][ENTRY][DONE] sn=14 sent=129/129
+21:02:51.320 INF Handling PREPREPARE. nReq=128 senderID=0 sn=15
+21:02:51.321 DBG Creating new Batch. nReq=128
+21:02:51.329 DBG Sending PREPARE. senderID=3 sn=15 view=0
+21:02:51.330 DBG Sending COMMIT. senderID=3 sn=15 view=0
+21:02:51.332 INF Committed entry. latency=0 nReq=128 sn=15
+21:02:51.332 INF Delivered batch. nReq=128 sn=15
 [RESPONDER][ENTRY] sn=15 nreq=128
 [RESPONDER][SEND] sn=15 client=0 req=1632 msg=ClientResponse{orderSn=15,clientSn=1632}
+21:02:51.332 DBG Starting timer. sn=16 view=0
 [MESSENGER][OK] client=0 deliver clientSn=1632 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=1648 msg=ClientResponse{orderSn=15,clientSn=1648}
 [MESSENGER][OK] client=0 deliver clientSn=1648 sn=15
@@ -3747,8 +3731,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=1741 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=1757 msg=ClientResponse{orderSn=15,clientSn=1757}
 [MESSENGER][OK] client=0 deliver clientSn=1757 sn=15
-[RESPONDER][SEND] sn=15 client=0 req=1630 msg=ClientResponse{orderSn=15,clientSn=1630}
-[MESSENGER][OK] client=0 deliver clientSn=1630 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=1646 msg=ClientResponse{orderSn=15,clientSn=1646}
 [MESSENGER][OK] client=0 deliver clientSn=1646 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=1662 msg=ClientResponse{orderSn=15,clientSn=1662}
@@ -3763,6 +3745,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=1726 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=1742 msg=ClientResponse{orderSn=15,clientSn=1742}
 [MESSENGER][OK] client=0 deliver clientSn=1742 sn=15
+[RESPONDER][SEND] sn=15 client=0 req=1758 msg=ClientResponse{orderSn=15,clientSn=1758}
+[MESSENGER][OK] client=0 deliver clientSn=1758 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=1631 msg=ClientResponse{orderSn=15,clientSn=1631}
 [MESSENGER][OK] client=0 deliver clientSn=1631 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=1647 msg=ClientResponse{orderSn=15,clientSn=1647}
@@ -3780,16 +3764,15 @@
 [RESPONDER][SEND] sn=15 client=0 req=1743 msg=ClientResponse{orderSn=15,clientSn=1743}
 [MESSENGER][OK] client=0 deliver clientSn=1743 sn=15
 [RESPONDER][ENTRY][DONE] sn=15 sent=128/128
-14:11:33.074 DBG Batch ready. batchSize=4096
-14:11:33.074 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:33.076 DBG Waiting for batch. batchSize=4096
-14:11:33.077 INF Sending PREPREPARE. nReq=128 senderID=0 sn=16 view=0
-14:11:33.092 DBG Sending COMMIT. senderID=0 sn=16 view=0
-14:11:33.093 INF Committed entry. latency=0 nReq=128 sn=16
-14:11:33.093 INF Delivered batch. nReq=128 sn=16
-14:11:33.093 DBG Starting timer. sn=17 view=0
+21:02:52.323 INF Handling PREPREPARE. nReq=128 senderID=0 sn=16
+21:02:52.323 DBG Creating new Batch. nReq=128
+21:02:52.332 DBG Sending PREPARE. senderID=3 sn=16 view=0
+21:02:52.332 DBG Sending COMMIT. senderID=3 sn=16 view=0
+21:02:52.335 INF Committed entry. latency=0 nReq=128 sn=16
+21:02:52.335 INF Delivered batch. nReq=128 sn=16
 [RESPONDER][ENTRY] sn=16 nreq=128
 [RESPONDER][SEND] sn=16 client=0 req=1760 msg=ClientResponse{orderSn=16,clientSn=1760}
+21:02:52.336 DBG Starting timer. sn=17 view=0
 [MESSENGER][OK] client=0 deliver clientSn=1760 sn=16
 [RESPONDER][SEND] sn=16 client=0 req=1776 msg=ClientResponse{orderSn=16,clientSn=1776}
 [MESSENGER][OK] client=0 deliver clientSn=1776 sn=16
@@ -4013,8 +3996,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=1869 sn=16
 [RESPONDER][SEND] sn=16 client=0 req=1885 msg=ClientResponse{orderSn=16,clientSn=1885}
 [MESSENGER][OK] client=0 deliver clientSn=1885 sn=16
-[RESPONDER][SEND] sn=16 client=0 req=1758 msg=ClientResponse{orderSn=16,clientSn=1758}
-[MESSENGER][OK] client=0 deliver clientSn=1758 sn=16
 [RESPONDER][SEND] sn=16 client=0 req=1774 msg=ClientResponse{orderSn=16,clientSn=1774}
 [MESSENGER][OK] client=0 deliver clientSn=1774 sn=16
 [RESPONDER][SEND] sn=16 client=0 req=1790 msg=ClientResponse{orderSn=16,clientSn=1790}
@@ -4029,6 +4010,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=1854 sn=16
 [RESPONDER][SEND] sn=16 client=0 req=1870 msg=ClientResponse{orderSn=16,clientSn=1870}
 [MESSENGER][OK] client=0 deliver clientSn=1870 sn=16
+[RESPONDER][SEND] sn=16 client=0 req=1886 msg=ClientResponse{orderSn=16,clientSn=1886}
+[MESSENGER][OK] client=0 deliver clientSn=1886 sn=16
 [RESPONDER][SEND] sn=16 client=0 req=1759 msg=ClientResponse{orderSn=16,clientSn=1759}
 [MESSENGER][OK] client=0 deliver clientSn=1759 sn=16
 [RESPONDER][SEND] sn=16 client=0 req=1775 msg=ClientResponse{orderSn=16,clientSn=1775}
@@ -4046,15 +4029,14 @@
 [RESPONDER][SEND] sn=16 client=0 req=1871 msg=ClientResponse{orderSn=16,clientSn=1871}
 [MESSENGER][OK] client=0 deliver clientSn=1871 sn=16
 [RESPONDER][ENTRY][DONE] sn=16 sent=128/128
-14:11:34.077 DBG Batch ready. batchSize=4096
-14:11:34.077 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:34.078 DBG Waiting for batch. batchSize=4096
-14:11:34.080 INF Sending PREPREPARE. nReq=128 senderID=0 sn=17 view=0
-14:11:34.095 DBG Sending COMMIT. senderID=0 sn=17 view=0
-14:11:34.096 INF Committed entry. latency=0 nReq=128 sn=17
-14:11:34.096 INF Delivered batch. nReq=128 sn=17
-14:11:34.096 DBG Starting timer. sn=18 view=0
-[RESPONDER][ENTRY] sn=17 nreq=128
+21:02:53.324 INF Handling PREPREPARE. nReq=129 senderID=0 sn=17
+21:02:53.325 DBG Creating new Batch. nReq=129
+21:02:53.333 DBG Sending PREPARE. senderID=3 sn=17 view=0
+21:02:53.333 DBG Sending COMMIT. senderID=3 sn=17 view=0
+21:02:53.335 INF Committed entry. latency=0 nReq=129 sn=17
+21:02:53.336 INF Delivered batch. nReq=129 sn=17
+21:02:53.336 DBG Starting timer. sn=18 view=0
+[RESPONDER][ENTRY] sn=17 nreq=129
 [RESPONDER][SEND] sn=17 client=0 req=1888 msg=ClientResponse{orderSn=17,clientSn=1888}
 [MESSENGER][OK] client=0 deliver clientSn=1888 sn=17
 [RESPONDER][SEND] sn=17 client=0 req=1904 msg=ClientResponse{orderSn=17,clientSn=1904}
@@ -4279,8 +4261,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=1997 sn=17
 [RESPONDER][SEND] sn=17 client=0 req=2013 msg=ClientResponse{orderSn=17,clientSn=2013}
 [MESSENGER][OK] client=0 deliver clientSn=2013 sn=17
-[RESPONDER][SEND] sn=17 client=0 req=1886 msg=ClientResponse{orderSn=17,clientSn=1886}
-[MESSENGER][OK] client=0 deliver clientSn=1886 sn=17
 [RESPONDER][SEND] sn=17 client=0 req=1902 msg=ClientResponse{orderSn=17,clientSn=1902}
 [MESSENGER][OK] client=0 deliver clientSn=1902 sn=17
 [RESPONDER][SEND] sn=17 client=0 req=1918 msg=ClientResponse{orderSn=17,clientSn=1918}
@@ -4295,6 +4275,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=1982 sn=17
 [RESPONDER][SEND] sn=17 client=0 req=1998 msg=ClientResponse{orderSn=17,clientSn=1998}
 [MESSENGER][OK] client=0 deliver clientSn=1998 sn=17
+[RESPONDER][SEND] sn=17 client=0 req=2014 msg=ClientResponse{orderSn=17,clientSn=2014}
+[MESSENGER][OK] client=0 deliver clientSn=2014 sn=17
 [RESPONDER][SEND] sn=17 client=0 req=1887 msg=ClientResponse{orderSn=17,clientSn=1887}
 [MESSENGER][OK] client=0 deliver clientSn=1887 sn=17
 [RESPONDER][SEND] sn=17 client=0 req=1903 msg=ClientResponse{orderSn=17,clientSn=1903}
@@ -4311,17 +4293,18 @@
 [MESSENGER][OK] client=0 deliver clientSn=1983 sn=17
 [RESPONDER][SEND] sn=17 client=0 req=1999 msg=ClientResponse{orderSn=17,clientSn=1999}
 [MESSENGER][OK] client=0 deliver clientSn=1999 sn=17
-[RESPONDER][ENTRY][DONE] sn=17 sent=128/128
-14:11:35.079 DBG Batch ready. batchSize=4096
-14:11:35.079 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:35.079 DBG Waiting for batch. batchSize=4096
-14:11:35.081 INF Sending PREPREPARE. nReq=128 senderID=0 sn=18 view=0
-14:11:35.099 DBG Sending COMMIT. senderID=0 sn=18 view=0
-14:11:35.099 INF Committed entry. latency=0 nReq=128 sn=18
-14:11:35.099 INF Delivered batch. nReq=128 sn=18
+[RESPONDER][SEND] sn=17 client=0 req=2015 msg=ClientResponse{orderSn=17,clientSn=2015}
+[MESSENGER][OK] client=0 deliver clientSn=2015 sn=17
+[RESPONDER][ENTRY][DONE] sn=17 sent=129/129
+21:02:54.328 INF Handling PREPREPARE. nReq=128 senderID=0 sn=18
+21:02:54.329 DBG Creating new Batch. nReq=128
+21:02:54.337 DBG Sending PREPARE. senderID=3 sn=18 view=0
+21:02:54.337 DBG Sending COMMIT. senderID=3 sn=18 view=0
+21:02:54.340 INF Committed entry. latency=0 nReq=128 sn=18
+21:02:54.340 INF Delivered batch. nReq=128 sn=18
 [RESPONDER][ENTRY] sn=18 nreq=128
 [RESPONDER][SEND] sn=18 client=0 req=2016 msg=ClientResponse{orderSn=18,clientSn=2016}
-14:11:35.099 DBG Starting timer. sn=19 view=0
+21:02:54.340 DBG Starting timer. sn=19 view=0
 [MESSENGER][OK] client=0 deliver clientSn=2016 sn=18
 [RESPONDER][SEND] sn=18 client=0 req=2032 msg=ClientResponse{orderSn=18,clientSn=2032}
 [MESSENGER][OK] client=0 deliver clientSn=2032 sn=18
@@ -4545,8 +4528,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=2125 sn=18
 [RESPONDER][SEND] sn=18 client=0 req=2141 msg=ClientResponse{orderSn=18,clientSn=2141}
 [MESSENGER][OK] client=0 deliver clientSn=2141 sn=18
-[RESPONDER][SEND] sn=18 client=0 req=2014 msg=ClientResponse{orderSn=18,clientSn=2014}
-[MESSENGER][OK] client=0 deliver clientSn=2014 sn=18
 [RESPONDER][SEND] sn=18 client=0 req=2030 msg=ClientResponse{orderSn=18,clientSn=2030}
 [MESSENGER][OK] client=0 deliver clientSn=2030 sn=18
 [RESPONDER][SEND] sn=18 client=0 req=2046 msg=ClientResponse{orderSn=18,clientSn=2046}
@@ -4561,8 +4542,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=2110 sn=18
 [RESPONDER][SEND] sn=18 client=0 req=2126 msg=ClientResponse{orderSn=18,clientSn=2126}
 [MESSENGER][OK] client=0 deliver clientSn=2126 sn=18
-[RESPONDER][SEND] sn=18 client=0 req=2015 msg=ClientResponse{orderSn=18,clientSn=2015}
-[MESSENGER][OK] client=0 deliver clientSn=2015 sn=18
+[RESPONDER][SEND] sn=18 client=0 req=2142 msg=ClientResponse{orderSn=18,clientSn=2142}
+[MESSENGER][OK] client=0 deliver clientSn=2142 sn=18
 [RESPONDER][SEND] sn=18 client=0 req=2031 msg=ClientResponse{orderSn=18,clientSn=2031}
 [MESSENGER][OK] client=0 deliver clientSn=2031 sn=18
 [RESPONDER][SEND] sn=18 client=0 req=2047 msg=ClientResponse{orderSn=18,clientSn=2047}
@@ -4577,16 +4558,17 @@
 [MESSENGER][OK] client=0 deliver clientSn=2111 sn=18
 [RESPONDER][SEND] sn=18 client=0 req=2127 msg=ClientResponse{orderSn=18,clientSn=2127}
 [MESSENGER][OK] client=0 deliver clientSn=2127 sn=18
+[RESPONDER][SEND] sn=18 client=0 req=2143 msg=ClientResponse{orderSn=18,clientSn=2143}
+[MESSENGER][OK] client=0 deliver clientSn=2143 sn=18
 [RESPONDER][ENTRY][DONE] sn=18 sent=128/128
-14:11:36.080 DBG Batch ready. batchSize=4096
-14:11:36.080 DBG Batch cut. left=0 nBuckets=16 nReq=129 next=0
-14:11:36.080 DBG Waiting for batch. batchSize=4096
-14:11:36.082 INF Sending PREPREPARE. nReq=129 senderID=0 sn=19 view=0
-14:11:36.097 DBG Sending COMMIT. senderID=0 sn=19 view=0
-14:11:36.099 INF Committed entry. latency=0 nReq=129 sn=19
-14:11:36.099 INF Delivered batch. nReq=129 sn=19
-14:11:36.099 DBG Starting timer. sn=20 view=0
-[RESPONDER][ENTRY] sn=19 nreq=129
+21:02:55.330 INF Handling PREPREPARE. nReq=128 senderID=0 sn=19
+21:02:55.330 DBG Creating new Batch. nReq=128
+21:02:55.338 DBG Sending PREPARE. senderID=3 sn=19 view=0
+21:02:55.339 DBG Sending COMMIT. senderID=3 sn=19 view=0
+21:02:55.341 INF Committed entry. latency=0 nReq=128 sn=19
+21:02:55.341 INF Delivered batch. nReq=128 sn=19
+21:02:55.341 DBG Starting timer. sn=20 view=0
+[RESPONDER][ENTRY] sn=19 nreq=128
 [RESPONDER][SEND] sn=19 client=0 req=2144 msg=ClientResponse{orderSn=19,clientSn=2144}
 [MESSENGER][OK] client=0 deliver clientSn=2144 sn=19
 [RESPONDER][SEND] sn=19 client=0 req=2160 msg=ClientResponse{orderSn=19,clientSn=2160}
@@ -4811,8 +4793,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=2253 sn=19
 [RESPONDER][SEND] sn=19 client=0 req=2269 msg=ClientResponse{orderSn=19,clientSn=2269}
 [MESSENGER][OK] client=0 deliver clientSn=2269 sn=19
-[RESPONDER][SEND] sn=19 client=0 req=2142 msg=ClientResponse{orderSn=19,clientSn=2142}
-[MESSENGER][OK] client=0 deliver clientSn=2142 sn=19
 [RESPONDER][SEND] sn=19 client=0 req=2158 msg=ClientResponse{orderSn=19,clientSn=2158}
 [MESSENGER][OK] client=0 deliver clientSn=2158 sn=19
 [RESPONDER][SEND] sn=19 client=0 req=2174 msg=ClientResponse{orderSn=19,clientSn=2174}
@@ -4827,8 +4807,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=2238 sn=19
 [RESPONDER][SEND] sn=19 client=0 req=2254 msg=ClientResponse{orderSn=19,clientSn=2254}
 [MESSENGER][OK] client=0 deliver clientSn=2254 sn=19
-[RESPONDER][SEND] sn=19 client=0 req=2143 msg=ClientResponse{orderSn=19,clientSn=2143}
-[MESSENGER][OK] client=0 deliver clientSn=2143 sn=19
+[RESPONDER][SEND] sn=19 client=0 req=2270 msg=ClientResponse{orderSn=19,clientSn=2270}
+[MESSENGER][OK] client=0 deliver clientSn=2270 sn=19
 [RESPONDER][SEND] sn=19 client=0 req=2159 msg=ClientResponse{orderSn=19,clientSn=2159}
 [MESSENGER][OK] client=0 deliver clientSn=2159 sn=19
 [RESPONDER][SEND] sn=19 client=0 req=2175 msg=ClientResponse{orderSn=19,clientSn=2175}
@@ -4843,19 +4823,18 @@
 [MESSENGER][OK] client=0 deliver clientSn=2239 sn=19
 [RESPONDER][SEND] sn=19 client=0 req=2255 msg=ClientResponse{orderSn=19,clientSn=2255}
 [MESSENGER][OK] client=0 deliver clientSn=2255 sn=19
-[RESPONDER][SEND] sn=19 client=0 req=2270 msg=ClientResponse{orderSn=19,clientSn=2270}
-[MESSENGER][OK] client=0 deliver clientSn=2270 sn=19
-[RESPONDER][ENTRY][DONE] sn=19 sent=129/129
-14:11:37.081 DBG Batch ready. batchSize=4096
-14:11:37.081 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:37.082 DBG Waiting for batch. batchSize=4096
-14:11:37.084 INF Sending PREPREPARE. nReq=128 senderID=0 sn=20 view=0
-14:11:37.100 DBG Sending COMMIT. senderID=0 sn=20 view=0
-14:11:37.101 INF Committed entry. latency=0 nReq=128 sn=20
-14:11:37.101 INF Delivered batch. nReq=128 sn=20
+[RESPONDER][SEND] sn=19 client=0 req=2271 msg=ClientResponse{orderSn=19,clientSn=2271}
+[MESSENGER][OK] client=0 deliver clientSn=2271 sn=19
+[RESPONDER][ENTRY][DONE] sn=19 sent=128/128
+21:02:56.333 INF Handling PREPREPARE. nReq=128 senderID=0 sn=20
+21:02:56.333 DBG Creating new Batch. nReq=128
+21:02:56.341 DBG Sending PREPARE. senderID=3 sn=20 view=0
+21:02:56.344 DBG Sending COMMIT. senderID=3 sn=20 view=0
+21:02:56.346 INF Committed entry. latency=0 nReq=128 sn=20
+21:02:56.346 INF Delivered batch. nReq=128 sn=20
+21:02:56.346 DBG Starting timer. sn=21 view=0
 [RESPONDER][ENTRY] sn=20 nreq=128
 [RESPONDER][SEND] sn=20 client=0 req=2272 msg=ClientResponse{orderSn=20,clientSn=2272}
-14:11:37.101 DBG Starting timer. sn=21 view=0
 [MESSENGER][OK] client=0 deliver clientSn=2272 sn=20
 [RESPONDER][SEND] sn=20 client=0 req=2288 msg=ClientResponse{orderSn=20,clientSn=2288}
 [MESSENGER][OK] client=0 deliver clientSn=2288 sn=20
@@ -5095,8 +5074,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=2382 sn=20
 [RESPONDER][SEND] sn=20 client=0 req=2398 msg=ClientResponse{orderSn=20,clientSn=2398}
 [MESSENGER][OK] client=0 deliver clientSn=2398 sn=20
-[RESPONDER][SEND] sn=20 client=0 req=2271 msg=ClientResponse{orderSn=20,clientSn=2271}
-[MESSENGER][OK] client=0 deliver clientSn=2271 sn=20
 [RESPONDER][SEND] sn=20 client=0 req=2287 msg=ClientResponse{orderSn=20,clientSn=2287}
 [MESSENGER][OK] client=0 deliver clientSn=2287 sn=20
 [RESPONDER][SEND] sn=20 client=0 req=2303 msg=ClientResponse{orderSn=20,clientSn=2303}
@@ -5111,16 +5088,17 @@
 [MESSENGER][OK] client=0 deliver clientSn=2367 sn=20
 [RESPONDER][SEND] sn=20 client=0 req=2383 msg=ClientResponse{orderSn=20,clientSn=2383}
 [MESSENGER][OK] client=0 deliver clientSn=2383 sn=20
+[RESPONDER][SEND] sn=20 client=0 req=2399 msg=ClientResponse{orderSn=20,clientSn=2399}
+[MESSENGER][OK] client=0 deliver clientSn=2399 sn=20
 [RESPONDER][ENTRY][DONE] sn=20 sent=128/128
-14:11:38.082 DBG Batch ready. batchSize=4096
-14:11:38.083 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:38.085 DBG Waiting for batch. batchSize=4096
-14:11:38.086 INF Sending PREPREPARE. nReq=128 senderID=0 sn=21 view=0
-14:11:38.100 DBG Sending COMMIT. senderID=0 sn=21 view=0
-14:11:38.101 INF Committed entry. latency=0 nReq=128 sn=21
-14:11:38.101 INF Delivered batch. nReq=128 sn=21
-14:11:38.102 DBG Starting timer. sn=22 view=0
-[RESPONDER][ENTRY] sn=21 nreq=128
+21:02:57.333 INF Handling PREPREPARE. nReq=129 senderID=0 sn=21
+21:02:57.333 DBG Creating new Batch. nReq=129
+21:02:57.341 DBG Sending PREPARE. senderID=3 sn=21 view=0
+21:02:57.343 DBG Sending COMMIT. senderID=3 sn=21 view=0
+21:02:57.344 INF Committed entry. latency=0 nReq=129 sn=21
+21:02:57.344 INF Delivered batch. nReq=129 sn=21
+21:02:57.344 DBG Starting timer. sn=22 view=0
+[RESPONDER][ENTRY] sn=21 nreq=129
 [RESPONDER][SEND] sn=21 client=0 req=2400 msg=ClientResponse{orderSn=21,clientSn=2400}
 [MESSENGER][OK] client=0 deliver clientSn=2400 sn=21
 [RESPONDER][SEND] sn=21 client=0 req=2416 msg=ClientResponse{orderSn=21,clientSn=2416}
@@ -5361,8 +5339,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=2510 sn=21
 [RESPONDER][SEND] sn=21 client=0 req=2526 msg=ClientResponse{orderSn=21,clientSn=2526}
 [MESSENGER][OK] client=0 deliver clientSn=2526 sn=21
-[RESPONDER][SEND] sn=21 client=0 req=2399 msg=ClientResponse{orderSn=21,clientSn=2399}
-[MESSENGER][OK] client=0 deliver clientSn=2399 sn=21
 [RESPONDER][SEND] sn=21 client=0 req=2415 msg=ClientResponse{orderSn=21,clientSn=2415}
 [MESSENGER][OK] client=0 deliver clientSn=2415 sn=21
 [RESPONDER][SEND] sn=21 client=0 req=2431 msg=ClientResponse{orderSn=21,clientSn=2431}
@@ -5377,18 +5353,19 @@
 [MESSENGER][OK] client=0 deliver clientSn=2495 sn=21
 [RESPONDER][SEND] sn=21 client=0 req=2511 msg=ClientResponse{orderSn=21,clientSn=2511}
 [MESSENGER][OK] client=0 deliver clientSn=2511 sn=21
-[RESPONDER][ENTRY][DONE] sn=21 sent=128/128
-14:11:39.086 DBG Batch ready. batchSize=4096
-14:11:39.087 DBG Batch cut. left=0 nBuckets=16 nReq=129 next=0
-14:11:39.087 DBG Waiting for batch. batchSize=4096
-14:11:39.089 INF Sending PREPREPARE. nReq=129 senderID=0 sn=22 view=0
-14:11:39.105 DBG Sending COMMIT. senderID=0 sn=22 view=0
-14:11:39.107 INF Committed entry. latency=0 nReq=129 sn=22
-14:11:39.107 INF Delivered batch. nReq=129 sn=22
-14:11:39.107 DBG Starting timer. sn=23 view=0
-[RESPONDER][ENTRY] sn=22 nreq=129
-[RESPONDER][SEND] sn=22 client=0 req=2528 msg=ClientResponse{orderSn=22,clientSn=2528}
-[MESSENGER][OK] client=0 deliver clientSn=2528 sn=22
+[RESPONDER][SEND] sn=21 client=0 req=2527 msg=ClientResponse{orderSn=21,clientSn=2527}
+[MESSENGER][OK] client=0 deliver clientSn=2527 sn=21
+[RESPONDER][SEND] sn=21 client=0 req=2528 msg=ClientResponse{orderSn=21,clientSn=2528}
+[MESSENGER][OK] client=0 deliver clientSn=2528 sn=21
+[RESPONDER][ENTRY][DONE] sn=21 sent=129/129
+21:02:58.334 INF Handling PREPREPARE. nReq=128 senderID=0 sn=22
+21:02:58.335 DBG Creating new Batch. nReq=128
+21:02:58.344 DBG Sending PREPARE. senderID=3 sn=22 view=0
+21:02:58.344 DBG Sending COMMIT. senderID=3 sn=22 view=0
+21:02:58.347 INF Committed entry. latency=0 nReq=128 sn=22
+21:02:58.347 INF Delivered batch. nReq=128 sn=22
+21:02:58.347 DBG Starting timer. sn=23 view=0
+[RESPONDER][ENTRY] sn=22 nreq=128
 [RESPONDER][SEND] sn=22 client=0 req=2544 msg=ClientResponse{orderSn=22,clientSn=2544}
 [MESSENGER][OK] client=0 deliver clientSn=2544 sn=22
 [RESPONDER][SEND] sn=22 client=0 req=2560 msg=ClientResponse{orderSn=22,clientSn=2560}
@@ -5403,6 +5380,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=2624 sn=22
 [RESPONDER][SEND] sn=22 client=0 req=2640 msg=ClientResponse{orderSn=22,clientSn=2640}
 [MESSENGER][OK] client=0 deliver clientSn=2640 sn=22
+[RESPONDER][SEND] sn=22 client=0 req=2656 msg=ClientResponse{orderSn=22,clientSn=2656}
+[MESSENGER][OK] client=0 deliver clientSn=2656 sn=22
 [RESPONDER][SEND] sn=22 client=0 req=2529 msg=ClientResponse{orderSn=22,clientSn=2529}
 [MESSENGER][OK] client=0 deliver clientSn=2529 sn=22
 [RESPONDER][SEND] sn=22 client=0 req=2545 msg=ClientResponse{orderSn=22,clientSn=2545}
@@ -5627,8 +5606,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=2638 sn=22
 [RESPONDER][SEND] sn=22 client=0 req=2654 msg=ClientResponse{orderSn=22,clientSn=2654}
 [MESSENGER][OK] client=0 deliver clientSn=2654 sn=22
-[RESPONDER][SEND] sn=22 client=0 req=2527 msg=ClientResponse{orderSn=22,clientSn=2527}
-[MESSENGER][OK] client=0 deliver clientSn=2527 sn=22
 [RESPONDER][SEND] sn=22 client=0 req=2543 msg=ClientResponse{orderSn=22,clientSn=2543}
 [MESSENGER][OK] client=0 deliver clientSn=2543 sn=22
 [RESPONDER][SEND] sn=22 client=0 req=2559 msg=ClientResponse{orderSn=22,clientSn=2559}
@@ -5645,18 +5622,15 @@
 [MESSENGER][OK] client=0 deliver clientSn=2639 sn=22
 [RESPONDER][SEND] sn=22 client=0 req=2655 msg=ClientResponse{orderSn=22,clientSn=2655}
 [MESSENGER][OK] client=0 deliver clientSn=2655 sn=22
-[RESPONDER][ENTRY][DONE] sn=22 sent=129/129
-14:11:40.088 DBG Batch ready. batchSize=4096
-14:11:40.088 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:40.088 DBG Waiting for batch. batchSize=4096
-14:11:40.091 INF Sending PREPREPARE. nReq=128 senderID=0 sn=23 view=0
-14:11:40.107 DBG Sending COMMIT. senderID=0 sn=23 view=0
-14:11:40.108 INF Committed entry. latency=0 nReq=128 sn=23
-14:11:40.109 INF Delivered batch. nReq=128 sn=23
-14:11:40.109 DBG Starting timer. sn=24 view=0
+[RESPONDER][ENTRY][DONE] sn=22 sent=128/128
+21:02:59.336 INF Handling PREPREPARE. nReq=128 senderID=0 sn=23
+21:02:59.336 DBG Creating new Batch. nReq=128
+21:02:59.345 DBG Sending PREPARE. senderID=3 sn=23 view=0
+21:02:59.345 DBG Sending COMMIT. senderID=3 sn=23 view=0
+21:02:59.347 INF Committed entry. latency=0 nReq=128 sn=23
+21:02:59.348 INF Delivered batch. nReq=128 sn=23
+21:02:59.348 DBG Starting timer. sn=24 view=0
 [RESPONDER][ENTRY] sn=23 nreq=128
-[RESPONDER][SEND] sn=23 client=0 req=2656 msg=ClientResponse{orderSn=23,clientSn=2656}
-[MESSENGER][OK] client=0 deliver clientSn=2656 sn=23
 [RESPONDER][SEND] sn=23 client=0 req=2672 msg=ClientResponse{orderSn=23,clientSn=2672}
 [MESSENGER][OK] client=0 deliver clientSn=2672 sn=23
 [RESPONDER][SEND] sn=23 client=0 req=2688 msg=ClientResponse{orderSn=23,clientSn=2688}
@@ -5671,6 +5645,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=2752 sn=23
 [RESPONDER][SEND] sn=23 client=0 req=2768 msg=ClientResponse{orderSn=23,clientSn=2768}
 [MESSENGER][OK] client=0 deliver clientSn=2768 sn=23
+[RESPONDER][SEND] sn=23 client=0 req=2784 msg=ClientResponse{orderSn=23,clientSn=2784}
+[MESSENGER][OK] client=0 deliver clientSn=2784 sn=23
 [RESPONDER][SEND] sn=23 client=0 req=2657 msg=ClientResponse{orderSn=23,clientSn=2657}
 [MESSENGER][OK] client=0 deliver clientSn=2657 sn=23
 [RESPONDER][SEND] sn=23 client=0 req=2673 msg=ClientResponse{orderSn=23,clientSn=2673}
@@ -5912,17 +5888,14 @@
 [RESPONDER][SEND] sn=23 client=0 req=2783 msg=ClientResponse{orderSn=23,clientSn=2783}
 [MESSENGER][OK] client=0 deliver clientSn=2783 sn=23
 [RESPONDER][ENTRY][DONE] sn=23 sent=128/128
-14:11:41.089 DBG Batch ready. batchSize=4096
-14:11:41.090 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:41.090 DBG Waiting for batch. batchSize=4096
-14:11:41.093 INF Sending PREPREPARE. nReq=128 senderID=0 sn=24 view=0
-14:11:41.109 DBG Sending COMMIT. senderID=0 sn=24 view=0
-14:11:41.110 INF Committed entry. latency=0 nReq=128 sn=24
-14:11:41.110 INF Delivered batch. nReq=128 sn=24
-14:11:41.110 DBG Starting timer. sn=25 view=0
+21:03:00.337 INF Handling PREPREPARE. nReq=128 senderID=0 sn=24
+21:03:00.337 DBG Creating new Batch. nReq=128
+21:03:00.347 DBG Sending PREPARE. senderID=3 sn=24 view=0
+21:03:00.347 DBG Sending COMMIT. senderID=3 sn=24 view=0
+21:03:00.350 INF Committed entry. latency=0 nReq=128 sn=24
+21:03:00.350 INF Delivered batch. nReq=128 sn=24
+21:03:00.350 DBG Starting timer. sn=25 view=0
 [RESPONDER][ENTRY] sn=24 nreq=128
-[RESPONDER][SEND] sn=24 client=0 req=2784 msg=ClientResponse{orderSn=24,clientSn=2784}
-[MESSENGER][OK] client=0 deliver clientSn=2784 sn=24
 [RESPONDER][SEND] sn=24 client=0 req=2800 msg=ClientResponse{orderSn=24,clientSn=2800}
 [MESSENGER][OK] client=0 deliver clientSn=2800 sn=24
 [RESPONDER][SEND] sn=24 client=0 req=2816 msg=ClientResponse{orderSn=24,clientSn=2816}
@@ -5937,6 +5910,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=2880 sn=24
 [RESPONDER][SEND] sn=24 client=0 req=2896 msg=ClientResponse{orderSn=24,clientSn=2896}
 [MESSENGER][OK] client=0 deliver clientSn=2896 sn=24
+[RESPONDER][SEND] sn=24 client=0 req=2912 msg=ClientResponse{orderSn=24,clientSn=2912}
+[MESSENGER][OK] client=0 deliver clientSn=2912 sn=24
 [RESPONDER][SEND] sn=24 client=0 req=2785 msg=ClientResponse{orderSn=24,clientSn=2785}
 [MESSENGER][OK] client=0 deliver clientSn=2785 sn=24
 [RESPONDER][SEND] sn=24 client=0 req=2801 msg=ClientResponse{orderSn=24,clientSn=2801}
@@ -6178,17 +6153,14 @@
 [RESPONDER][SEND] sn=24 client=0 req=2911 msg=ClientResponse{orderSn=24,clientSn=2911}
 [MESSENGER][OK] client=0 deliver clientSn=2911 sn=24
 [RESPONDER][ENTRY][DONE] sn=24 sent=128/128
-14:11:42.090 DBG Batch ready. batchSize=4096
-14:11:42.091 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:42.091 DBG Waiting for batch. batchSize=4096
-14:11:42.093 INF Sending PREPREPARE. nReq=128 senderID=0 sn=25 view=0
-14:11:42.109 DBG Sending COMMIT. senderID=0 sn=25 view=0
-14:11:42.111 INF Committed entry. latency=0 nReq=128 sn=25
-14:11:42.111 INF Delivered batch. nReq=128 sn=25
+21:03:01.338 INF Handling PREPREPARE. nReq=128 senderID=0 sn=25
+21:03:01.339 DBG Creating new Batch. nReq=128
+21:03:01.347 DBG Sending PREPARE. senderID=3 sn=25 view=0
+21:03:01.348 DBG Sending COMMIT. senderID=3 sn=25 view=0
+21:03:01.350 INF Committed entry. latency=0 nReq=128 sn=25
+21:03:01.350 INF Delivered batch. nReq=128 sn=25
 [RESPONDER][ENTRY] sn=25 nreq=128
-14:11:42.111 DBG Starting timer. sn=26 view=0
-[RESPONDER][SEND] sn=25 client=0 req=2912 msg=ClientResponse{orderSn=25,clientSn=2912}
-[MESSENGER][OK] client=0 deliver clientSn=2912 sn=25
+21:03:01.350 DBG Starting timer. sn=26 view=0
 [RESPONDER][SEND] sn=25 client=0 req=2928 msg=ClientResponse{orderSn=25,clientSn=2928}
 [MESSENGER][OK] client=0 deliver clientSn=2928 sn=25
 [RESPONDER][SEND] sn=25 client=0 req=2944 msg=ClientResponse{orderSn=25,clientSn=2944}
@@ -6203,6 +6175,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=3008 sn=25
 [RESPONDER][SEND] sn=25 client=0 req=3024 msg=ClientResponse{orderSn=25,clientSn=3024}
 [MESSENGER][OK] client=0 deliver clientSn=3024 sn=25
+[RESPONDER][SEND] sn=25 client=0 req=3040 msg=ClientResponse{orderSn=25,clientSn=3040}
+[MESSENGER][OK] client=0 deliver clientSn=3040 sn=25
 [RESPONDER][SEND] sn=25 client=0 req=2913 msg=ClientResponse{orderSn=25,clientSn=2913}
 [MESSENGER][OK] client=0 deliver clientSn=2913 sn=25
 [RESPONDER][SEND] sn=25 client=0 req=2929 msg=ClientResponse{orderSn=25,clientSn=2929}
@@ -6444,18 +6418,15 @@
 [RESPONDER][SEND] sn=25 client=0 req=3039 msg=ClientResponse{orderSn=25,clientSn=3039}
 [MESSENGER][OK] client=0 deliver clientSn=3039 sn=25
 [RESPONDER][ENTRY][DONE] sn=25 sent=128/128
-14:11:43.092 DBG Batch ready. batchSize=4096
-14:11:43.092 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:43.092 DBG Waiting for batch. batchSize=4096
-14:11:43.095 INF Sending PREPREPARE. nReq=128 senderID=0 sn=26 view=0
-14:11:43.111 DBG Sending COMMIT. senderID=0 sn=26 view=0
-14:11:43.112 INF Committed entry. latency=0 nReq=128 sn=26
-14:11:43.113 INF Delivered batch. nReq=128 sn=26
-14:11:43.113 DBG Starting timer. sn=27 view=0
+21:03:02.341 INF Handling PREPREPARE. nReq=128 senderID=0 sn=26
+21:03:02.341 DBG Creating new Batch. nReq=128
+21:03:02.348 DBG Sending PREPARE. senderID=3 sn=26 view=0
+21:03:02.348 DBG Sending COMMIT. senderID=3 sn=26 view=0
+21:03:02.351 INF Committed entry. latency=0 nReq=128 sn=26
+21:03:02.351 INF Delivered batch. nReq=128 sn=26
 [RESPONDER][ENTRY] sn=26 nreq=128
-[RESPONDER][SEND] sn=26 client=0 req=3040 msg=ClientResponse{orderSn=26,clientSn=3040}
-[MESSENGER][OK] client=0 deliver clientSn=3040 sn=26
 [RESPONDER][SEND] sn=26 client=0 req=3056 msg=ClientResponse{orderSn=26,clientSn=3056}
+21:03:02.351 DBG Starting timer. sn=27 view=0
 [MESSENGER][OK] client=0 deliver clientSn=3056 sn=26
 [RESPONDER][SEND] sn=26 client=0 req=3072 msg=ClientResponse{orderSn=26,clientSn=3072}
 [MESSENGER][OK] client=0 deliver clientSn=3072 sn=26
@@ -6469,6 +6440,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=3136 sn=26
 [RESPONDER][SEND] sn=26 client=0 req=3152 msg=ClientResponse{orderSn=26,clientSn=3152}
 [MESSENGER][OK] client=0 deliver clientSn=3152 sn=26
+[RESPONDER][SEND] sn=26 client=0 req=3168 msg=ClientResponse{orderSn=26,clientSn=3168}
+[MESSENGER][OK] client=0 deliver clientSn=3168 sn=26
 [RESPONDER][SEND] sn=26 client=0 req=3041 msg=ClientResponse{orderSn=26,clientSn=3041}
 [MESSENGER][OK] client=0 deliver clientSn=3041 sn=26
 [RESPONDER][SEND] sn=26 client=0 req=3057 msg=ClientResponse{orderSn=26,clientSn=3057}
@@ -6710,17 +6683,14 @@
 [RESPONDER][SEND] sn=26 client=0 req=3167 msg=ClientResponse{orderSn=26,clientSn=3167}
 [MESSENGER][OK] client=0 deliver clientSn=3167 sn=26
 [RESPONDER][ENTRY][DONE] sn=26 sent=128/128
-14:11:44.093 DBG Batch ready. batchSize=4096
-14:11:44.094 DBG Batch cut. left=0 nBuckets=16 nReq=129 next=0
-14:11:44.094 DBG Waiting for batch. batchSize=4096
-14:11:44.096 INF Sending PREPREPARE. nReq=129 senderID=0 sn=27 view=0
-14:11:44.115 DBG Sending COMMIT. senderID=0 sn=27 view=0
-14:11:44.115 INF Committed entry. latency=0 nReq=129 sn=27
-14:11:44.116 INF Delivered batch. nReq=129 sn=27
-14:11:44.116 DBG Starting timer. sn=28 view=0
+21:03:03.341 INF Handling PREPREPARE. nReq=129 senderID=0 sn=27
+21:03:03.341 DBG Creating new Batch. nReq=129
+21:03:03.348 DBG Sending PREPARE. senderID=3 sn=27 view=0
+21:03:03.350 DBG Sending COMMIT. senderID=3 sn=27 view=0
+21:03:03.351 INF Committed entry. latency=0 nReq=129 sn=27
+21:03:03.352 INF Delivered batch. nReq=129 sn=27
+21:03:03.352 DBG Starting timer. sn=28 view=0
 [RESPONDER][ENTRY] sn=27 nreq=129
-[RESPONDER][SEND] sn=27 client=0 req=3168 msg=ClientResponse{orderSn=27,clientSn=3168}
-[MESSENGER][OK] client=0 deliver clientSn=3168 sn=27
 [RESPONDER][SEND] sn=27 client=0 req=3184 msg=ClientResponse{orderSn=27,clientSn=3184}
 [MESSENGER][OK] client=0 deliver clientSn=3184 sn=27
 [RESPONDER][SEND] sn=27 client=0 req=3200 msg=ClientResponse{orderSn=27,clientSn=3200}
@@ -6735,6 +6705,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=3264 sn=27
 [RESPONDER][SEND] sn=27 client=0 req=3280 msg=ClientResponse{orderSn=27,clientSn=3280}
 [MESSENGER][OK] client=0 deliver clientSn=3280 sn=27
+[RESPONDER][SEND] sn=27 client=0 req=3296 msg=ClientResponse{orderSn=27,clientSn=3296}
+[MESSENGER][OK] client=0 deliver clientSn=3296 sn=27
 [RESPONDER][SEND] sn=27 client=0 req=3169 msg=ClientResponse{orderSn=27,clientSn=3169}
 [MESSENGER][OK] client=0 deliver clientSn=3169 sn=27
 [RESPONDER][SEND] sn=27 client=0 req=3185 msg=ClientResponse{orderSn=27,clientSn=3185}
@@ -6975,19 +6947,18 @@
 [MESSENGER][OK] client=0 deliver clientSn=3279 sn=27
 [RESPONDER][SEND] sn=27 client=0 req=3295 msg=ClientResponse{orderSn=27,clientSn=3295}
 [MESSENGER][OK] client=0 deliver clientSn=3295 sn=27
-[RESPONDER][SEND] sn=27 client=0 req=3296 msg=ClientResponse{orderSn=27,clientSn=3296}
-[MESSENGER][OK] client=0 deliver clientSn=3296 sn=27
+[RESPONDER][SEND] sn=27 client=0 req=3297 msg=ClientResponse{orderSn=27,clientSn=3297}
+[MESSENGER][OK] client=0 deliver clientSn=3297 sn=27
 [RESPONDER][ENTRY][DONE] sn=27 sent=129/129
-14:11:45.094 DBG Batch ready. batchSize=4096
-14:11:45.095 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:45.095 DBG Waiting for batch. batchSize=4096
-14:11:45.097 INF Sending PREPREPARE. nReq=128 senderID=0 sn=28 view=0
-14:11:45.112 DBG Sending COMMIT. senderID=0 sn=28 view=0
-14:11:45.114 INF Committed entry. latency=0 nReq=128 sn=28
-14:11:45.114 INF Delivered batch. nReq=128 sn=28
-14:11:45.114 DBG Starting timer. sn=29 view=0
+21:03:04.342 INF Handling PREPREPARE. nReq=128 senderID=0 sn=28
+21:03:04.342 DBG Creating new Batch. nReq=128
+21:03:04.350 DBG Sending PREPARE. senderID=3 sn=28 view=0
+21:03:04.352 DBG Sending COMMIT. senderID=3 sn=28 view=0
+21:03:04.354 INF Committed entry. latency=0 nReq=128 sn=28
+21:03:04.354 INF Delivered batch. nReq=128 sn=28
 [RESPONDER][ENTRY] sn=28 nreq=128
 [RESPONDER][SEND] sn=28 client=0 req=3312 msg=ClientResponse{orderSn=28,clientSn=3312}
+21:03:04.355 DBG Starting timer. sn=29 view=0
 [MESSENGER][OK] client=0 deliver clientSn=3312 sn=28
 [RESPONDER][SEND] sn=28 client=0 req=3328 msg=ClientResponse{orderSn=28,clientSn=3328}
 [MESSENGER][OK] client=0 deliver clientSn=3328 sn=28
@@ -7003,8 +6974,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=3408 sn=28
 [RESPONDER][SEND] sn=28 client=0 req=3424 msg=ClientResponse{orderSn=28,clientSn=3424}
 [MESSENGER][OK] client=0 deliver clientSn=3424 sn=28
-[RESPONDER][SEND] sn=28 client=0 req=3297 msg=ClientResponse{orderSn=28,clientSn=3297}
-[MESSENGER][OK] client=0 deliver clientSn=3297 sn=28
 [RESPONDER][SEND] sn=28 client=0 req=3313 msg=ClientResponse{orderSn=28,clientSn=3313}
 [MESSENGER][OK] client=0 deliver clientSn=3313 sn=28
 [RESPONDER][SEND] sn=28 client=0 req=3329 msg=ClientResponse{orderSn=28,clientSn=3329}
@@ -7019,6 +6988,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=3393 sn=28
 [RESPONDER][SEND] sn=28 client=0 req=3409 msg=ClientResponse{orderSn=28,clientSn=3409}
 [MESSENGER][OK] client=0 deliver clientSn=3409 sn=28
+[RESPONDER][SEND] sn=28 client=0 req=3425 msg=ClientResponse{orderSn=28,clientSn=3425}
+[MESSENGER][OK] client=0 deliver clientSn=3425 sn=28
 [RESPONDER][SEND] sn=28 client=0 req=3298 msg=ClientResponse{orderSn=28,clientSn=3298}
 [MESSENGER][OK] client=0 deliver clientSn=3298 sn=28
 [RESPONDER][SEND] sn=28 client=0 req=3314 msg=ClientResponse{orderSn=28,clientSn=3314}
@@ -7244,16 +7215,15 @@
 [RESPONDER][SEND] sn=28 client=0 req=3423 msg=ClientResponse{orderSn=28,clientSn=3423}
 [MESSENGER][OK] client=0 deliver clientSn=3423 sn=28
 [RESPONDER][ENTRY][DONE] sn=28 sent=128/128
-14:11:46.096 DBG Batch ready. batchSize=4096
-14:11:46.096 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:46.097 DBG Waiting for batch. batchSize=4096
-14:11:46.100 INF Sending PREPREPARE. nReq=128 senderID=0 sn=29 view=0
-14:11:46.116 DBG Sending COMMIT. senderID=0 sn=29 view=0
-14:11:46.117 INF Committed entry. latency=0 nReq=128 sn=29
-14:11:46.118 INF Delivered batch. nReq=128 sn=29
+21:03:05.343 INF Handling PREPREPARE. nReq=128 senderID=0 sn=29
+21:03:05.343 DBG Creating new Batch. nReq=128
+21:03:05.352 DBG Sending PREPARE. senderID=3 sn=29 view=0
+21:03:05.352 DBG Sending COMMIT. senderID=3 sn=29 view=0
+21:03:05.354 INF Committed entry. latency=0 nReq=128 sn=29
+21:03:05.354 INF Delivered batch. nReq=128 sn=29
 [RESPONDER][ENTRY] sn=29 nreq=128
 [RESPONDER][SEND] sn=29 client=0 req=3440 msg=ClientResponse{orderSn=29,clientSn=3440}
-14:11:46.118 DBG Starting timer. sn=30 view=0
+21:03:05.354 DBG Starting timer. sn=30 view=0
 [MESSENGER][OK] client=0 deliver clientSn=3440 sn=29
 [RESPONDER][SEND] sn=29 client=0 req=3456 msg=ClientResponse{orderSn=29,clientSn=3456}
 [MESSENGER][OK] client=0 deliver clientSn=3456 sn=29
@@ -7269,8 +7239,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=3536 sn=29
 [RESPONDER][SEND] sn=29 client=0 req=3552 msg=ClientResponse{orderSn=29,clientSn=3552}
 [MESSENGER][OK] client=0 deliver clientSn=3552 sn=29
-[RESPONDER][SEND] sn=29 client=0 req=3425 msg=ClientResponse{orderSn=29,clientSn=3425}
-[MESSENGER][OK] client=0 deliver clientSn=3425 sn=29
 [RESPONDER][SEND] sn=29 client=0 req=3441 msg=ClientResponse{orderSn=29,clientSn=3441}
 [MESSENGER][OK] client=0 deliver clientSn=3441 sn=29
 [RESPONDER][SEND] sn=29 client=0 req=3457 msg=ClientResponse{orderSn=29,clientSn=3457}
@@ -7285,6 +7253,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=3521 sn=29
 [RESPONDER][SEND] sn=29 client=0 req=3537 msg=ClientResponse{orderSn=29,clientSn=3537}
 [MESSENGER][OK] client=0 deliver clientSn=3537 sn=29
+[RESPONDER][SEND] sn=29 client=0 req=3553 msg=ClientResponse{orderSn=29,clientSn=3553}
+[MESSENGER][OK] client=0 deliver clientSn=3553 sn=29
 [RESPONDER][SEND] sn=29 client=0 req=3426 msg=ClientResponse{orderSn=29,clientSn=3426}
 [MESSENGER][OK] client=0 deliver clientSn=3426 sn=29
 [RESPONDER][SEND] sn=29 client=0 req=3442 msg=ClientResponse{orderSn=29,clientSn=3442}
@@ -7510,14 +7480,13 @@
 [RESPONDER][SEND] sn=29 client=0 req=3551 msg=ClientResponse{orderSn=29,clientSn=3551}
 [MESSENGER][OK] client=0 deliver clientSn=3551 sn=29
 [RESPONDER][ENTRY][DONE] sn=29 sent=128/128
-14:11:47.098 DBG Batch ready. batchSize=4096
-14:11:47.098 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:47.098 DBG Waiting for batch. batchSize=4096
-14:11:47.101 INF Sending PREPREPARE. nReq=128 senderID=0 sn=30 view=0
-14:11:47.117 DBG Sending COMMIT. senderID=0 sn=30 view=0
-14:11:47.118 INF Committed entry. latency=0 nReq=128 sn=30
-14:11:47.118 INF Delivered batch. nReq=128 sn=30
-14:11:47.118 DBG Starting timer. sn=31 view=0
+21:03:06.343 INF Handling PREPREPARE. nReq=128 senderID=0 sn=30
+21:03:06.343 DBG Creating new Batch. nReq=128
+21:03:06.350 DBG Sending PREPARE. senderID=3 sn=30 view=0
+21:03:06.353 DBG Sending COMMIT. senderID=3 sn=30 view=0
+21:03:06.355 INF Committed entry. latency=0 nReq=128 sn=30
+21:03:06.355 INF Delivered batch. nReq=128 sn=30
+21:03:06.355 DBG Starting timer. sn=31 view=0
 [RESPONDER][ENTRY] sn=30 nreq=128
 [RESPONDER][SEND] sn=30 client=0 req=3568 msg=ClientResponse{orderSn=30,clientSn=3568}
 [MESSENGER][OK] client=0 deliver clientSn=3568 sn=30
@@ -7535,8 +7504,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=3664 sn=30
 [RESPONDER][SEND] sn=30 client=0 req=3680 msg=ClientResponse{orderSn=30,clientSn=3680}
 [MESSENGER][OK] client=0 deliver clientSn=3680 sn=30
-[RESPONDER][SEND] sn=30 client=0 req=3553 msg=ClientResponse{orderSn=30,clientSn=3553}
-[MESSENGER][OK] client=0 deliver clientSn=3553 sn=30
 [RESPONDER][SEND] sn=30 client=0 req=3569 msg=ClientResponse{orderSn=30,clientSn=3569}
 [MESSENGER][OK] client=0 deliver clientSn=3569 sn=30
 [RESPONDER][SEND] sn=30 client=0 req=3585 msg=ClientResponse{orderSn=30,clientSn=3585}
@@ -7551,6 +7518,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=3649 sn=30
 [RESPONDER][SEND] sn=30 client=0 req=3665 msg=ClientResponse{orderSn=30,clientSn=3665}
 [MESSENGER][OK] client=0 deliver clientSn=3665 sn=30
+[RESPONDER][SEND] sn=30 client=0 req=3681 msg=ClientResponse{orderSn=30,clientSn=3681}
+[MESSENGER][OK] client=0 deliver clientSn=3681 sn=30
 [RESPONDER][SEND] sn=30 client=0 req=3554 msg=ClientResponse{orderSn=30,clientSn=3554}
 [MESSENGER][OK] client=0 deliver clientSn=3554 sn=30
 [RESPONDER][SEND] sn=30 client=0 req=3570 msg=ClientResponse{orderSn=30,clientSn=3570}
@@ -7776,16 +7745,15 @@
 [RESPONDER][SEND] sn=30 client=0 req=3679 msg=ClientResponse{orderSn=30,clientSn=3679}
 [MESSENGER][OK] client=0 deliver clientSn=3679 sn=30
 [RESPONDER][ENTRY][DONE] sn=30 sent=128/128
-14:11:48.098 DBG Batch ready. batchSize=4096
-14:11:48.099 DBG Batch cut. left=0 nBuckets=16 nReq=128 next=0
-14:11:48.099 DBG Waiting for batch. batchSize=4096
-14:11:48.101 INF Sending PREPREPARE. nReq=128 senderID=0 sn=31 view=0
-14:11:48.118 DBG Sending COMMIT. senderID=0 sn=31 view=0
-14:11:48.119 INF Committed entry. latency=0 nReq=128 sn=31
-14:11:48.119 INF Delivered batch. nReq=128 sn=31
+21:03:07.346 INF Handling PREPREPARE. nReq=128 senderID=0 sn=31
+21:03:07.346 DBG Creating new Batch. nReq=128
+21:03:07.354 DBG Sending PREPARE. senderID=3 sn=31 view=0
+21:03:07.354 DBG Sending COMMIT. senderID=3 sn=31 view=0
+21:03:07.357 INF Committed entry. latency=0 nReq=128 sn=31
+21:03:07.357 INF Delivered batch. nReq=128 sn=31
 [RESPONDER][ENTRY] sn=31 nreq=128
 [RESPONDER][SEND] sn=31 client=0 req=3696 msg=ClientResponse{orderSn=31,clientSn=3696}
-14:11:48.120 DBG Starting timer. sn=32 view=0
+21:03:07.357 DBG Starting timer. sn=32 view=0
 [MESSENGER][OK] client=0 deliver clientSn=3696 sn=31
 [RESPONDER][SEND] sn=31 client=0 req=3712 msg=ClientResponse{orderSn=31,clientSn=3712}
 [MESSENGER][OK] client=0 deliver clientSn=3712 sn=31
@@ -7801,8 +7769,6 @@
 [MESSENGER][OK] client=0 deliver clientSn=3792 sn=31
 [RESPONDER][SEND] sn=31 client=0 req=3808 msg=ClientResponse{orderSn=31,clientSn=3808}
 [MESSENGER][OK] client=0 deliver clientSn=3808 sn=31
-[RESPONDER][SEND] sn=31 client=0 req=3681 msg=ClientResponse{orderSn=31,clientSn=3681}
-[MESSENGER][OK] client=0 deliver clientSn=3681 sn=31
 [RESPONDER][SEND] sn=31 client=0 req=3697 msg=ClientResponse{orderSn=31,clientSn=3697}
 [MESSENGER][OK] client=0 deliver clientSn=3697 sn=31
 [RESPONDER][SEND] sn=31 client=0 req=3713 msg=ClientResponse{orderSn=31,clientSn=3713}
@@ -7817,6 +7783,8 @@
 [MESSENGER][OK] client=0 deliver clientSn=3777 sn=31
 [RESPONDER][SEND] sn=31 client=0 req=3793 msg=ClientResponse{orderSn=31,clientSn=3793}
 [MESSENGER][OK] client=0 deliver clientSn=3793 sn=31
+[RESPONDER][SEND] sn=31 client=0 req=3809 msg=ClientResponse{orderSn=31,clientSn=3809}
+[MESSENGER][OK] client=0 deliver clientSn=3809 sn=31
 [RESPONDER][SEND] sn=31 client=0 req=3682 msg=ClientResponse{orderSn=31,clientSn=3682}
 [MESSENGER][OK] client=0 deliver clientSn=3682 sn=31
 [RESPONDER][SEND] sn=31 client=0 req=3698 msg=ClientResponse{orderSn=31,clientSn=3698}
@@ -8042,22 +8010,22 @@
 [RESPONDER][SEND] sn=31 client=0 req=3807 msg=ClientResponse{orderSn=31,clientSn=3807}
 [MESSENGER][OK] client=0 deliver clientSn=3807 sn=31
 [RESPONDER][ENTRY][DONE] sn=31 sent=128/128
-14:11:49.100 DBG Batch ready. batchSize=4096
-14:11:49.100 DBG Batch cut. left=0 nBuckets=16 nReq=33 next=0
-14:11:49.100 DBG Waiting for batch. batchSize=4096
-14:11:49.101 INF Sending PREPREPARE. nReq=33 senderID=0 sn=32 view=0
-14:11:49.106 DBG Sending COMMIT. senderID=0 sn=32 view=0
-14:11:49.108 INF Committed entry. latency=0 nReq=33 sn=32
-14:11:49.108 INF Delivered batch. nReq=33 sn=32
-[RESPONDER][ENTRY] sn=32 nreq=33
+21:03:08.342 INF Handling PREPREPARE. nReq=32 senderID=0 sn=32
+21:03:08.342 DBG Creating new Batch. nReq=32
+21:03:08.344 DBG Sending PREPARE. senderID=3 sn=32 view=0
+21:03:08.346 DBG Sending COMMIT. senderID=3 sn=32 view=0
+21:03:08.347 INF Committed entry. latency=0 nReq=32 sn=32
+21:03:08.347 INF Delivered batch. nReq=32 sn=32
+[RESPONDER][ENTRY] sn=32 nreq=32
 [RESPONDER][SEND] sn=32 client=0 req=3824 msg=ClientResponse{orderSn=32,clientSn=3824}
+21:03:08.347 DBG Starting timer. sn=33 view=0
 [MESSENGER][OK] client=0 deliver clientSn=3824 sn=32
 [RESPONDER][SEND] sn=32 client=0 req=3840 msg=ClientResponse{orderSn=32,clientSn=3840}
 [MESSENGER][OK] client=0 deliver clientSn=3840 sn=32
-[RESPONDER][SEND] sn=32 client=0 req=3809 msg=ClientResponse{orderSn=32,clientSn=3809}
-[MESSENGER][OK] client=0 deliver clientSn=3809 sn=32
 [RESPONDER][SEND] sn=32 client=0 req=3825 msg=ClientResponse{orderSn=32,clientSn=3825}
 [MESSENGER][OK] client=0 deliver clientSn=3825 sn=32
+[RESPONDER][SEND] sn=32 client=0 req=3841 msg=ClientResponse{orderSn=32,clientSn=3841}
+[MESSENGER][OK] client=0 deliver clientSn=3841 sn=32
 [RESPONDER][SEND] sn=32 client=0 req=3810 msg=ClientResponse{orderSn=32,clientSn=3810}
 [MESSENGER][OK] client=0 deliver clientSn=3810 sn=32
 [RESPONDER][SEND] sn=32 client=0 req=3826 msg=ClientResponse{orderSn=32,clientSn=3826}
@@ -8065,7 +8033,6 @@
 [RESPONDER][SEND] sn=32 client=0 req=3811 msg=ClientResponse{orderSn=32,clientSn=3811}
 [MESSENGER][OK] client=0 deliver clientSn=3811 sn=32
 [RESPONDER][SEND] sn=32 client=0 req=3827 msg=ClientResponse{orderSn=32,clientSn=3827}
-14:11:49.108 DBG Starting timer. sn=33 view=0
 [MESSENGER][OK] client=0 deliver clientSn=3827 sn=32
 [RESPONDER][SEND] sn=32 client=0 req=3812 msg=ClientResponse{orderSn=32,clientSn=3812}
 [MESSENGER][OK] client=0 deliver clientSn=3812 sn=32
@@ -8115,65 +8082,68 @@
 [MESSENGER][OK] client=0 deliver clientSn=3823 sn=32
 [RESPONDER][SEND] sn=32 client=0 req=3839 msg=ClientResponse{orderSn=32,clientSn=3839}
 [MESSENGER][OK] client=0 deliver clientSn=3839 sn=32
-[RESPONDER][SEND] sn=32 client=0 req=3841 msg=ClientResponse{orderSn=32,clientSn=3841}
-[MESSENGER][OK] client=0 deliver clientSn=3841 sn=32
-[RESPONDER][ENTRY][DONE] sn=32 sent=33/33
-14:11:49.352 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40726
-14:11:49.354 INF Finished sending bucket assignments to client. clId=0
-14:11:50.101 DBG Batch ready. batchSize=4096
-14:11:50.102 DBG Batch cut. left=0 nBuckets=16 nReq=0 next=0
-14:11:50.102 INF Sending PREPREPARE. nReq=0 senderID=0 sn=33 view=0
-14:11:50.102 DBG Waiting for batch. batchSize=4096
-14:11:50.162 DBG Sending COMMIT. senderID=0 sn=33 view=0
-14:11:50.163 INF Committed entry. latency=0 nReq=0 sn=33
-14:11:50.163 INF Delivered batch. nReq=0 sn=33
-14:11:50.163 DBG Starting timer. sn=34 view=0
+[RESPONDER][ENTRY][DONE] sn=32 sent=32/32
+21:03:08.584 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37130
+21:03:08.585 INF Finished sending bucket assignments to client. clId=0
+21:03:09.341 INF Handling PREPREPARE. nReq=0 senderID=0 sn=33
+21:03:09.341 DBG Creating new Batch. nReq=0
+21:03:09.342 DBG Sending PREPARE. senderID=3 sn=33 view=0
+21:03:09.343 DBG Sending COMMIT. senderID=3 sn=33 view=0
+21:03:09.344 INF Committed entry. latency=0 nReq=0 sn=33
+21:03:09.344 INF Delivered batch. nReq=0 sn=33
 [RESPONDER][WARN] sn=33 batch vazio ou nil — nada a enviar
-14:11:50.665 INF Stopping profiler.
-14:11:50.665 INF Stopping Tracer. events=15511 fileName=experiment-output/0002/slave-004/peer.trc
-14:11:50.735 INF Profile data written. filename=experiment-output/0002/slave-004/prof.cpu name=cpu
-14:11:50.746 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40558
-14:11:50.746 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40678
-14:11:50.746 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40534
-14:11:50.747 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40540
-14:11:50.747 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40556
-14:11:50.747 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40500
-14:11:50.759 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40724
-14:11:50.759 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40582
-14:11:50.759 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40566
-14:11:50.759 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40584
-14:11:50.759 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40512
-14:11:50.760 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:40524
-14:11:50.761 INF Profile data written. filename=experiment-output/0002/slave-004/prof.block name=block
+21:03:09.344 DBG Starting timer. sn=34 view=0
+21:03:09.900 INF Stopping profiler.
+21:03:09.900 INF Stopping Tracer. events=3951 fileName=experiment-output/0002/slave-004/peer.trc
+21:03:09.922 INF Profile data written. filename=experiment-output/0002/slave-004/prof.block name=block
 ==================
 WARNING: DATA RACE
-Read at 0x00c00092b770 by goroutine 99:
+Read at 0x00c00092a930 by goroutine 99:
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).Stop()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/tracing/bufferedtrace.go:237 +0x35c
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:237 +0x35c
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).StopOnSignal.func1()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/tracing/bufferedtrace.go:298 +0x47
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:298 +0x47
 
-Previous write at 0x00c00092b770 by goroutine 98:
+Previous write at 0x00c00092a930 by goroutine 98:
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).Event()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/tracing/bufferedtrace.go:105 +0x2b3
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:105 +0x2b3
   github.com/hyperledger-labs/mirbft/profiling.StartCPUTracing.func1()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/profiling/cpuusage.go:31 +0xa1
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/profiling/cpuusage.go:31 +0xa1
 
 Goroutine 99 (running) created at:
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).StopOnSignal()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/tracing/bufferedtrace.go:292 +0x185
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:292 +0x185
   main.setUpTracing()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/cmd/orderingpeer/main.go:209 +0xee
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/cmd/orderingpeer/main.go:209 +0xee
   main.main()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/cmd/orderingpeer/main.go:104 +0xac4
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/cmd/orderingpeer/main.go:104 +0xac4
 
 Goroutine 98 (running) created at:
   github.com/hyperledger-labs/mirbft/profiling.StartCPUTracing()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/profiling/cpuusage.go:28 +0xbd
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/profiling/cpuusage.go:28 +0xbd
   main.setUpTracing()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/cmd/orderingpeer/main.go:201 +0x7e
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/cmd/orderingpeer/main.go:201 +0x7e
   main.main()
-      /opt/gopath/src/github.com/hyperledger-labs/mirbft/cmd/orderingpeer/main.go:104 +0xac4
+      /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/cmd/orderingpeer/main.go:104 +0xac4
 ==================
-14:11:50.765 INF Trace data written.
-14:11:50.773 INF Profile data written. filename=experiment-output/0002/slave-004/prof.mutex name=mutex
+21:03:09.928 INF Trace data written.
+21:03:09.931 INF Profile data written. filename=experiment-output/0002/slave-004/prof.mutex name=mutex
+21:03:10.016 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37114
+21:03:10.016 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37092
+21:03:10.017 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37098
+21:03:10.017 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:36966
+21:03:10.017 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:36988
+21:03:10.017 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37014
+21:03:10.068 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:36996
+21:03:10.068 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37040
+21:03:10.068 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37048
+21:03:10.068 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37028
+21:03:10.068 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:36950
+21:03:10.068 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37010
+21:03:10.144 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37076
+21:03:10.144 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37056
+21:03:10.144 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:37068
+21:03:10.144 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:36972
+21:03:10.144 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:36978
+21:03:10.144 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:36968
+21:03:10.147 INF Profile data written. filename=experiment-output/0002/slave-004/prof.cpu name=cpu

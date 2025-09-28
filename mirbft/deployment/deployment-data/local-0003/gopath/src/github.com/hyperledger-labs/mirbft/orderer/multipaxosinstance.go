@@ -47,8 +47,10 @@ type mpxInstance struct {
 	lastReqBatch *request.Batch
 	phase        instPhase
 
-	acceptRtxEvery time.Duration
-	lastAcceptAt   time.Time
+	acceptRtxEvery  time.Duration
+	lastAcceptAt    time.Time
+	enableNilDeliver bool
+	sbNilAfter       time.Duration // quanto tempo até ⊥ após AcceptSent sem maioria
 
 	msgCh   chan *pb.ProtocolMessage
 	stopCh  chan struct{}
@@ -65,7 +67,8 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, ma
 		announce:       announce,
 		lastProposeAt:  time.Now(),
 		phase:          phaseInit,
-		acceptRtxEvery: interval * 2,
+		acceptRtxEvery: interval * 2, // simples: 2x BatchTimeout
+		sbNilAfter:     interval * 3, // default; pode ser sobrescrito no orderer
 		msgCh:          make(chan *pb.ProtocolMessage, 4096),
 		stopCh:         make(chan struct{}),
 	}
@@ -88,7 +91,7 @@ func (i *mpxInstance) setSegment(seg manager.Segment) {
 		i.sn, seg.SegID(), seg.FirstSN(), seg.Len(), i.quorum, seg.Leaders())
 }
 
-// ---------------- workers (serialização) ----------------
+// workers (serialização)
 
 func (i *mpxInstance) startWorkers(wg *sync.WaitGroup) {
 	i.wg.Add(1)
@@ -129,7 +132,7 @@ func (i *mpxInstance) isClosed() bool {
 	return i.closed
 }
 
-// ---------------- handlers ----------------
+// handlers
 
 func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	switch t := mpx.Type.(type) {
@@ -254,11 +257,36 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		return
 	}
 	val := c.GetValue()
+
+	// Se commit é NIL (⊥), tratamos como "avança SN sem executar".
 	if val == nil || len(val.GetBatch()) == 0 {
-		fmt.Printf("[MPX][CHK] COMMIT NIL sn=%d (⊥)\n", i.sn)
+		fmt.Printf("[MPX][NIL] COMMIT ⊥ sn=%d\n", i.sn)
+		i.phase = phaseCommitted
+
+		// Gossip do NIL Commit (com Value=nil) para convergência
+		nilCommit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
+			Commit: &pb.MPxCommit{
+				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+				Value: nil, // NIL
+			},
+		}}
+		pmOut := &pb.ProtocolMessage{
+			SenderId: membership.OwnID,
+			Sn:       i.sn,
+			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: nilCommit},
+		}
+		if i.parent.emit != nil {
+			i.parent.emit(pmOut)
+		}
+
+		// Não removemos lastReqBatch (resurrection implícito futura recorte)
+		// Não anunciamos a clientes (⊥ não entrega requests)
+		i.closed = true
+		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
 		return
 	}
 
+	// Commit real
 	if i.lastVal == nil {
 		i.lastVal = val
 		i.lastDigest = sha256.Sum256(val.GetBatch())
@@ -282,6 +310,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		i.parent.emit(pmOut)
 	}
 
+	// Remove o batch dos buckets ANTES de anunciar
 	if i.lastReqBatch != nil {
 		request.RemoveBatch(i.lastReqBatch)
 		i.lastReqBatch = nil
@@ -303,7 +332,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	traceCommit(i.sn, len(b.Requests))
 }
 
-// ---------------- proposição / tick ----------------
+// proposição / tick
 
 func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 	i.mu.Lock()
@@ -379,6 +408,7 @@ func (i *mpxInstance) tick(now time.Time) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
+	// Retransmissão do mesmo Accept
 	if i.phase == phaseAcceptSent && i.acceptCount < i.quorum && now.Sub(i.lastAcceptAt) >= i.acceptRtxEvery {
 		if i.parent.emit != nil && i.lastVal != nil {
 			pm := &pb.ProtocolMessage{
@@ -399,9 +429,37 @@ func (i *mpxInstance) tick(now time.Time) {
 			i.lastAcceptAt = now
 		}
 	}
+
+	// SB-⊥: se habilitado e passou muito tempo sem maioria, comita NIL (⊥)
+	if i.enableNilDeliver &&
+		i.phase == phaseAcceptSent &&
+		i.acceptCount < i.quorum &&
+		now.Sub(i.lastAcceptAt) >= i.sbNilAfter {
+
+		fmt.Printf("[MPX][NIL] TIMEOUT → DELIVER ⊥ sn=%d\n", i.sn)
+		i.phase = phaseCommitted
+		// gossip NIL
+		nilCommit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
+			Commit: &pb.MPxCommit{
+				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+				Value: nil, // NIL
+			},
+		}}
+		pmOut := &pb.ProtocolMessage{
+			SenderId: membership.OwnID,
+			Sn:       i.sn,
+			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: nilCommit},
+		}
+		if i.parent.emit != nil {
+			i.parent.emit(pmOut)
+		}
+		// Não remove batch; não anuncia cliente
+		i.closed = true
+		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
+	}
 }
 
-// --------------- util ---------------
+// util
 
 func (i *mpxInstance) cutReqBatch() *request.Batch {
 	if i.seg == nil {
@@ -423,7 +481,7 @@ func (i *mpxInstance) Close() {
 	fmt.Printf("[MPX][CHK] instance close sn=%d\n", i.sn)
 }
 
-// Traces mínimos (mantidos)
+// Traces mínimos
 func tracePropose(sn int32, size int) {
 	tracing.MainTrace.Event(tracing.PROPOSE, int64(sn), int64(size))
 	fmt.Printf("[MPX] PROPOSE sn=%d size=%d\n", sn, size)

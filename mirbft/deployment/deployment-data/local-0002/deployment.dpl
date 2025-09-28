@@ -1,6 +1,6 @@
 # Generated deployment file
 # 
-# systemSizes:      4 16 64 128
+# systemSizes:      4
 # machineType:      cloud-machine-templates/small-machine
 # bandwidths:       unlimited
 # 
@@ -41,41 +41,5 @@ run 0002 config: config-0002.yml   peers: peers   clients: 1client
 # 0003,4,0,60000,1,unlimited,4,HotStuff,Signing,1,1,1,256,Single,256,4096,1000,32,1,16,16,true,false,131072000,256,256,false,15360,4194304,external,32,8192
 run 0003 config: config-0003.yml   peers: peers   clients: 1client
 
-bandwidth: unlimited
-bandwidth: unlimited
-
-# ========================================
-#  Peers: 16
-# Faulty: 0
-#  Reuse: true
-# ========================================
-machine: cloud-machine-templates/small-machine-fra05.cmt
-deploy 12 peers
-
-bandwidth: unlimited
-bandwidth: unlimited
-bandwidth: unlimited
-
-# ========================================
-#  Peers: 64
-# Faulty: 0
-#  Reuse: true
-# ========================================
-machine: cloud-machine-templates/small-machine-fra05.cmt
-deploy 48 peers
-
-bandwidth: unlimited
-bandwidth: unlimited
-bandwidth: unlimited
-
-# ========================================
-#  Peers: 128
-# Faulty: 0
-#  Reuse: true
-# ========================================
-machine: cloud-machine-templates/small-machine-fra05.cmt
-deploy 64 peers
-
-bandwidth: unlimited
 bandwidth: unlimited
 bandwidth: unlimited

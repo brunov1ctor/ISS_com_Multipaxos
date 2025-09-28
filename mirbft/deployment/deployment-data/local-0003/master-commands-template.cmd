@@ -167,7 +167,7 @@ write-file master-status 0003
 # Wait for all slaves, even if they were not involved in experiments.
 # Wait for slaves.
 wait for slaves 1client 1
-wait for slaves peers 128
+wait for slaves peers 4
 
 # Stop all slaves.
 stop __all__
