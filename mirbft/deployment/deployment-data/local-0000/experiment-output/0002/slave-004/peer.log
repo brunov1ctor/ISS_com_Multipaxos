@@ -1,106 +1,106 @@
 [BIN] orderingpeer exe=/root/go/bin/orderingpeer
-{"level":"debug","Logging":"debug","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","UseTLS":true,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","CACertFile":"tls-data/ca.pem","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","KeyFile":"tls-data/auth.key","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","CertFile":"tls-data/auth.pem","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","PriorityConnections":2,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","BasicConnections":4,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","TestConnections":false,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ExcessConnections":1,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ConnectionTestMsgs":4,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ConnectionTestPayload":131072,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","OutMessageBufsize":1024,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","OutMessageBufsize":1,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ThroughputCap":131072000,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","StragglerTolerance":1000,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","BatchSizeIncrement":256,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","Orderer":"MultiPaxos","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","Manager":"Mir","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","Failures":0,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","CrashTiming":"EpochStart","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","CheckpointInterval":256,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","WatermarkWindowSize":256,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","EpochLength":256,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","SegmentLength":256,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","WaitForCheckpoints":true,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ClientWatermarkWindowSize":4194304,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ClientRequestBacklogSize":4194304,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","RandomSeed":3871,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","NodeToLeaderRatio":1,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","LeaderPolicy":"Single","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","DefaultLeaderBan":2,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","NumBuckets":16,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","BatchSize":1000,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","DisabledViewChange":false,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ViewChangeTimeout":60000,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ClientTraceSampling":10,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","EventBufferSize":2097152,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","TraceSampling":1,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ClientsPerProcess":1,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","RequestsPerClient":7680,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ClientRunTime":30000,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","RequestRate":128,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","HardRequestRateLimit":false,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","RequestPayloadSize":500,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","SignRequests":true,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ClientPrivKeyFile":"tls-data/client-ecdsa-256.key","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","ClientPubKeyFile":"tls-data/client-ecdsa-256.pem","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","PrecomputeRequests":false,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","RequestHandlerThreads":32,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","RequestInputChannelBuffer":8192,"time":"2025-09-28T19:15:38-03:00","message":"Config"}
-{"level":"debug","BatchVerifier":"external","time":"2025-09-28T19:15:38-03:00","message":"Config"}
-19:15:38.552 INF Registered with discovery server. numPeers=4 ownID=2
-19:15:38.553 INF Profiling enabled.
-19:15:38.553 INF Setting up profiling.
-19:15:38.554 INF Started Profiler: CPU
-19:15:38.554 INF Started Profiler: BLOCK
-19:15:38.554 INF Started Profiler: MUTEX
-19:15:38.554 INF Profiler will stop on signal. exit=true
-19:15:38.555 INF Tracing will stop on signal. exit=false
-19:15:38.555 INF Started tracing. traceFile=experiment-output/0002/slave-004/peer.trc
-[RESPONDER][VER] RESPONDER+SEND-LOGS-v1.1-2025-09-22 started at 2025-09-28T19:15:38.556685145-03:00
-19:15:38.556 INF [MPX] Init parameters batchSize=4096 batchTimeout=1000 enableNilDeliver=true sbNilAfter=6000
+{"level":"debug","Logging":"debug","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","UseTLS":true,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","CACertFile":"tls-data/ca.pem","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","KeyFile":"tls-data/auth.key","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","CertFile":"tls-data/auth.pem","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","PriorityConnections":2,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","BasicConnections":4,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","TestConnections":false,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ExcessConnections":1,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ConnectionTestMsgs":4,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ConnectionTestPayload":131072,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","OutMessageBufsize":1024,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","OutMessageBufsize":1,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ThroughputCap":131072000,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","StragglerTolerance":1000,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","BatchSizeIncrement":256,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","Orderer":"MultiPaxos","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","Manager":"Mir","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","Failures":0,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","CrashTiming":"EpochStart","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","CheckpointInterval":256,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","WatermarkWindowSize":256,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","EpochLength":256,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","SegmentLength":256,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","WaitForCheckpoints":true,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ClientWatermarkWindowSize":4194304,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ClientRequestBacklogSize":4194304,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","RandomSeed":9473,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","NodeToLeaderRatio":1,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","LeaderPolicy":"Single","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","DefaultLeaderBan":2,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","NumBuckets":16,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","BatchSize":1000,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","DisabledViewChange":false,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ViewChangeTimeout":60000,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ClientTraceSampling":10,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","EventBufferSize":2097152,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","TraceSampling":1,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ClientsPerProcess":1,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","RequestsPerClient":7680,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ClientRunTime":30000,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","RequestRate":128,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","HardRequestRateLimit":false,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","RequestPayloadSize":500,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","SignRequests":true,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ClientPrivKeyFile":"tls-data/client-ecdsa-256.key","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","ClientPubKeyFile":"tls-data/client-ecdsa-256.pem","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","PrecomputeRequests":false,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","RequestHandlerThreads":32,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","RequestInputChannelBuffer":8192,"time":"2025-09-28T21:15:05-03:00","message":"Config"}
+{"level":"debug","BatchVerifier":"external","time":"2025-09-28T21:15:05-03:00","message":"Config"}
+21:15:05.319 INF Registered with discovery server. numPeers=4 ownID=2
+21:15:05.319 INF Profiling enabled.
+21:15:05.319 INF Setting up profiling.
+21:15:05.320 INF Started Profiler: CPU
+21:15:05.320 INF Started Profiler: BLOCK
+21:15:05.320 INF Started Profiler: MUTEX
+21:15:05.320 INF Profiler will stop on signal. exit=true
+21:15:05.321 INF Tracing will stop on signal. exit=false
+21:15:05.321 INF Started tracing. traceFile=experiment-output/0002/slave-004/peer.trc
+[RESPONDER][VER] RESPONDER+SEND-LOGS-v1.1-2025-09-22 started at 2025-09-28T21:15:05.322008904-03:00
 [MPX] Init ok; cfg: batchSize=4096 batchTimeout=1s view=0 leaderPolicy=single (leader per segment)
-19:15:38.557 INF Listening for connections. port=10022 useTLS=true
-19:15:38.564 INF Connecting to peer. addr=127.0.0.1:10000 basicConns=4 priorityConns=2
-19:15:38.564 INF Connecting to peer. addr=127.0.0.1:10011 basicConns=4 priorityConns=2
-19:15:38.564 INF Connecting to peer. addr=127.0.0.1:10033 basicConns=4 priorityConns=2
-19:15:38.577 INF Connecting to peer. addr=127.0.0.1:10022 basicConns=4 priorityConns=2
-19:15:39.516 INF Incoming connection for protocol messages. addr=127.0.0.1:54310
-19:15:39.524 INF Incoming connection for protocol messages. addr=127.0.0.1:54382
-19:15:39.547 INF Incoming connection for protocol messages. addr=127.0.0.1:54364
-19:15:39.560 INF Incoming connection for protocol messages. addr=127.0.0.1:54334
-19:15:39.662 INF Incoming connection for protocol messages. addr=127.0.0.1:54324
-19:15:39.663 INF Incoming connection for protocol messages. addr=127.0.0.1:54284
-19:15:39.701 INF Incoming connection for protocol messages. addr=127.0.0.1:54360
-19:15:39.707 INF Incoming connection for protocol messages. addr=127.0.0.1:54370
-19:15:39.715 INF Incoming connection for protocol messages. addr=127.0.0.1:54258
-19:15:39.715 INF Incoming connection for protocol messages. addr=127.0.0.1:54408
-19:15:39.724 INF Incoming connection for protocol messages. addr=127.0.0.1:54348
-19:15:39.732 INF Incoming connection for protocol messages. addr=127.0.0.1:54396
-19:15:39.735 DBG Connected. peerID=1
-19:15:39.736 INF Incoming connection for protocol messages. addr=127.0.0.1:54272
-19:15:39.740 INF Incoming connection for protocol messages. addr=127.0.0.1:54294
-19:15:39.740 INF Incoming connection for protocol messages. addr=127.0.0.1:54436
-19:15:39.742 INF Incoming connection for protocol messages. addr=127.0.0.1:54412
-19:15:39.743 INF Incoming connection for protocol messages. addr=127.0.0.1:54424
-19:15:39.747 DBG Connected. peerID=2
-19:15:39.748 INF Incoming connection for protocol messages. addr=127.0.0.1:54446
-19:15:39.755 DBG Connected. peerID=0
-19:15:39.767 DBG Connected. peerID=3
-19:15:39.767 INF Connected to all peers.
-19:15:39.818 INF Incoming connection for protocol messages. addr=127.0.0.1:54486
-19:15:39.827 INF Incoming connection for protocol messages. addr=127.0.0.1:54470
-19:15:39.827 INF Incoming connection for protocol messages. addr=127.0.0.1:54458
-19:15:39.828 INF Incoming connection for protocol messages. addr=127.0.0.1:54478
-19:15:39.834 INF Incoming connection for protocol messages. addr=127.0.0.1:54460
-19:15:39.837 INF Incoming connection for protocol messages. addr=127.0.0.1:54482
-19:15:39.841 INF All peers finished connecting. Starting ISS.
+21:15:05.322 INF Listening for connections. port=10022 useTLS=true
+21:15:05.327 INF Connecting to peer. addr=127.0.0.1:10011 basicConns=4 priorityConns=2
+21:15:05.327 INF Connecting to peer. addr=127.0.0.1:10033 basicConns=4 priorityConns=2
+21:15:05.328 INF Connecting to peer. addr=127.0.0.1:10022 basicConns=4 priorityConns=2
+21:15:05.328 INF Connecting to peer. addr=127.0.0.1:10000 basicConns=4 priorityConns=2
+21:15:05.908 INF Incoming connection for protocol messages. addr=127.0.0.1:57996
+21:15:05.954 INF Incoming connection for protocol messages. addr=127.0.0.1:58136
+21:15:06.025 INF Incoming connection for protocol messages. addr=127.0.0.1:58026
+21:15:06.025 INF Incoming connection for protocol messages. addr=127.0.0.1:57998
+21:15:06.037 INF Incoming connection for protocol messages. addr=127.0.0.1:58098
+21:15:06.043 INF Incoming connection for protocol messages. addr=127.0.0.1:58132
+21:15:06.063 INF Incoming connection for protocol messages. addr=127.0.0.1:58152
+21:15:06.063 INF Incoming connection for protocol messages. addr=127.0.0.1:58120
+21:15:06.065 INF Incoming connection for protocol messages. addr=127.0.0.1:57980
+21:15:06.065 INF Incoming connection for protocol messages. addr=127.0.0.1:58084
+21:15:06.093 INF Incoming connection for protocol messages. addr=127.0.0.1:58110
+21:15:06.193 INF Incoming connection for protocol messages. addr=127.0.0.1:58010
+21:15:06.271 INF Incoming connection for protocol messages. addr=127.0.0.1:58060
+21:15:06.284 INF Incoming connection for protocol messages. addr=127.0.0.1:58074
+21:15:06.308 INF Incoming connection for protocol messages. addr=127.0.0.1:58056
+21:15:06.308 INF Incoming connection for protocol messages. addr=127.0.0.1:58042
+21:15:06.321 INF Incoming connection for protocol messages. addr=127.0.0.1:58158
+21:15:06.329 INF Incoming connection for protocol messages. addr=127.0.0.1:58174
+21:15:06.361 INF Incoming connection for protocol messages. addr=127.0.0.1:58090
+21:15:06.379 INF Incoming connection for protocol messages. addr=127.0.0.1:58092
+21:15:06.422 DBG Connected. peerID=0
+21:15:06.571 INF Incoming connection for protocol messages. addr=127.0.0.1:58188
+21:15:06.572 INF Incoming connection for protocol messages. addr=127.0.0.1:58202
+21:15:06.585 INF Incoming connection for protocol messages. addr=127.0.0.1:58204
+21:15:06.585 DBG Connected. peerID=2
+21:15:06.586 INF Incoming connection for protocol messages. addr=127.0.0.1:58200
+21:15:06.615 DBG Connected. peerID=3
+21:15:06.634 DBG Connected. peerID=1
+21:15:06.634 INF Connected to all peers.
+21:15:06.649 INF All peers finished connecting. Starting ISS.
 [MPX] Start begin
-19:15:39.841 DBG Buckets for 0-th leader 0: [0 4 8 12 1 5 9 13 2 6 10 14 3 7 11 15]
-19:15:39.841 INF [CL] AnnounceBucketAssignment to clients numPeers=1
-19:15:39.841 INF [MPX] New segment received firstLeader=0 firstSN=0 lastSN=255 length=256 segId=0
+[MPX] Start done
+21:15:06.650 DBG Buckets for 0-th leader 0: [0 4 8 12 1 5 9 13 2 6 10 14 3 7 11 15]
+21:15:06.650 INF [CL] AnnounceBucketAssignment to clients numPeers=1
+21:15:06.650 INF MultiPaxos received new segment: [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 150 151 152 153 154 155 156 157 158 159 160 161 162 163 164 165 166 167 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 207 208 209 210 211 212 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 233 234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255] first leader=0 firstSN=0 lastSN=255 len=256 length=256 segId=0
 [MPX][CHK] instance init sn=0
 [MPX][CHK] seg bind sn=0 segID=0 firstSN=0 len=256 quorum=3 leaders=[0 1 2 3]
 [MPX][CHK] instance init sn=1
@@ -613,28 +613,25 @@
 [MPX][CHK] seg bind sn=254 segID=0 firstSN=0 len=256 quorum=3 leaders=[0 1 2 3]
 [MPX][CHK] instance init sn=255
 [MPX][CHK] seg bind sn=255 segID=0 firstSN=0 len=256 quorum=3 leaders=[0 1 2 3]
-19:15:42.084 INF Incoming connection for requests. addr=127.0.0.1:54498
-19:15:42.875 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
+21:15:08.886 INF Incoming connection for requests. addr=127.0.0.1:58070
 [MPX][IN ] ACCEPT sn=0 from=0
-[MPX][QUORUM] ACCEPT sn=0 acceptCount=1 quorum=3 digest=55c9c3c707924cee
+[MPX][QUORUM] ACCEPT sn=0 acceptCount=1 quorum=3 digest=02f30068cefdad51
 [MPX][NET] SEND Accepted sn=0
-19:15:42.876 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
-19:15:42.876 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
 [MPX][IN ] ACCEPTED sn=0 from=1
-[MPX][QUORUM] ACCEPTED sn=0 count=2/3 digest=55c9c3c707924cee
+[MPX][QUORUM] ACCEPTED sn=0 count=2/3 digest=02f30068cefdad51
 [MPX][IN ] ACCEPTED sn=0 from=3
-[MPX][QUORUM] ACCEPTED sn=0 count=3/3 digest=55c9c3c707924cee
-[MPX][QUORUM] MAJORITY REACHED sn=0 → COMMIT digest=55c9c3c707924cee
-[MPX][NET] SEND Commit sn=0 digest=55c9c3c707924cee
-[MPX][NET] GOSSIP Commit sn=0 digest=55c9c3c707924cee
-[MPX][CHK] ANNOUNCE sn=0 reqs=96
-19:15:42.879 INF Committed entry. latency=0 nReq=96 sn=0
-19:15:42.880 INF Delivered batch. nReq=96 sn=0
-SB-DELIVER sn=0 size=96
-COMMIT sn=0 size=96
-DELIVER sn=0 delivered=96
-[MPX] COMMIT  sn=0 size=96
-[RESPONDER][ENTRY] sn=0 nreq=96
+[MPX][QUORUM] ACCEPTED sn=0 count=3/3 digest=02f30068cefdad51
+[MPX][QUORUM] MAJORITY REACHED sn=0 → COMMIT digest=02f30068cefdad51
+[MPX][NET] SEND Commit sn=0 digest=02f30068cefdad51
+[MPX][NET] GOSSIP Commit sn=0 digest=02f30068cefdad51
+[MPX][CHK] ANNOUNCE sn=0 reqs=97
+21:15:09.688 INF Committed entry. latency=0 nReq=97 sn=0
+21:15:09.688 INF Delivered batch. nReq=97 sn=0
+SB-DELIVER sn=0 size=97
+COMMIT sn=0 size=97
+DELIVER sn=0 delivered=97
+[MPX] COMMIT  sn=0 size=97
+[RESPONDER][ENTRY] sn=0 nreq=97
 [RESPONDER][SEND] sn=0 client=0 req=0 msg=ClientResponse{orderSn=0,clientSn=0}
 [MESSENGER][OK] client=0 deliver clientSn=0 sn=0
 [RESPONDER][SEND] sn=0 client=0 req=16 msg=ClientResponse{orderSn=0,clientSn=16}
@@ -827,42 +824,32 @@ DELIVER sn=0 delivered=96
 [MESSENGER][OK] client=0 deliver clientSn=79 sn=0
 [RESPONDER][SEND] sn=0 client=0 req=95 msg=ClientResponse{orderSn=0,clientSn=95}
 [MESSENGER][OK] client=0 deliver clientSn=95 sn=0
-[RESPONDER][ENTRY][DONE] sn=0 sent=96/96
-19:15:42.883 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
-[MPX][IN ] COMMIT sn=0 from=1
-19:15:42.889 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
-[MPX][IN ] COMMIT sn=0 from=1
-19:15:42.892 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
-19:15:42.892 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
+[RESPONDER][SEND] sn=0 client=0 req=96 msg=ClientResponse{orderSn=0,clientSn=96}
+[MESSENGER][OK] client=0 deliver clientSn=96 sn=0
+[RESPONDER][ENTRY][DONE] sn=0 sent=97/97
 [MPX][IN ] COMMIT sn=0 from=0
 [MPX][IN ] COMMIT sn=0 from=0
-19:15:42.896 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
 [MPX][IN ] COMMIT sn=0 from=3
-19:15:42.896 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=0
 [MPX][IN ] COMMIT sn=0 from=3
-19:15:44.877 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
+[MPX][IN ] COMMIT sn=0 from=1
+[MPX][IN ] COMMIT sn=0 from=1
 [MPX][IN ] ACCEPT sn=1 from=0
-[MPX][QUORUM] ACCEPT sn=1 acceptCount=1 quorum=3 digest=c48a70446adf6460
+[MPX][QUORUM] ACCEPT sn=1 acceptCount=1 quorum=3 digest=9a28c4964fdc66f8
 [MPX][NET] SEND Accepted sn=1
-19:15:44.878 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
-[MPX][IN ] ACCEPTED sn=1 from=3
-[MPX][QUORUM] ACCEPTED sn=1 count=2/3 digest=c48a70446adf6460
-19:15:44.878 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
 [MPX][IN ] ACCEPTED sn=1 from=1
-[MPX][QUORUM] ACCEPTED sn=1 count=3/3 digest=c48a70446adf6460
-[MPX][QUORUM] MAJORITY REACHED sn=1 → COMMIT digest=c48a70446adf6460
-[MPX][NET] SEND Commit sn=1 digest=c48a70446adf6460
-[MPX][NET] GOSSIP Commit sn=1 digest=c48a70446adf6460
-[MPX][CHK] ANNOUNCE sn=1 reqs=257
-19:15:44.886 INF Committed entry. latency=0 nReq=257 sn=1
-19:15:44.886 INF Delivered batch. nReq=257 sn=1
-SB-DELIVER sn=1 size=257
-COMMIT sn=1 size=257
-DELIVER sn=1 delivered=257
-[MPX] COMMIT  sn=1 size=257
-[RESPONDER][ENTRY] sn=1 nreq=257
-[RESPONDER][SEND] sn=1 client=0 req=96 msg=ClientResponse{orderSn=1,clientSn=96}
-[MESSENGER][OK] client=0 deliver clientSn=96 sn=1
+[MPX][QUORUM] ACCEPTED sn=1 count=2/3 digest=9a28c4964fdc66f8
+[MPX][IN ] ACCEPTED sn=1 from=3
+[MPX][QUORUM] ACCEPTED sn=1 count=3/3 digest=9a28c4964fdc66f8
+[MPX][QUORUM] MAJORITY REACHED sn=1 → COMMIT digest=9a28c4964fdc66f8
+[MPX][NET] SEND Commit sn=1 digest=9a28c4964fdc66f8
+[MPX][NET] GOSSIP Commit sn=1 digest=9a28c4964fdc66f8
+[MPX][CHK] ANNOUNCE sn=1 reqs=256
+21:15:11.691 INF Committed entry. latency=0 nReq=256 sn=1
+21:15:11.691 INF Delivered batch. nReq=256 sn=1
+SB-DELIVER sn=1 size=256
+COMMIT sn=1 size=256
+DELIVER sn=1 delivered=256
+[RESPONDER][ENTRY] sn=1 nreq=256
 [RESPONDER][SEND] sn=1 client=0 req=112 msg=ClientResponse{orderSn=1,clientSn=112}
 [MESSENGER][OK] client=0 deliver clientSn=112 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=128 msg=ClientResponse{orderSn=1,clientSn=128}
@@ -893,6 +880,8 @@ DELIVER sn=1 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=320 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=336 msg=ClientResponse{orderSn=1,clientSn=336}
 [MESSENGER][OK] client=0 deliver clientSn=336 sn=1
+[RESPONDER][SEND] sn=1 client=0 req=352 msg=ClientResponse{orderSn=1,clientSn=352}
+[MESSENGER][OK] client=0 deliver clientSn=352 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=97 msg=ClientResponse{orderSn=1,clientSn=97}
 [MESSENGER][OK] client=0 deliver clientSn=97 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=113 msg=ClientResponse{orderSn=1,clientSn=113}
@@ -957,6 +946,7 @@ DELIVER sn=1 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=322 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=338 msg=ClientResponse{orderSn=1,clientSn=338}
 [MESSENGER][OK] client=0 deliver clientSn=338 sn=1
+[MPX] COMMIT  sn=1 size=256
 [RESPONDER][SEND] sn=1 client=0 req=99 msg=ClientResponse{orderSn=1,clientSn=99}
 [MESSENGER][OK] client=0 deliver clientSn=99 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=115 msg=ClientResponse{orderSn=1,clientSn=115}
@@ -1279,7 +1269,6 @@ DELIVER sn=1 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=348 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=109 msg=ClientResponse{orderSn=1,clientSn=109}
 [MESSENGER][OK] client=0 deliver clientSn=109 sn=1
-19:15:44.908 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
 [RESPONDER][SEND] sn=1 client=0 req=125 msg=ClientResponse{orderSn=1,clientSn=125}
 [MESSENGER][OK] client=0 deliver clientSn=125 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=141 msg=ClientResponse{orderSn=1,clientSn=141}
@@ -1287,20 +1276,13 @@ DELIVER sn=1 delivered=257
 [RESPONDER][SEND] sn=1 client=0 req=157 msg=ClientResponse{orderSn=1,clientSn=157}
 [MESSENGER][OK] client=0 deliver clientSn=157 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=173 msg=ClientResponse{orderSn=1,clientSn=173}
-[MPX][IN ] COMMIT sn=1 from=3
-19:15:44.909 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
-19:15:44.909 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
-[MPX][IN ] COMMIT sn=1 from=3
 [MESSENGER][OK] client=0 deliver clientSn=173 sn=1
-[MPX][IN ] COMMIT sn=1 from=1
 [RESPONDER][SEND] sn=1 client=0 req=189 msg=ClientResponse{orderSn=1,clientSn=189}
 [MESSENGER][OK] client=0 deliver clientSn=189 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=205 msg=ClientResponse{orderSn=1,clientSn=205}
 [MESSENGER][OK] client=0 deliver clientSn=205 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=221 msg=ClientResponse{orderSn=1,clientSn=221}
-19:15:44.909 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
 [MESSENGER][OK] client=0 deliver clientSn=221 sn=1
-[MPX][IN ] COMMIT sn=1 from=1
 [RESPONDER][SEND] sn=1 client=0 req=237 msg=ClientResponse{orderSn=1,clientSn=237}
 [MESSENGER][OK] client=0 deliver clientSn=237 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=253 msg=ClientResponse{orderSn=1,clientSn=253}
@@ -1348,6 +1330,8 @@ DELIVER sn=1 delivered=257
 [RESPONDER][SEND] sn=1 client=0 req=334 msg=ClientResponse{orderSn=1,clientSn=334}
 [MESSENGER][OK] client=0 deliver clientSn=334 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=350 msg=ClientResponse{orderSn=1,clientSn=350}
+[MPX][IN ] COMMIT sn=1 from=3
+[MPX][IN ] COMMIT sn=1 from=3
 [MESSENGER][OK] client=0 deliver clientSn=350 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=111 msg=ClientResponse{orderSn=1,clientSn=111}
 [MESSENGER][OK] client=0 deliver clientSn=111 sn=1
@@ -1381,34 +1365,28 @@ DELIVER sn=1 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=335 sn=1
 [RESPONDER][SEND] sn=1 client=0 req=351 msg=ClientResponse{orderSn=1,clientSn=351}
 [MESSENGER][OK] client=0 deliver clientSn=351 sn=1
-[RESPONDER][SEND] sn=1 client=0 req=352 msg=ClientResponse{orderSn=1,clientSn=352}
-[MESSENGER][OK] client=0 deliver clientSn=352 sn=1
-[RESPONDER][ENTRY][DONE] sn=1 sent=257/257
-19:15:44.912 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
+[RESPONDER][ENTRY][DONE] sn=1 sent=256/256
 [MPX][IN ] COMMIT sn=1 from=0
-19:15:44.912 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=1
 [MPX][IN ] COMMIT sn=1 from=0
-19:15:46.882 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=2
+[MPX][IN ] COMMIT sn=1 from=1
+[MPX][IN ] COMMIT sn=1 from=1
 [MPX][IN ] ACCEPT sn=2 from=0
-[MPX][QUORUM] ACCEPT sn=2 acceptCount=1 quorum=3 digest=9b918d3ce73e50d0
+[MPX][QUORUM] ACCEPT sn=2 acceptCount=1 quorum=3 digest=7b938e4e8dbc7abb
 [MPX][NET] SEND Accepted sn=2
-19:15:46.882 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=2
-[MPX][IN ] ACCEPTED sn=2 from=3
-[MPX][QUORUM] ACCEPTED sn=2 count=2/3 digest=9b918d3ce73e50d0
-19:15:46.882 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=2
 [MPX][IN ] ACCEPTED sn=2 from=1
-[MPX][QUORUM] ACCEPTED sn=2 count=3/3 digest=9b918d3ce73e50d0
-[MPX][QUORUM] MAJORITY REACHED sn=2 → COMMIT digest=9b918d3ce73e50d0
-[MPX][NET] SEND Commit sn=2 digest=9b918d3ce73e50d0
-[MPX][NET] GOSSIP Commit sn=2 digest=9b918d3ce73e50d0
-[MPX][CHK] ANNOUNCE sn=2 reqs=256
-19:15:46.887 INF Committed entry. latency=0 nReq=256 sn=2
-19:15:46.887 INF Delivered batch. nReq=256 sn=2
-SB-DELIVER sn=2 size=256
-COMMIT sn=2 size=256
-DELIVER sn=2 delivered=256
-[MPX] COMMIT  sn=2 size=256
-[RESPONDER][ENTRY] sn=2 nreq=256
+[MPX][QUORUM] ACCEPTED sn=2 count=2/3 digest=7b938e4e8dbc7abb
+[MPX][IN ] ACCEPTED sn=2 from=3
+[MPX][QUORUM] ACCEPTED sn=2 count=3/3 digest=7b938e4e8dbc7abb
+[MPX][QUORUM] MAJORITY REACHED sn=2 → COMMIT digest=7b938e4e8dbc7abb
+[MPX][NET] SEND Commit sn=2 digest=7b938e4e8dbc7abb
+[MPX][NET] GOSSIP Commit sn=2 digest=7b938e4e8dbc7abb
+[MPX][CHK] ANNOUNCE sn=2 reqs=257
+21:15:13.697 INF Committed entry. latency=0 nReq=257 sn=2
+21:15:13.697 INF Delivered batch. nReq=257 sn=2
+SB-DELIVER sn=2 size=257
+COMMIT sn=2 size=257
+DELIVER sn=2 delivered=257
+[RESPONDER][ENTRY] sn=2 nreq=257
 [RESPONDER][SEND] sn=2 client=0 req=368 msg=ClientResponse{orderSn=2,clientSn=368}
 [MESSENGER][OK] client=0 deliver clientSn=368 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=384 msg=ClientResponse{orderSn=2,clientSn=384}
@@ -1516,6 +1494,7 @@ DELIVER sn=2 delivered=256
 [RESPONDER][SEND] sn=2 client=0 req=419 msg=ClientResponse{orderSn=2,clientSn=419}
 [MESSENGER][OK] client=0 deliver clientSn=419 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=435 msg=ClientResponse{orderSn=2,clientSn=435}
+[MPX] COMMIT  sn=2 size=257
 [MESSENGER][OK] client=0 deliver clientSn=435 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=451 msg=ClientResponse{orderSn=2,clientSn=451}
 [MESSENGER][OK] client=0 deliver clientSn=451 sn=2
@@ -1772,9 +1751,7 @@ DELIVER sn=2 delivered=256
 [RESPONDER][SEND] sn=2 client=0 req=427 msg=ClientResponse{orderSn=2,clientSn=427}
 [MESSENGER][OK] client=0 deliver clientSn=427 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=443 msg=ClientResponse{orderSn=2,clientSn=443}
-19:15:46.899 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=2
 [MESSENGER][OK] client=0 deliver clientSn=443 sn=2
-[MPX][IN ] COMMIT sn=2 from=0
 [RESPONDER][SEND] sn=2 client=0 req=459 msg=ClientResponse{orderSn=2,clientSn=459}
 [MESSENGER][OK] client=0 deliver clientSn=459 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=475 msg=ClientResponse{orderSn=2,clientSn=475}
@@ -1796,8 +1773,6 @@ DELIVER sn=2 delivered=256
 [RESPONDER][SEND] sn=2 client=0 req=603 msg=ClientResponse{orderSn=2,clientSn=603}
 [MESSENGER][OK] client=0 deliver clientSn=603 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=364 msg=ClientResponse{orderSn=2,clientSn=364}
-19:15:46.900 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=2
-[MPX][IN ] COMMIT sn=2 from=0
 [MESSENGER][OK] client=0 deliver clientSn=364 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=380 msg=ClientResponse{orderSn=2,clientSn=380}
 [MESSENGER][OK] client=0 deliver clientSn=380 sn=2
@@ -1925,43 +1900,36 @@ DELIVER sn=2 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=591 sn=2
 [RESPONDER][SEND] sn=2 client=0 req=607 msg=ClientResponse{orderSn=2,clientSn=607}
 [MESSENGER][OK] client=0 deliver clientSn=607 sn=2
-[RESPONDER][ENTRY][DONE] sn=2 sent=256/256
-19:15:46.910 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=2
+[RESPONDER][SEND] sn=2 client=0 req=609 msg=ClientResponse{orderSn=2,clientSn=609}
+[MESSENGER][OK] client=0 deliver clientSn=609 sn=2
+[RESPONDER][ENTRY][DONE] sn=2 sent=257/257
 [MPX][IN ] COMMIT sn=2 from=3
-19:15:46.911 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=2
 [MPX][IN ] COMMIT sn=2 from=3
-19:15:46.915 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=2
 [MPX][IN ] COMMIT sn=2 from=1
-19:15:48.885 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=3
+[MPX][IN ] COMMIT sn=2 from=1
+[MPX][IN ] COMMIT sn=2 from=0
+[MPX][IN ] COMMIT sn=2 from=0
 [MPX][IN ] ACCEPT sn=3 from=0
-[MPX][QUORUM] ACCEPT sn=3 acceptCount=1 quorum=3 digest=567f9df3e1580ff1
+[MPX][QUORUM] ACCEPT sn=3 acceptCount=1 quorum=3 digest=8a310e599a066c75
 [MPX][NET] SEND Accepted sn=3
-19:15:48.886 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=3
 [MPX][IN ] ACCEPTED sn=3 from=3
-[MPX][QUORUM] ACCEPTED sn=3 count=2/3 digest=567f9df3e1580ff1
-19:15:48.900 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=3
-[MPX][IN ] COMMIT sn=3 from=0
-[MPX][NET] GOSSIP Commit sn=3 digest=567f9df3e1580ff1
-19:15:48.900 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=3
-[MPX][CHK] ANNOUNCE sn=3 reqs=257
-19:15:48.906 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=3
-19:15:48.907 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=3
-19:15:48.907 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=3
-19:15:48.908 INF Committed entry. latency=0 nReq=257 sn=3
-19:15:48.908 INF Delivered batch. nReq=257 sn=3
-[RESPONDER][ENTRY] sn=3 nreq=257
-[RESPONDER][SEND] sn=3 client=0 req=624 msg=ClientResponse{orderSn=3,clientSn=624}
-SB-DELIVER sn=3 size=257
-COMMIT sn=3 size=257
-DELIVER sn=3 delivered=257
-[MPX] COMMIT  sn=3 size=257
-[MPX][IN ] COMMIT sn=3 from=0
+[MPX][QUORUM] ACCEPTED sn=3 count=2/3 digest=8a310e599a066c75
 [MPX][IN ] ACCEPTED sn=3 from=1
-[MPX][QUORUM] ACCEPTED sn=3 count=3/3 digest=567f9df3e1580ff1
-[MPX][IN ] COMMIT sn=3 from=1
+[MPX][QUORUM] ACCEPTED sn=3 count=3/3 digest=8a310e599a066c75
+[MPX][QUORUM] MAJORITY REACHED sn=3 → COMMIT digest=8a310e599a066c75
+[MPX][NET] SEND Commit sn=3 digest=8a310e599a066c75
+[MPX][NET] GOSSIP Commit sn=3 digest=8a310e599a066c75
+[MPX][CHK] ANNOUNCE sn=3 reqs=256
+21:15:15.701 INF Committed entry. latency=0 nReq=256 sn=3
+21:15:15.702 INF Delivered batch. nReq=256 sn=3
+SB-DELIVER sn=3 size=256
+COMMIT sn=3 size=256
+DELIVER sn=3 delivered=256
+[MPX] COMMIT  sn=3 size=256
+[RESPONDER][ENTRY] sn=3 nreq=256
+[RESPONDER][SEND] sn=3 client=0 req=624 msg=ClientResponse{orderSn=3,clientSn=624}
 [MESSENGER][OK] client=0 deliver clientSn=624 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=640 msg=ClientResponse{orderSn=3,clientSn=640}
-[MPX][IN ] COMMIT sn=3 from=1
 [MESSENGER][OK] client=0 deliver clientSn=640 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=656 msg=ClientResponse{orderSn=3,clientSn=656}
 [MESSENGER][OK] client=0 deliver clientSn=656 sn=3
@@ -1991,8 +1959,6 @@ DELIVER sn=3 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=848 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=864 msg=ClientResponse{orderSn=3,clientSn=864}
 [MESSENGER][OK] client=0 deliver clientSn=864 sn=3
-[RESPONDER][SEND] sn=3 client=0 req=609 msg=ClientResponse{orderSn=3,clientSn=609}
-[MESSENGER][OK] client=0 deliver clientSn=609 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=625 msg=ClientResponse{orderSn=3,clientSn=625}
 [MESSENGER][OK] client=0 deliver clientSn=625 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=641 msg=ClientResponse{orderSn=3,clientSn=641}
@@ -2023,6 +1989,8 @@ DELIVER sn=3 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=833 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=849 msg=ClientResponse{orderSn=3,clientSn=849}
 [MESSENGER][OK] client=0 deliver clientSn=849 sn=3
+[RESPONDER][SEND] sn=3 client=0 req=865 msg=ClientResponse{orderSn=3,clientSn=865}
+[MESSENGER][OK] client=0 deliver clientSn=865 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=610 msg=ClientResponse{orderSn=3,clientSn=610}
 [MESSENGER][OK] client=0 deliver clientSn=610 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=626 msg=ClientResponse{orderSn=3,clientSn=626}
@@ -2066,10 +2034,8 @@ DELIVER sn=3 delivered=257
 [RESPONDER][SEND] sn=3 client=0 req=675 msg=ClientResponse{orderSn=3,clientSn=675}
 [MESSENGER][OK] client=0 deliver clientSn=675 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=691 msg=ClientResponse{orderSn=3,clientSn=691}
-19:15:48.914 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=3
 [MESSENGER][OK] client=0 deliver clientSn=691 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=707 msg=ClientResponse{orderSn=3,clientSn=707}
-[MPX][IN ] COMMIT sn=3 from=3
 [MESSENGER][OK] client=0 deliver clientSn=707 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=723 msg=ClientResponse{orderSn=3,clientSn=723}
 [MESSENGER][OK] client=0 deliver clientSn=723 sn=3
@@ -2311,6 +2277,8 @@ DELIVER sn=3 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=826 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=842 msg=ClientResponse{orderSn=3,clientSn=842}
 [MESSENGER][OK] client=0 deliver clientSn=842 sn=3
+[MPX][IN ] COMMIT sn=3 from=3
+[MPX][IN ] COMMIT sn=3 from=3
 [RESPONDER][SEND] sn=3 client=0 req=858 msg=ClientResponse{orderSn=3,clientSn=858}
 [MESSENGER][OK] client=0 deliver clientSn=858 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=619 msg=ClientResponse{orderSn=3,clientSn=619}
@@ -2361,7 +2329,9 @@ DELIVER sn=3 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=716 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=732 msg=ClientResponse{orderSn=3,clientSn=732}
 [MESSENGER][OK] client=0 deliver clientSn=732 sn=3
+[MPX][IN ] COMMIT sn=3 from=1
 [RESPONDER][SEND] sn=3 client=0 req=748 msg=ClientResponse{orderSn=3,clientSn=748}
+[MPX][IN ] COMMIT sn=3 from=1
 [MESSENGER][OK] client=0 deliver clientSn=748 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=764 msg=ClientResponse{orderSn=3,clientSn=764}
 [MESSENGER][OK] client=0 deliver clientSn=764 sn=3
@@ -2394,7 +2364,9 @@ DELIVER sn=3 delivered=257
 [RESPONDER][SEND] sn=3 client=0 req=733 msg=ClientResponse{orderSn=3,clientSn=733}
 [MESSENGER][OK] client=0 deliver clientSn=733 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=749 msg=ClientResponse{orderSn=3,clientSn=749}
+[MPX][IN ] COMMIT sn=3 from=0
 [MESSENGER][OK] client=0 deliver clientSn=749 sn=3
+[MPX][IN ] COMMIT sn=3 from=0
 [RESPONDER][SEND] sn=3 client=0 req=765 msg=ClientResponse{orderSn=3,clientSn=765}
 [MESSENGER][OK] client=0 deliver clientSn=765 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=781 msg=ClientResponse{orderSn=3,clientSn=781}
@@ -2473,38 +2445,25 @@ DELIVER sn=3 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=847 sn=3
 [RESPONDER][SEND] sn=3 client=0 req=863 msg=ClientResponse{orderSn=3,clientSn=863}
 [MESSENGER][OK] client=0 deliver clientSn=863 sn=3
-[RESPONDER][SEND] sn=3 client=0 req=865 msg=ClientResponse{orderSn=3,clientSn=865}
-[MESSENGER][OK] client=0 deliver clientSn=865 sn=3
-[RESPONDER][ENTRY][DONE] sn=3 sent=257/257
-19:15:50.889 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=4
+[RESPONDER][ENTRY][DONE] sn=3 sent=256/256
 [MPX][IN ] ACCEPT sn=4 from=0
-[MPX][QUORUM] ACCEPT sn=4 acceptCount=1 quorum=3 digest=04bb63eecafc133b
+[MPX][QUORUM] ACCEPT sn=4 acceptCount=1 quorum=3 digest=bb7882a4cd5107ae
 [MPX][NET] SEND Accepted sn=4
-19:15:50.891 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=4
-[MPX][IN ] ACCEPTED sn=4 from=3
-[MPX][QUORUM] ACCEPTED sn=4 count=2/3 digest=04bb63eecafc133b
-19:15:50.906 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=4
 [MPX][IN ] ACCEPTED sn=4 from=1
-[MPX][QUORUM] ACCEPTED sn=4 count=3/3 digest=04bb63eecafc133b
-[MPX][QUORUM] MAJORITY REACHED sn=4 → COMMIT digest=04bb63eecafc133b
-[MPX][NET] SEND Commit sn=4 digest=04bb63eecafc133b
-[MPX][NET] GOSSIP Commit sn=4 digest=04bb63eecafc133b
-19:15:50.907 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=4
-19:15:50.907 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=4
-19:15:50.906 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=4
-19:15:50.908 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=4
-[MPX][CHK] ANNOUNCE sn=4 reqs=256
-19:15:50.914 INF Committed entry. latency=0 nReq=256 sn=4
-19:15:50.914 INF Delivered batch. nReq=256 sn=4
-SB-DELIVER sn=4 size=256
-COMMIT sn=4 size=256
-DELIVER sn=4 delivered=256
-[MPX] COMMIT  sn=4 size=256
-[MPX][IN ] COMMIT sn=4 from=0
-[MPX][IN ] COMMIT sn=4 from=0
-[MPX][IN ] COMMIT sn=4 from=1
-[MPX][IN ] COMMIT sn=4 from=1
-[RESPONDER][ENTRY] sn=4 nreq=256
+[MPX][QUORUM] ACCEPTED sn=4 count=2/3 digest=bb7882a4cd5107ae
+[MPX][IN ] ACCEPTED sn=4 from=3
+[MPX][QUORUM] ACCEPTED sn=4 count=3/3 digest=bb7882a4cd5107ae
+[MPX][QUORUM] MAJORITY REACHED sn=4 → COMMIT digest=bb7882a4cd5107ae
+[MPX][NET] SEND Commit sn=4 digest=bb7882a4cd5107ae
+[MPX][NET] GOSSIP Commit sn=4 digest=bb7882a4cd5107ae
+[MPX][CHK] ANNOUNCE sn=4 reqs=257
+21:15:17.705 INF Committed entry. latency=0 nReq=257 sn=4
+21:15:17.706 INF Delivered batch. nReq=257 sn=4
+SB-DELIVER sn=4 size=257
+COMMIT sn=4 size=257
+DELIVER sn=4 delivered=257
+[MPX] COMMIT  sn=4 size=257
+[RESPONDER][ENTRY] sn=4 nreq=257
 [RESPONDER][SEND] sn=4 client=0 req=880 msg=ClientResponse{orderSn=4,clientSn=880}
 [MESSENGER][OK] client=0 deliver clientSn=880 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=896 msg=ClientResponse{orderSn=4,clientSn=896}
@@ -2599,9 +2558,7 @@ DELIVER sn=4 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=1074 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=1090 msg=ClientResponse{orderSn=4,clientSn=1090}
 [MESSENGER][OK] client=0 deliver clientSn=1090 sn=4
-19:15:50.917 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=4
 [RESPONDER][SEND] sn=4 client=0 req=1106 msg=ClientResponse{orderSn=4,clientSn=1106}
-[MPX][IN ] COMMIT sn=4 from=3
 [MESSENGER][OK] client=0 deliver clientSn=1106 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=867 msg=ClientResponse{orderSn=4,clientSn=867}
 [MESSENGER][OK] client=0 deliver clientSn=867 sn=4
@@ -2665,6 +2622,8 @@ DELIVER sn=4 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=1076 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=1092 msg=ClientResponse{orderSn=4,clientSn=1092}
 [MESSENGER][OK] client=0 deliver clientSn=1092 sn=4
+[MPX][IN ] COMMIT sn=4 from=0
+[MPX][IN ] COMMIT sn=4 from=0
 [RESPONDER][SEND] sn=4 client=0 req=1108 msg=ClientResponse{orderSn=4,clientSn=1108}
 [MESSENGER][OK] client=0 deliver clientSn=1108 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=869 msg=ClientResponse{orderSn=4,clientSn=869}
@@ -2702,6 +2661,7 @@ DELIVER sn=4 delivered=256
 [RESPONDER][SEND] sn=4 client=0 req=870 msg=ClientResponse{orderSn=4,clientSn=870}
 [MESSENGER][OK] client=0 deliver clientSn=870 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=886 msg=ClientResponse{orderSn=4,clientSn=886}
+[MPX][IN ] COMMIT sn=4 from=1
 [MESSENGER][OK] client=0 deliver clientSn=886 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=902 msg=ClientResponse{orderSn=4,clientSn=902}
 [MESSENGER][OK] client=0 deliver clientSn=902 sn=4
@@ -2830,6 +2790,7 @@ DELIVER sn=4 delivered=256
 [RESPONDER][SEND] sn=4 client=0 req=874 msg=ClientResponse{orderSn=4,clientSn=874}
 [MESSENGER][OK] client=0 deliver clientSn=874 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=890 msg=ClientResponse{orderSn=4,clientSn=890}
+[MPX][IN ] COMMIT sn=4 from=1
 [MESSENGER][OK] client=0 deliver clientSn=890 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=906 msg=ClientResponse{orderSn=4,clientSn=906}
 [MESSENGER][OK] client=0 deliver clientSn=906 sn=4
@@ -3019,29 +2980,30 @@ DELIVER sn=4 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=1103 sn=4
 [RESPONDER][SEND] sn=4 client=0 req=1119 msg=ClientResponse{orderSn=4,clientSn=1119}
 [MESSENGER][OK] client=0 deliver clientSn=1119 sn=4
-[RESPONDER][ENTRY][DONE] sn=4 sent=256/256
-19:15:52.895 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
+[RESPONDER][SEND] sn=4 client=0 req=1122 msg=ClientResponse{orderSn=4,clientSn=1122}
+[MESSENGER][OK] client=0 deliver clientSn=1122 sn=4
+[RESPONDER][ENTRY][DONE] sn=4 sent=257/257
+[MPX][IN ] COMMIT sn=4 from=3
+[MPX][IN ] COMMIT sn=4 from=3
 [MPX][IN ] ACCEPT sn=5 from=0
-[MPX][QUORUM] ACCEPT sn=5 acceptCount=1 quorum=3 digest=0511f2d498f523c5
+[MPX][QUORUM] ACCEPT sn=5 acceptCount=1 quorum=3 digest=611ccdfdb5ea077f
 [MPX][NET] SEND Accepted sn=5
-19:15:52.896 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
 [MPX][IN ] ACCEPTED sn=5 from=1
-[MPX][QUORUM] ACCEPTED sn=5 count=2/3 digest=0511f2d498f523c5
-19:15:52.896 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
+[MPX][QUORUM] ACCEPTED sn=5 count=2/3 digest=611ccdfdb5ea077f
 [MPX][IN ] ACCEPTED sn=5 from=3
-[MPX][QUORUM] ACCEPTED sn=5 count=3/3 digest=0511f2d498f523c5
-[MPX][QUORUM] MAJORITY REACHED sn=5 → COMMIT digest=0511f2d498f523c5
-[MPX][NET] SEND Commit sn=5 digest=0511f2d498f523c5
-[MPX][NET] GOSSIP Commit sn=5 digest=0511f2d498f523c5
+[MPX][QUORUM] ACCEPTED sn=5 count=3/3 digest=611ccdfdb5ea077f
+[MPX][QUORUM] MAJORITY REACHED sn=5 → COMMIT digest=611ccdfdb5ea077f
+[MPX][NET] SEND Commit sn=5 digest=611ccdfdb5ea077f
+[MPX][NET] GOSSIP Commit sn=5 digest=611ccdfdb5ea077f
 [MPX][CHK] ANNOUNCE sn=5 reqs=257
-19:15:52.911 INF Committed entry. latency=0 nReq=257 sn=5
-19:15:52.911 INF Delivered batch. nReq=257 sn=5
+21:15:19.708 INF Committed entry. latency=0 nReq=257 sn=5
+21:15:19.708 INF Delivered batch. nReq=257 sn=5
 SB-DELIVER sn=5 size=257
 COMMIT sn=5 size=257
 DELIVER sn=5 delivered=257
+[MPX] COMMIT  sn=5 size=257
 [RESPONDER][ENTRY] sn=5 nreq=257
 [RESPONDER][SEND] sn=5 client=0 req=1136 msg=ClientResponse{orderSn=5,clientSn=1136}
-[MPX] COMMIT  sn=5 size=257
 [MESSENGER][OK] client=0 deliver clientSn=1136 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1152 msg=ClientResponse{orderSn=5,clientSn=1152}
 [MESSENGER][OK] client=0 deliver clientSn=1152 sn=5
@@ -3105,8 +3067,6 @@ DELIVER sn=5 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=1361 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1377 msg=ClientResponse{orderSn=5,clientSn=1377}
 [MESSENGER][OK] client=0 deliver clientSn=1377 sn=5
-[RESPONDER][SEND] sn=5 client=0 req=1122 msg=ClientResponse{orderSn=5,clientSn=1122}
-[MESSENGER][OK] client=0 deliver clientSn=1122 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1138 msg=ClientResponse{orderSn=5,clientSn=1138}
 [MESSENGER][OK] client=0 deliver clientSn=1138 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1154 msg=ClientResponse{orderSn=5,clientSn=1154}
@@ -3137,6 +3097,8 @@ DELIVER sn=5 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=1346 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1362 msg=ClientResponse{orderSn=5,clientSn=1362}
 [MESSENGER][OK] client=0 deliver clientSn=1362 sn=5
+[RESPONDER][SEND] sn=5 client=0 req=1378 msg=ClientResponse{orderSn=5,clientSn=1378}
+[MESSENGER][OK] client=0 deliver clientSn=1378 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1123 msg=ClientResponse{orderSn=5,clientSn=1123}
 [MESSENGER][OK] client=0 deliver clientSn=1123 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1139 msg=ClientResponse{orderSn=5,clientSn=1139}
@@ -3227,12 +3189,8 @@ DELIVER sn=5 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=1301 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1317 msg=ClientResponse{orderSn=5,clientSn=1317}
 [MESSENGER][OK] client=0 deliver clientSn=1317 sn=5
-19:15:52.922 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1333 msg=ClientResponse{orderSn=5,clientSn=1333}
-19:15:52.922 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
-[MPX][IN ] COMMIT sn=5 from=3
 [MESSENGER][OK] client=0 deliver clientSn=1333 sn=5
-[MPX][IN ] COMMIT sn=5 from=3
 [RESPONDER][SEND] sn=5 client=0 req=1349 msg=ClientResponse{orderSn=5,clientSn=1349}
 [MESSENGER][OK] client=0 deliver clientSn=1349 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1365 msg=ClientResponse{orderSn=5,clientSn=1365}
@@ -3341,6 +3299,8 @@ DELIVER sn=5 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=1161 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1177 msg=ClientResponse{orderSn=5,clientSn=1177}
 [MESSENGER][OK] client=0 deliver clientSn=1177 sn=5
+[MPX][IN ] COMMIT sn=5 from=1
+[MPX][IN ] COMMIT sn=5 from=1
 [RESPONDER][SEND] sn=5 client=0 req=1193 msg=ClientResponse{orderSn=5,clientSn=1193}
 [MESSENGER][OK] client=0 deliver clientSn=1193 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1209 msg=ClientResponse{orderSn=5,clientSn=1209}
@@ -3348,17 +3308,13 @@ DELIVER sn=5 delivered=257
 [RESPONDER][SEND] sn=5 client=0 req=1225 msg=ClientResponse{orderSn=5,clientSn=1225}
 [MESSENGER][OK] client=0 deliver clientSn=1225 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1241 msg=ClientResponse{orderSn=5,clientSn=1241}
-19:15:52.925 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
 [MESSENGER][OK] client=0 deliver clientSn=1241 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1257 msg=ClientResponse{orderSn=5,clientSn=1257}
 [MESSENGER][OK] client=0 deliver clientSn=1257 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1273 msg=ClientResponse{orderSn=5,clientSn=1273}
 [MESSENGER][OK] client=0 deliver clientSn=1273 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1289 msg=ClientResponse{orderSn=5,clientSn=1289}
-19:15:52.926 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
 [MESSENGER][OK] client=0 deliver clientSn=1289 sn=5
-[MPX][IN ] COMMIT sn=5 from=0
-[MPX][IN ] COMMIT sn=5 from=0
 [RESPONDER][SEND] sn=5 client=0 req=1305 msg=ClientResponse{orderSn=5,clientSn=1305}
 [MESSENGER][OK] client=0 deliver clientSn=1305 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1321 msg=ClientResponse{orderSn=5,clientSn=1321}
@@ -3402,6 +3358,8 @@ DELIVER sn=5 delivered=257
 [RESPONDER][SEND] sn=5 client=0 req=1370 msg=ClientResponse{orderSn=5,clientSn=1370}
 [MESSENGER][OK] client=0 deliver clientSn=1370 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1131 msg=ClientResponse{orderSn=5,clientSn=1131}
+[MPX][IN ] COMMIT sn=5 from=0
+[MPX][IN ] COMMIT sn=5 from=0
 [MESSENGER][OK] client=0 deliver clientSn=1131 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1147 msg=ClientResponse{orderSn=5,clientSn=1147}
 [MESSENGER][OK] client=0 deliver clientSn=1147 sn=5
@@ -3414,6 +3372,8 @@ DELIVER sn=5 delivered=257
 [RESPONDER][SEND] sn=5 client=0 req=1211 msg=ClientResponse{orderSn=5,clientSn=1211}
 [MESSENGER][OK] client=0 deliver clientSn=1211 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1227 msg=ClientResponse{orderSn=5,clientSn=1227}
+[MPX][IN ] COMMIT sn=5 from=3
+[MPX][IN ] COMMIT sn=5 from=3
 [MESSENGER][OK] client=0 deliver clientSn=1227 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1243 msg=ClientResponse{orderSn=5,clientSn=1243}
 [MESSENGER][OK] client=0 deliver clientSn=1243 sn=5
@@ -3561,35 +3521,30 @@ DELIVER sn=5 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=1359 sn=5
 [RESPONDER][SEND] sn=5 client=0 req=1375 msg=ClientResponse{orderSn=5,clientSn=1375}
 [MESSENGER][OK] client=0 deliver clientSn=1375 sn=5
-[RESPONDER][SEND] sn=5 client=0 req=1378 msg=ClientResponse{orderSn=5,clientSn=1378}
-[MESSENGER][OK] client=0 deliver clientSn=1378 sn=5
+[RESPONDER][SEND] sn=5 client=0 req=1379 msg=ClientResponse{orderSn=5,clientSn=1379}
+[MESSENGER][OK] client=0 deliver clientSn=1379 sn=5
 [RESPONDER][ENTRY][DONE] sn=5 sent=257/257
-19:15:52.932 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
-[MPX][IN ] COMMIT sn=5 from=1
-19:15:52.932 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=5
-[MPX][IN ] COMMIT sn=5 from=1
-19:15:54.900 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
 [MPX][IN ] ACCEPT sn=6 from=0
-[MPX][QUORUM] ACCEPT sn=6 acceptCount=1 quorum=3 digest=3311d279afd5e45f
+[MPX][QUORUM] ACCEPT sn=6 acceptCount=1 quorum=3 digest=5b7831f3a7b26442
 [MPX][NET] SEND Accepted sn=6
-19:15:54.900 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
 [MPX][IN ] ACCEPTED sn=6 from=3
-[MPX][QUORUM] ACCEPTED sn=6 count=2/3 digest=3311d279afd5e45f
-19:15:54.901 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
+[MPX][QUORUM] ACCEPTED sn=6 count=2/3 digest=5b7831f3a7b26442
 [MPX][IN ] ACCEPTED sn=6 from=1
-[MPX][QUORUM] ACCEPTED sn=6 count=3/3 digest=3311d279afd5e45f
-[MPX][QUORUM] MAJORITY REACHED sn=6 → COMMIT digest=3311d279afd5e45f
-[MPX][NET] SEND Commit sn=6 digest=3311d279afd5e45f
-[MPX][NET] GOSSIP Commit sn=6 digest=3311d279afd5e45f
+[MPX][QUORUM] ACCEPTED sn=6 count=3/3 digest=5b7831f3a7b26442
+[MPX][QUORUM] MAJORITY REACHED sn=6 → COMMIT digest=5b7831f3a7b26442
+[MPX][NET] SEND Commit sn=6 digest=5b7831f3a7b26442
+[MPX][NET] GOSSIP Commit sn=6 digest=5b7831f3a7b26442
 [MPX][CHK] ANNOUNCE sn=6 reqs=256
-19:15:54.907 INF Committed entry. latency=0 nReq=256 sn=6
-19:15:54.907 INF Delivered batch. nReq=256 sn=6
+21:15:21.717 INF Committed entry. latency=0 nReq=256 sn=6
+21:15:21.717 INF Delivered batch. nReq=256 sn=6
 SB-DELIVER sn=6 size=256
 COMMIT sn=6 size=256
-DELIVER sn=6 delivered=256
-[MPX] COMMIT  sn=6 size=256
 [RESPONDER][ENTRY] sn=6 nreq=256
+DELIVER sn=6 delivered=256
 [RESPONDER][SEND] sn=6 client=0 req=1392 msg=ClientResponse{orderSn=6,clientSn=1392}
+[MPX] COMMIT  sn=6 size=256
+[MPX][IN ] COMMIT sn=6 from=0
+[MPX][IN ] COMMIT sn=6 from=0
 [MESSENGER][OK] client=0 deliver clientSn=1392 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1408 msg=ClientResponse{orderSn=6,clientSn=1408}
 [MESSENGER][OK] client=0 deliver clientSn=1408 sn=6
@@ -3685,8 +3640,6 @@ DELIVER sn=6 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=1618 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1634 msg=ClientResponse{orderSn=6,clientSn=1634}
 [MESSENGER][OK] client=0 deliver clientSn=1634 sn=6
-[RESPONDER][SEND] sn=6 client=0 req=1379 msg=ClientResponse{orderSn=6,clientSn=1379}
-[MESSENGER][OK] client=0 deliver clientSn=1379 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1395 msg=ClientResponse{orderSn=6,clientSn=1395}
 [MESSENGER][OK] client=0 deliver clientSn=1395 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1411 msg=ClientResponse{orderSn=6,clientSn=1411}
@@ -3717,6 +3670,8 @@ DELIVER sn=6 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=1603 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1619 msg=ClientResponse{orderSn=6,clientSn=1619}
 [MESSENGER][OK] client=0 deliver clientSn=1619 sn=6
+[RESPONDER][SEND] sn=6 client=0 req=1635 msg=ClientResponse{orderSn=6,clientSn=1635}
+[MESSENGER][OK] client=0 deliver clientSn=1635 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1380 msg=ClientResponse{orderSn=6,clientSn=1380}
 [MESSENGER][OK] client=0 deliver clientSn=1380 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1396 msg=ClientResponse{orderSn=6,clientSn=1396}
@@ -3752,6 +3707,7 @@ DELIVER sn=6 delivered=256
 [RESPONDER][SEND] sn=6 client=0 req=1381 msg=ClientResponse{orderSn=6,clientSn=1381}
 [MESSENGER][OK] client=0 deliver clientSn=1381 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1397 msg=ClientResponse{orderSn=6,clientSn=1397}
+[MPX][IN ] COMMIT sn=6 from=1
 [MESSENGER][OK] client=0 deliver clientSn=1397 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1413 msg=ClientResponse{orderSn=6,clientSn=1413}
 [MESSENGER][OK] client=0 deliver clientSn=1413 sn=6
@@ -3765,7 +3721,9 @@ DELIVER sn=6 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=1477 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1493 msg=ClientResponse{orderSn=6,clientSn=1493}
 [MESSENGER][OK] client=0 deliver clientSn=1493 sn=6
+[MPX][IN ] COMMIT sn=6 from=3
 [RESPONDER][SEND] sn=6 client=0 req=1509 msg=ClientResponse{orderSn=6,clientSn=1509}
+[MPX][IN ] COMMIT sn=6 from=3
 [MESSENGER][OK] client=0 deliver clientSn=1509 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1525 msg=ClientResponse{orderSn=6,clientSn=1525}
 [MESSENGER][OK] client=0 deliver clientSn=1525 sn=6
@@ -3985,11 +3943,7 @@ DELIVER sn=6 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=1452 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1468 msg=ClientResponse{orderSn=6,clientSn=1468}
 [MESSENGER][OK] client=0 deliver clientSn=1468 sn=6
-19:15:54.925 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1484 msg=ClientResponse{orderSn=6,clientSn=1484}
-[MPX][IN ] COMMIT sn=6 from=0
-19:15:54.926 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
-[MPX][IN ] COMMIT sn=6 from=0
 [MESSENGER][OK] client=0 deliver clientSn=1484 sn=6
 [RESPONDER][SEND] sn=6 client=0 req=1500 msg=ClientResponse{orderSn=6,clientSn=1500}
 [MESSENGER][OK] client=0 deliver clientSn=1500 sn=6
@@ -4106,36 +4060,27 @@ DELIVER sn=6 delivered=256
 [RESPONDER][SEND] sn=6 client=0 req=1631 msg=ClientResponse{orderSn=6,clientSn=1631}
 [MESSENGER][OK] client=0 deliver clientSn=1631 sn=6
 [RESPONDER][ENTRY][DONE] sn=6 sent=256/256
-19:15:54.931 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
-19:15:54.931 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
-[MPX][IN ] COMMIT sn=6 from=1
-[MPX][IN ] COMMIT sn=6 from=1
-19:15:54.933 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
-[MPX][IN ] COMMIT sn=6 from=3
-19:15:54.933 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=6
-[MPX][IN ] COMMIT sn=6 from=3
-19:15:56.905 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
 [MPX][IN ] ACCEPT sn=7 from=0
-[MPX][QUORUM] ACCEPT sn=7 acceptCount=1 quorum=3 digest=539f3852282cf9c5
+[MPX][QUORUM] ACCEPT sn=7 acceptCount=1 quorum=3 digest=30be27cb5ddf6c28
 [MPX][NET] SEND Accepted sn=7
-19:15:56.907 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
-[MPX][IN ] ACCEPTED sn=7 from=1
-[MPX][QUORUM] ACCEPTED sn=7 count=2/3 digest=539f3852282cf9c5
-19:15:56.907 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
 [MPX][IN ] ACCEPTED sn=7 from=3
-[MPX][QUORUM] ACCEPTED sn=7 count=3/3 digest=539f3852282cf9c5
-[MPX][QUORUM] MAJORITY REACHED sn=7 → COMMIT digest=539f3852282cf9c5
-[MPX][NET] SEND Commit sn=7 digest=539f3852282cf9c5
-[MPX][NET] GOSSIP Commit sn=7 digest=539f3852282cf9c5
+[MPX][QUORUM] ACCEPTED sn=7 count=2/3 digest=30be27cb5ddf6c28
+[MPX][IN ] COMMIT sn=7 from=0
+[MPX][NET] GOSSIP Commit sn=7 digest=30be27cb5ddf6c28
 [MPX][CHK] ANNOUNCE sn=7 reqs=257
-19:15:56.912 INF Committed entry. latency=0 nReq=257 sn=7
-19:15:56.912 INF Delivered batch. nReq=257 sn=7
+21:15:23.735 INF Committed entry. latency=0 nReq=257 sn=7
+21:15:23.735 INF Delivered batch. nReq=257 sn=7
 SB-DELIVER sn=7 size=257
 COMMIT sn=7 size=257
 DELIVER sn=7 delivered=257
 [MPX] COMMIT  sn=7 size=257
+[MPX][IN ] COMMIT sn=7 from=0
+[MPX][IN ] ACCEPTED sn=7 from=1
 [RESPONDER][ENTRY] sn=7 nreq=257
 [RESPONDER][SEND] sn=7 client=0 req=1648 msg=ClientResponse{orderSn=7,clientSn=1648}
+[MPX][QUORUM] ACCEPTED sn=7 count=3/3 digest=30be27cb5ddf6c28
+[MPX][IN ] COMMIT sn=7 from=1
+[MPX][IN ] COMMIT sn=7 from=1
 [MESSENGER][OK] client=0 deliver clientSn=1648 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1664 msg=ClientResponse{orderSn=7,clientSn=1664}
 [MESSENGER][OK] client=0 deliver clientSn=1664 sn=7
@@ -4222,6 +4167,7 @@ DELIVER sn=7 delivered=257
 [RESPONDER][SEND] sn=7 client=0 req=1810 msg=ClientResponse{orderSn=7,clientSn=1810}
 [MESSENGER][OK] client=0 deliver clientSn=1810 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1826 msg=ClientResponse{orderSn=7,clientSn=1826}
+[MPX][IN ] COMMIT sn=7 from=3
 [MESSENGER][OK] client=0 deliver clientSn=1826 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1842 msg=ClientResponse{orderSn=7,clientSn=1842}
 [MESSENGER][OK] client=0 deliver clientSn=1842 sn=7
@@ -4231,8 +4177,6 @@ DELIVER sn=7 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=1874 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1890 msg=ClientResponse{orderSn=7,clientSn=1890}
 [MESSENGER][OK] client=0 deliver clientSn=1890 sn=7
-[RESPONDER][SEND] sn=7 client=0 req=1635 msg=ClientResponse{orderSn=7,clientSn=1635}
-[MESSENGER][OK] client=0 deliver clientSn=1635 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1651 msg=ClientResponse{orderSn=7,clientSn=1651}
 [MESSENGER][OK] client=0 deliver clientSn=1651 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1667 msg=ClientResponse{orderSn=7,clientSn=1667}
@@ -4263,6 +4207,8 @@ DELIVER sn=7 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=1859 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1875 msg=ClientResponse{orderSn=7,clientSn=1875}
 [MESSENGER][OK] client=0 deliver clientSn=1875 sn=7
+[RESPONDER][SEND] sn=7 client=0 req=1891 msg=ClientResponse{orderSn=7,clientSn=1891}
+[MESSENGER][OK] client=0 deliver clientSn=1891 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1636 msg=ClientResponse{orderSn=7,clientSn=1636}
 [MESSENGER][OK] client=0 deliver clientSn=1636 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1652 msg=ClientResponse{orderSn=7,clientSn=1652}
@@ -4647,42 +4593,27 @@ DELIVER sn=7 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=1871 sn=7
 [RESPONDER][SEND] sn=7 client=0 req=1887 msg=ClientResponse{orderSn=7,clientSn=1887}
 [MESSENGER][OK] client=0 deliver clientSn=1887 sn=7
-[RESPONDER][SEND] sn=7 client=0 req=1891 msg=ClientResponse{orderSn=7,clientSn=1891}
-[MESSENGER][OK] client=0 deliver clientSn=1891 sn=7
+[RESPONDER][SEND] sn=7 client=0 req=1892 msg=ClientResponse{orderSn=7,clientSn=1892}
+[MESSENGER][OK] client=0 deliver clientSn=1892 sn=7
 [RESPONDER][ENTRY][DONE] sn=7 sent=257/257
-19:15:56.932 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
-19:15:56.932 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
-[MPX][IN ] COMMIT sn=7 from=1
-[MPX][IN ] COMMIT sn=7 from=1
-19:15:56.935 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
-[MPX][IN ] COMMIT sn=7 from=0
-19:15:56.935 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
-[MPX][IN ] COMMIT sn=7 from=0
-19:15:56.945 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
-19:15:56.945 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=7
-[MPX][IN ] COMMIT sn=7 from=3
-[MPX][IN ] COMMIT sn=7 from=3
-19:15:58.911 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
 [MPX][IN ] ACCEPT sn=8 from=0
-[MPX][QUORUM] ACCEPT sn=8 acceptCount=1 quorum=3 digest=c2615995acfd6e0e
+[MPX][QUORUM] ACCEPT sn=8 acceptCount=1 quorum=3 digest=bbab5310466460ce
 [MPX][NET] SEND Accepted sn=8
-19:15:58.912 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
-19:15:58.912 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
 [MPX][IN ] ACCEPTED sn=8 from=3
-[MPX][QUORUM] ACCEPTED sn=8 count=2/3 digest=c2615995acfd6e0e
+[MPX][QUORUM] ACCEPTED sn=8 count=2/3 digest=bbab5310466460ce
 [MPX][IN ] ACCEPTED sn=8 from=1
-[MPX][QUORUM] ACCEPTED sn=8 count=3/3 digest=c2615995acfd6e0e
-[MPX][QUORUM] MAJORITY REACHED sn=8 → COMMIT digest=c2615995acfd6e0e
-[MPX][NET] SEND Commit sn=8 digest=c2615995acfd6e0e
-[MPX][NET] GOSSIP Commit sn=8 digest=c2615995acfd6e0e
-[MPX][CHK] ANNOUNCE sn=8 reqs=257
-19:15:58.922 INF Committed entry. latency=0 nReq=257 sn=8
-19:15:58.922 INF Delivered batch. nReq=257 sn=8
-SB-DELIVER sn=8 size=257
-COMMIT sn=8 size=257
-DELIVER sn=8 delivered=257
-[MPX] COMMIT  sn=8 size=257
-[RESPONDER][ENTRY] sn=8 nreq=257
+[MPX][QUORUM] ACCEPTED sn=8 count=3/3 digest=bbab5310466460ce
+[MPX][QUORUM] MAJORITY REACHED sn=8 → COMMIT digest=bbab5310466460ce
+[MPX][NET] SEND Commit sn=8 digest=bbab5310466460ce
+[MPX][NET] GOSSIP Commit sn=8 digest=bbab5310466460ce
+[MPX][CHK] ANNOUNCE sn=8 reqs=256
+21:15:25.726 INF Committed entry. latency=0 nReq=256 sn=8
+21:15:25.726 INF Delivered batch. nReq=256 sn=8
+SB-DELIVER sn=8 size=256
+COMMIT sn=8 size=256
+DELIVER sn=8 delivered=256
+[MPX] COMMIT  sn=8 size=256
+[RESPONDER][ENTRY] sn=8 nreq=256
 [RESPONDER][SEND] sn=8 client=0 req=1904 msg=ClientResponse{orderSn=8,clientSn=1904}
 [MESSENGER][OK] client=0 deliver clientSn=1904 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=1920 msg=ClientResponse{orderSn=8,clientSn=1920}
@@ -4811,8 +4742,6 @@ DELIVER sn=8 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=2131 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2147 msg=ClientResponse{orderSn=8,clientSn=2147}
 [MESSENGER][OK] client=0 deliver clientSn=2147 sn=8
-[RESPONDER][SEND] sn=8 client=0 req=1892 msg=ClientResponse{orderSn=8,clientSn=1892}
-[MESSENGER][OK] client=0 deliver clientSn=1892 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=1908 msg=ClientResponse{orderSn=8,clientSn=1908}
 [MESSENGER][OK] client=0 deliver clientSn=1908 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=1924 msg=ClientResponse{orderSn=8,clientSn=1924}
@@ -4843,6 +4772,8 @@ DELIVER sn=8 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=2116 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2132 msg=ClientResponse{orderSn=8,clientSn=2132}
 [MESSENGER][OK] client=0 deliver clientSn=2132 sn=8
+[RESPONDER][SEND] sn=8 client=0 req=2148 msg=ClientResponse{orderSn=8,clientSn=2148}
+[MESSENGER][OK] client=0 deliver clientSn=2148 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=1893 msg=ClientResponse{orderSn=8,clientSn=1893}
 [MESSENGER][OK] client=0 deliver clientSn=1893 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=1909 msg=ClientResponse{orderSn=8,clientSn=1909}
@@ -5054,10 +4985,6 @@ DELIVER sn=8 delivered=257
 [RESPONDER][SEND] sn=8 client=0 req=2027 msg=ClientResponse{orderSn=8,clientSn=2027}
 [MESSENGER][OK] client=0 deliver clientSn=2027 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2043 msg=ClientResponse{orderSn=8,clientSn=2043}
-19:15:58.935 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
-19:15:58.935 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
-[MPX][IN ] COMMIT sn=8 from=3
-[MPX][IN ] COMMIT sn=8 from=3
 [MESSENGER][OK] client=0 deliver clientSn=2043 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2059 msg=ClientResponse{orderSn=8,clientSn=2059}
 [MESSENGER][OK] client=0 deliver clientSn=2059 sn=8
@@ -5069,7 +4996,9 @@ DELIVER sn=8 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=2107 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2123 msg=ClientResponse{orderSn=8,clientSn=2123}
 [MESSENGER][OK] client=0 deliver clientSn=2123 sn=8
+[MPX][IN ] COMMIT sn=8 from=3
 [RESPONDER][SEND] sn=8 client=0 req=2139 msg=ClientResponse{orderSn=8,clientSn=2139}
+[MPX][IN ] COMMIT sn=8 from=3
 [MESSENGER][OK] client=0 deliver clientSn=2139 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=1900 msg=ClientResponse{orderSn=8,clientSn=1900}
 [MESSENGER][OK] client=0 deliver clientSn=1900 sn=8
@@ -5192,40 +5121,31 @@ DELIVER sn=8 delivered=257
 [RESPONDER][SEND] sn=8 client=0 req=2079 msg=ClientResponse{orderSn=8,clientSn=2079}
 [MESSENGER][OK] client=0 deliver clientSn=2079 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2095 msg=ClientResponse{orderSn=8,clientSn=2095}
-19:15:58.940 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
 [MESSENGER][OK] client=0 deliver clientSn=2095 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2111 msg=ClientResponse{orderSn=8,clientSn=2111}
 [MESSENGER][OK] client=0 deliver clientSn=2111 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2127 msg=ClientResponse{orderSn=8,clientSn=2127}
 [MESSENGER][OK] client=0 deliver clientSn=2127 sn=8
 [RESPONDER][SEND] sn=8 client=0 req=2143 msg=ClientResponse{orderSn=8,clientSn=2143}
-19:15:58.941 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
 [MESSENGER][OK] client=0 deliver clientSn=2143 sn=8
-[RESPONDER][SEND] sn=8 client=0 req=2148 msg=ClientResponse{orderSn=8,clientSn=2148}
-[MPX][IN ] COMMIT sn=8 from=0
-[MESSENGER][OK] client=0 deliver clientSn=2148 sn=8
-[MPX][IN ] COMMIT sn=8 from=0
-[RESPONDER][ENTRY][DONE] sn=8 sent=257/257
-19:15:58.944 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
+[RESPONDER][ENTRY][DONE] sn=8 sent=256/256
 [MPX][IN ] COMMIT sn=8 from=1
-19:15:58.944 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=8
 [MPX][IN ] COMMIT sn=8 from=1
-19:16:00.915 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
+[MPX][IN ] COMMIT sn=8 from=0
+[MPX][IN ] COMMIT sn=8 from=0
 [MPX][IN ] ACCEPT sn=9 from=0
-[MPX][QUORUM] ACCEPT sn=9 acceptCount=1 quorum=3 digest=732e0b20ecf9f17d
+[MPX][QUORUM] ACCEPT sn=9 acceptCount=1 quorum=3 digest=4d521393261a4e78
 [MPX][NET] SEND Accepted sn=9
-19:16:00.916 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
-[MPX][IN ] ACCEPTED sn=9 from=3
-[MPX][QUORUM] ACCEPTED sn=9 count=2/3 digest=732e0b20ecf9f17d
-19:16:00.917 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
 [MPX][IN ] ACCEPTED sn=9 from=1
-[MPX][QUORUM] ACCEPTED sn=9 count=3/3 digest=732e0b20ecf9f17d
-[MPX][QUORUM] MAJORITY REACHED sn=9 → COMMIT digest=732e0b20ecf9f17d
-[MPX][NET] SEND Commit sn=9 digest=732e0b20ecf9f17d
-[MPX][NET] GOSSIP Commit sn=9 digest=732e0b20ecf9f17d
+[MPX][QUORUM] ACCEPTED sn=9 count=2/3 digest=4d521393261a4e78
+[MPX][IN ] ACCEPTED sn=9 from=3
+[MPX][QUORUM] ACCEPTED sn=9 count=3/3 digest=4d521393261a4e78
+[MPX][QUORUM] MAJORITY REACHED sn=9 → COMMIT digest=4d521393261a4e78
+[MPX][NET] SEND Commit sn=9 digest=4d521393261a4e78
+[MPX][NET] GOSSIP Commit sn=9 digest=4d521393261a4e78
 [MPX][CHK] ANNOUNCE sn=9 reqs=257
-19:16:00.923 INF Committed entry. latency=0 nReq=257 sn=9
-19:16:00.924 INF Delivered batch. nReq=257 sn=9
+21:15:27.725 INF Committed entry. latency=0 nReq=257 sn=9
+21:15:27.726 INF Delivered batch. nReq=257 sn=9
 SB-DELIVER sn=9 size=257
 COMMIT sn=9 size=257
 DELIVER sn=9 delivered=257
@@ -5658,22 +5578,14 @@ DELIVER sn=9 delivered=257
 [RESPONDER][SEND] sn=9 client=0 req=2221 msg=ClientResponse{orderSn=9,clientSn=2221}
 [MESSENGER][OK] client=0 deliver clientSn=2221 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=2237 msg=ClientResponse{orderSn=9,clientSn=2237}
-19:16:00.944 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
 [MESSENGER][OK] client=0 deliver clientSn=2237 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=2253 msg=ClientResponse{orderSn=9,clientSn=2253}
 [MESSENGER][OK] client=0 deliver clientSn=2253 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=2269 msg=ClientResponse{orderSn=9,clientSn=2269}
-19:16:00.945 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
-19:16:00.938 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
-[MPX][IN ] COMMIT sn=9 from=1
-[MPX][IN ] COMMIT sn=9 from=1
-[MPX][IN ] COMMIT sn=9 from=0
 [MESSENGER][OK] client=0 deliver clientSn=2269 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=2285 msg=ClientResponse{orderSn=9,clientSn=2285}
 [MESSENGER][OK] client=0 deliver clientSn=2285 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=2301 msg=ClientResponse{orderSn=9,clientSn=2301}
-19:16:00.945 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
-[MPX][IN ] COMMIT sn=9 from=0
 [MESSENGER][OK] client=0 deliver clientSn=2301 sn=9
 [RESPONDER][SEND] sn=9 client=0 req=2317 msg=ClientResponse{orderSn=9,clientSn=2317}
 [MESSENGER][OK] client=0 deliver clientSn=2317 sn=9
@@ -5754,26 +5666,25 @@ DELIVER sn=9 delivered=257
 [RESPONDER][SEND] sn=9 client=0 req=2405 msg=ClientResponse{orderSn=9,clientSn=2405}
 [MESSENGER][OK] client=0 deliver clientSn=2405 sn=9
 [RESPONDER][ENTRY][DONE] sn=9 sent=257/257
-19:16:00.951 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
-19:16:00.951 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=9
 [MPX][IN ] COMMIT sn=9 from=3
+[MPX][IN ] COMMIT sn=9 from=0
+[MPX][IN ] COMMIT sn=9 from=0
 [MPX][IN ] COMMIT sn=9 from=3
-19:16:02.921 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
+[MPX][IN ] COMMIT sn=9 from=1
+[MPX][IN ] COMMIT sn=9 from=1
 [MPX][IN ] ACCEPT sn=10 from=0
-19:16:02.921 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
-[MPX][QUORUM] ACCEPT sn=10 acceptCount=1 quorum=3 digest=e64b4ce6bfc885f7
+[MPX][QUORUM] ACCEPT sn=10 acceptCount=1 quorum=3 digest=e53419df848c8e63
 [MPX][NET] SEND Accepted sn=10
 [MPX][IN ] ACCEPTED sn=10 from=1
-[MPX][QUORUM] ACCEPTED sn=10 count=2/3 digest=e64b4ce6bfc885f7
-19:16:02.921 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
+[MPX][QUORUM] ACCEPTED sn=10 count=2/3 digest=e53419df848c8e63
 [MPX][IN ] ACCEPTED sn=10 from=3
-[MPX][QUORUM] ACCEPTED sn=10 count=3/3 digest=e64b4ce6bfc885f7
-[MPX][QUORUM] MAJORITY REACHED sn=10 → COMMIT digest=e64b4ce6bfc885f7
-[MPX][NET] SEND Commit sn=10 digest=e64b4ce6bfc885f7
-[MPX][NET] GOSSIP Commit sn=10 digest=e64b4ce6bfc885f7
+[MPX][QUORUM] ACCEPTED sn=10 count=3/3 digest=e53419df848c8e63
+[MPX][QUORUM] MAJORITY REACHED sn=10 → COMMIT digest=e53419df848c8e63
+[MPX][NET] SEND Commit sn=10 digest=e53419df848c8e63
+[MPX][NET] GOSSIP Commit sn=10 digest=e53419df848c8e63
 [MPX][CHK] ANNOUNCE sn=10 reqs=256
-19:16:02.924 INF Committed entry. latency=0 nReq=256 sn=10
-19:16:02.925 INF Delivered batch. nReq=256 sn=10
+21:15:29.731 INF Committed entry. latency=0 nReq=256 sn=10
+21:15:29.731 INF Delivered batch. nReq=256 sn=10
 SB-DELIVER sn=10 size=256
 COMMIT sn=10 size=256
 DELIVER sn=10 delivered=256
@@ -5990,6 +5901,8 @@ DELIVER sn=10 delivered=256
 [RESPONDER][SEND] sn=10 client=0 req=2534 msg=ClientResponse{orderSn=10,clientSn=2534}
 [MESSENGER][OK] client=0 deliver clientSn=2534 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=2550 msg=ClientResponse{orderSn=10,clientSn=2550}
+[MPX][IN ] COMMIT sn=10 from=0
+[MPX][IN ] COMMIT sn=10 from=0
 [MESSENGER][OK] client=0 deliver clientSn=2550 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=2566 msg=ClientResponse{orderSn=10,clientSn=2566}
 [MESSENGER][OK] client=0 deliver clientSn=2566 sn=10
@@ -6261,9 +6174,7 @@ DELIVER sn=10 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=2654 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=2415 msg=ClientResponse{orderSn=10,clientSn=2415}
 [MESSENGER][OK] client=0 deliver clientSn=2415 sn=10
-19:16:02.941 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
 [RESPONDER][SEND] sn=10 client=0 req=2431 msg=ClientResponse{orderSn=10,clientSn=2431}
-19:16:02.941 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
 [MESSENGER][OK] client=0 deliver clientSn=2431 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=2447 msg=ClientResponse{orderSn=10,clientSn=2447}
 [MESSENGER][OK] client=0 deliver clientSn=2447 sn=10
@@ -6273,8 +6184,6 @@ DELIVER sn=10 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=2479 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=2495 msg=ClientResponse{orderSn=10,clientSn=2495}
 [MESSENGER][OK] client=0 deliver clientSn=2495 sn=10
-[MPX][IN ] COMMIT sn=10 from=0
-[MPX][IN ] COMMIT sn=10 from=0
 [RESPONDER][SEND] sn=10 client=0 req=2511 msg=ClientResponse{orderSn=10,clientSn=2511}
 [MESSENGER][OK] client=0 deliver clientSn=2511 sn=10
 [RESPONDER][SEND] sn=10 client=0 req=2527 msg=ClientResponse{orderSn=10,clientSn=2527}
@@ -6296,30 +6205,23 @@ DELIVER sn=10 delivered=256
 [RESPONDER][SEND] sn=10 client=0 req=2655 msg=ClientResponse{orderSn=10,clientSn=2655}
 [MESSENGER][OK] client=0 deliver clientSn=2655 sn=10
 [RESPONDER][ENTRY][DONE] sn=10 sent=256/256
-19:16:02.946 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
-19:16:02.946 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
-19:16:02.946 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
-19:16:02.946 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=10
-[MPX][IN ] COMMIT sn=10 from=3
+[MPX][IN ] COMMIT sn=10 from=1
 [MPX][IN ] COMMIT sn=10 from=1
 [MPX][IN ] COMMIT sn=10 from=3
-[MPX][IN ] COMMIT sn=10 from=1
-19:16:04.925 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
+[MPX][IN ] COMMIT sn=10 from=3
 [MPX][IN ] ACCEPT sn=11 from=0
-[MPX][QUORUM] ACCEPT sn=11 acceptCount=1 quorum=3 digest=5dd58edba1806885
+[MPX][QUORUM] ACCEPT sn=11 acceptCount=1 quorum=3 digest=d1f337ba74d85f5d
 [MPX][NET] SEND Accepted sn=11
-19:16:04.927 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
 [MPX][IN ] ACCEPTED sn=11 from=1
-[MPX][QUORUM] ACCEPTED sn=11 count=2/3 digest=5dd58edba1806885
-19:16:04.927 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
+[MPX][QUORUM] ACCEPTED sn=11 count=2/3 digest=d1f337ba74d85f5d
 [MPX][IN ] ACCEPTED sn=11 from=3
-[MPX][QUORUM] ACCEPTED sn=11 count=3/3 digest=5dd58edba1806885
-[MPX][QUORUM] MAJORITY REACHED sn=11 → COMMIT digest=5dd58edba1806885
-[MPX][NET] SEND Commit sn=11 digest=5dd58edba1806885
-[MPX][NET] GOSSIP Commit sn=11 digest=5dd58edba1806885
+[MPX][QUORUM] ACCEPTED sn=11 count=3/3 digest=d1f337ba74d85f5d
+[MPX][QUORUM] MAJORITY REACHED sn=11 → COMMIT digest=d1f337ba74d85f5d
+[MPX][NET] SEND Commit sn=11 digest=d1f337ba74d85f5d
+[MPX][NET] GOSSIP Commit sn=11 digest=d1f337ba74d85f5d
 [MPX][CHK] ANNOUNCE sn=11 reqs=257
-19:16:04.931 INF Committed entry. latency=0 nReq=257 sn=11
-19:16:04.932 INF Delivered batch. nReq=257 sn=11
+21:15:31.736 INF Committed entry. latency=0 nReq=257 sn=11
+21:15:31.737 INF Delivered batch. nReq=257 sn=11
 SB-DELIVER sn=11 size=257
 COMMIT sn=11 size=257
 DELIVER sn=11 delivered=257
@@ -6566,6 +6468,8 @@ DELIVER sn=11 delivered=257
 [RESPONDER][SEND] sn=11 client=0 req=2775 msg=ClientResponse{orderSn=11,clientSn=2775}
 [MESSENGER][OK] client=0 deliver clientSn=2775 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2791 msg=ClientResponse{orderSn=11,clientSn=2791}
+[MPX][IN ] COMMIT sn=11 from=0
+[MPX][IN ] COMMIT sn=11 from=0
 [MESSENGER][OK] client=0 deliver clientSn=2791 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2807 msg=ClientResponse{orderSn=11,clientSn=2807}
 [MESSENGER][OK] client=0 deliver clientSn=2807 sn=11
@@ -6793,19 +6697,17 @@ DELIVER sn=11 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=2798 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2814 msg=ClientResponse{orderSn=11,clientSn=2814}
 [MESSENGER][OK] client=0 deliver clientSn=2814 sn=11
-19:16:04.952 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2830 msg=ClientResponse{orderSn=11,clientSn=2830}
 [MESSENGER][OK] client=0 deliver clientSn=2830 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2846 msg=ClientResponse{orderSn=11,clientSn=2846}
-[MPX][IN ] COMMIT sn=11 from=3
+[MPX][IN ] COMMIT sn=11 from=1
+[MPX][IN ] COMMIT sn=11 from=1
 [MESSENGER][OK] client=0 deliver clientSn=2846 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2862 msg=ClientResponse{orderSn=11,clientSn=2862}
 [MESSENGER][OK] client=0 deliver clientSn=2862 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2878 msg=ClientResponse{orderSn=11,clientSn=2878}
-19:16:04.952 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
 [MESSENGER][OK] client=0 deliver clientSn=2878 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2894 msg=ClientResponse{orderSn=11,clientSn=2894}
-[MPX][IN ] COMMIT sn=11 from=3
 [MESSENGER][OK] client=0 deliver clientSn=2894 sn=11
 [RESPONDER][SEND] sn=11 client=0 req=2910 msg=ClientResponse{orderSn=11,clientSn=2910}
 [MESSENGER][OK] client=0 deliver clientSn=2910 sn=11
@@ -6844,35 +6746,26 @@ DELIVER sn=11 delivered=257
 [RESPONDER][SEND] sn=11 client=0 req=2918 msg=ClientResponse{orderSn=11,clientSn=2918}
 [MESSENGER][OK] client=0 deliver clientSn=2918 sn=11
 [RESPONDER][ENTRY][DONE] sn=11 sent=257/257
-19:16:04.957 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
-[MPX][IN ] COMMIT sn=11 from=0
-19:16:04.957 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
-[MPX][IN ] COMMIT sn=11 from=0
-19:16:04.958 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
-[MPX][IN ] COMMIT sn=11 from=1
-19:16:04.958 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=11
-[MPX][IN ] COMMIT sn=11 from=1
-19:16:06.928 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
+[MPX][IN ] COMMIT sn=11 from=3
+[MPX][IN ] COMMIT sn=11 from=3
 [MPX][IN ] ACCEPT sn=12 from=0
-[MPX][QUORUM] ACCEPT sn=12 acceptCount=1 quorum=3 digest=507d4bfa78f85403
+[MPX][QUORUM] ACCEPT sn=12 acceptCount=1 quorum=3 digest=e8a1365c3988916b
 [MPX][NET] SEND Accepted sn=12
-19:16:06.929 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
 [MPX][IN ] ACCEPTED sn=12 from=1
-[MPX][QUORUM] ACCEPTED sn=12 count=2/3 digest=507d4bfa78f85403
-19:16:06.930 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
+[MPX][QUORUM] ACCEPTED sn=12 count=2/3 digest=e8a1365c3988916b
 [MPX][IN ] ACCEPTED sn=12 from=3
-[MPX][QUORUM] ACCEPTED sn=12 count=3/3 digest=507d4bfa78f85403
-[MPX][QUORUM] MAJORITY REACHED sn=12 → COMMIT digest=507d4bfa78f85403
-[MPX][NET] SEND Commit sn=12 digest=507d4bfa78f85403
-[MPX][NET] GOSSIP Commit sn=12 digest=507d4bfa78f85403
-[MPX][CHK] ANNOUNCE sn=12 reqs=256
-19:16:06.935 INF Committed entry. latency=0 nReq=256 sn=12
-19:16:06.935 INF Delivered batch. nReq=256 sn=12
-SB-DELIVER sn=12 size=256
-COMMIT sn=12 size=256
-DELIVER sn=12 delivered=256
-[MPX] COMMIT  sn=12 size=256
-[RESPONDER][ENTRY] sn=12 nreq=256
+[MPX][QUORUM] ACCEPTED sn=12 count=3/3 digest=e8a1365c3988916b
+[MPX][QUORUM] MAJORITY REACHED sn=12 → COMMIT digest=e8a1365c3988916b
+[MPX][NET] SEND Commit sn=12 digest=e8a1365c3988916b
+[MPX][NET] GOSSIP Commit sn=12 digest=e8a1365c3988916b
+[MPX][CHK] ANNOUNCE sn=12 reqs=257
+21:15:33.739 INF Committed entry. latency=0 nReq=257 sn=12
+21:15:33.739 INF Delivered batch. nReq=257 sn=12
+SB-DELIVER sn=12 size=257
+COMMIT sn=12 size=257
+DELIVER sn=12 delivered=257
+[MPX] COMMIT  sn=12 size=257
+[RESPONDER][ENTRY] sn=12 nreq=257
 [RESPONDER][SEND] sn=12 client=0 req=2928 msg=ClientResponse{orderSn=12,clientSn=2928}
 [MESSENGER][OK] client=0 deliver clientSn=2928 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=2944 msg=ClientResponse{orderSn=12,clientSn=2944}
@@ -7226,6 +7119,8 @@ DELIVER sn=12 delivered=256
 [RESPONDER][SEND] sn=12 client=0 req=3162 msg=ClientResponse{orderSn=12,clientSn=3162}
 [MESSENGER][OK] client=0 deliver clientSn=3162 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=2923 msg=ClientResponse{orderSn=12,clientSn=2923}
+[MPX][IN ] COMMIT sn=12 from=0
+[MPX][IN ] COMMIT sn=12 from=0
 [MESSENGER][OK] client=0 deliver clientSn=2923 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=2939 msg=ClientResponse{orderSn=12,clientSn=2939}
 [MESSENGER][OK] client=0 deliver clientSn=2939 sn=12
@@ -7272,6 +7167,8 @@ DELIVER sn=12 delivered=256
 [RESPONDER][SEND] sn=12 client=0 req=3020 msg=ClientResponse{orderSn=12,clientSn=3020}
 [MESSENGER][OK] client=0 deliver clientSn=3020 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=3036 msg=ClientResponse{orderSn=12,clientSn=3036}
+[MPX][IN ] COMMIT sn=12 from=3
+[MPX][IN ] COMMIT sn=12 from=3
 [MESSENGER][OK] client=0 deliver clientSn=3036 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=3052 msg=ClientResponse{orderSn=12,clientSn=3052}
 [MESSENGER][OK] client=0 deliver clientSn=3052 sn=12
@@ -7376,11 +7273,7 @@ DELIVER sn=12 delivered=256
 [RESPONDER][SEND] sn=12 client=0 req=3087 msg=ClientResponse{orderSn=12,clientSn=3087}
 [MESSENGER][OK] client=0 deliver clientSn=3087 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=3103 msg=ClientResponse{orderSn=12,clientSn=3103}
-19:16:06.950 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
-19:16:06.951 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
 [MESSENGER][OK] client=0 deliver clientSn=3103 sn=12
-[MPX][IN ] COMMIT sn=12 from=1
-[MPX][IN ] COMMIT sn=12 from=1
 [RESPONDER][SEND] sn=12 client=0 req=3119 msg=ClientResponse{orderSn=12,clientSn=3119}
 [MESSENGER][OK] client=0 deliver clientSn=3119 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=3135 msg=ClientResponse{orderSn=12,clientSn=3135}
@@ -7389,35 +7282,29 @@ DELIVER sn=12 delivered=256
 [MESSENGER][OK] client=0 deliver clientSn=3151 sn=12
 [RESPONDER][SEND] sn=12 client=0 req=3167 msg=ClientResponse{orderSn=12,clientSn=3167}
 [MESSENGER][OK] client=0 deliver clientSn=3167 sn=12
-[RESPONDER][ENTRY][DONE] sn=12 sent=256/256
-19:16:06.957 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
-[MPX][IN ] COMMIT sn=12 from=0
-19:16:06.958 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
-[MPX][IN ] COMMIT sn=12 from=0
-19:16:06.960 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
-[MPX][IN ] COMMIT sn=12 from=3
-19:16:06.961 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=12
-[MPX][IN ] COMMIT sn=12 from=3
-19:16:08.934 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
+[RESPONDER][SEND] sn=12 client=0 req=3175 msg=ClientResponse{orderSn=12,clientSn=3175}
+[MESSENGER][OK] client=0 deliver clientSn=3175 sn=12
+[RESPONDER][ENTRY][DONE] sn=12 sent=257/257
+[MPX][IN ] COMMIT sn=12 from=1
+[MPX][IN ] COMMIT sn=12 from=1
 [MPX][IN ] ACCEPT sn=13 from=0
-[MPX][QUORUM] ACCEPT sn=13 acceptCount=1 quorum=3 digest=c65421cbf717b196
+[MPX][QUORUM] ACCEPT sn=13 acceptCount=1 quorum=3 digest=c0981eb36db81705
 [MPX][NET] SEND Accepted sn=13
-19:16:08.935 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
-[MPX][IN ] ACCEPTED sn=13 from=3
-[MPX][QUORUM] ACCEPTED sn=13 count=2/3 digest=c65421cbf717b196
-19:16:08.935 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
 [MPX][IN ] ACCEPTED sn=13 from=1
-[MPX][QUORUM] ACCEPTED sn=13 count=3/3 digest=c65421cbf717b196
-[MPX][QUORUM] MAJORITY REACHED sn=13 → COMMIT digest=c65421cbf717b196
-[MPX][NET] SEND Commit sn=13 digest=c65421cbf717b196
-[MPX][NET] GOSSIP Commit sn=13 digest=c65421cbf717b196
-[MPX][CHK] ANNOUNCE sn=13 reqs=257
-19:16:08.940 INF Committed entry. latency=0 nReq=257 sn=13
-19:16:08.940 INF Delivered batch. nReq=257 sn=13
-SB-DELIVER sn=13 size=257
-COMMIT sn=13 size=257
-DELIVER sn=13 delivered=257
-[RESPONDER][ENTRY] sn=13 nreq=257
+[MPX][QUORUM] ACCEPTED sn=13 count=2/3 digest=c0981eb36db81705
+[MPX][IN ] ACCEPTED sn=13 from=3
+[MPX][QUORUM] ACCEPTED sn=13 count=3/3 digest=c0981eb36db81705
+[MPX][QUORUM] MAJORITY REACHED sn=13 → COMMIT digest=c0981eb36db81705
+[MPX][NET] SEND Commit sn=13 digest=c0981eb36db81705
+[MPX][NET] GOSSIP Commit sn=13 digest=c0981eb36db81705
+[MPX][CHK] ANNOUNCE sn=13 reqs=256
+21:15:35.747 INF Committed entry. latency=0 nReq=256 sn=13
+21:15:35.750 INF Delivered batch. nReq=256 sn=13
+SB-DELIVER sn=13 size=256
+COMMIT sn=13 size=256
+DELIVER sn=13 delivered=256
+[MPX] COMMIT  sn=13 size=256
+[RESPONDER][ENTRY] sn=13 nreq=256
 [RESPONDER][SEND] sn=13 client=0 req=3184 msg=ClientResponse{orderSn=13,clientSn=3184}
 [MESSENGER][OK] client=0 deliver clientSn=3184 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3200 msg=ClientResponse{orderSn=13,clientSn=3200}
@@ -7507,7 +7394,9 @@ DELIVER sn=13 delivered=257
 [RESPONDER][SEND] sn=13 client=0 req=3362 msg=ClientResponse{orderSn=13,clientSn=3362}
 [MESSENGER][OK] client=0 deliver clientSn=3362 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3378 msg=ClientResponse{orderSn=13,clientSn=3378}
+[MPX][IN ] COMMIT sn=13 from=0
 [MESSENGER][OK] client=0 deliver clientSn=3378 sn=13
+[MPX][IN ] COMMIT sn=13 from=0
 [RESPONDER][SEND] sn=13 client=0 req=3394 msg=ClientResponse{orderSn=13,clientSn=3394}
 [MESSENGER][OK] client=0 deliver clientSn=3394 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3410 msg=ClientResponse{orderSn=13,clientSn=3410}
@@ -7519,6 +7408,8 @@ DELIVER sn=13 delivered=257
 [RESPONDER][SEND] sn=13 client=0 req=3203 msg=ClientResponse{orderSn=13,clientSn=3203}
 [MESSENGER][OK] client=0 deliver clientSn=3203 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3219 msg=ClientResponse{orderSn=13,clientSn=3219}
+[MPX][IN ] COMMIT sn=13 from=3
+[MPX][IN ] COMMIT sn=13 from=3
 [MESSENGER][OK] client=0 deliver clientSn=3219 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3235 msg=ClientResponse{orderSn=13,clientSn=3235}
 [MESSENGER][OK] client=0 deliver clientSn=3235 sn=13
@@ -7547,7 +7438,6 @@ DELIVER sn=13 delivered=257
 [RESPONDER][SEND] sn=13 client=0 req=3427 msg=ClientResponse{orderSn=13,clientSn=3427}
 [MESSENGER][OK] client=0 deliver clientSn=3427 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3188 msg=ClientResponse{orderSn=13,clientSn=3188}
-[MPX] COMMIT  sn=13 size=257
 [MESSENGER][OK] client=0 deliver clientSn=3188 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3204 msg=ClientResponse{orderSn=13,clientSn=3204}
 [MESSENGER][OK] client=0 deliver clientSn=3204 sn=13
@@ -7643,8 +7533,6 @@ DELIVER sn=13 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=3414 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3430 msg=ClientResponse{orderSn=13,clientSn=3430}
 [MESSENGER][OK] client=0 deliver clientSn=3430 sn=13
-[RESPONDER][SEND] sn=13 client=0 req=3175 msg=ClientResponse{orderSn=13,clientSn=3175}
-[MESSENGER][OK] client=0 deliver clientSn=3175 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3191 msg=ClientResponse{orderSn=13,clientSn=3191}
 [MESSENGER][OK] client=0 deliver clientSn=3191 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3207 msg=ClientResponse{orderSn=13,clientSn=3207}
@@ -7675,6 +7563,8 @@ DELIVER sn=13 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=3399 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3415 msg=ClientResponse{orderSn=13,clientSn=3415}
 [MESSENGER][OK] client=0 deliver clientSn=3415 sn=13
+[RESPONDER][SEND] sn=13 client=0 req=3431 msg=ClientResponse{orderSn=13,clientSn=3431}
+[MESSENGER][OK] client=0 deliver clientSn=3431 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3176 msg=ClientResponse{orderSn=13,clientSn=3176}
 [MESSENGER][OK] client=0 deliver clientSn=3176 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3192 msg=ClientResponse{orderSn=13,clientSn=3192}
@@ -7931,37 +7821,22 @@ DELIVER sn=13 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=3407 sn=13
 [RESPONDER][SEND] sn=13 client=0 req=3423 msg=ClientResponse{orderSn=13,clientSn=3423}
 [MESSENGER][OK] client=0 deliver clientSn=3423 sn=13
-[RESPONDER][SEND] sn=13 client=0 req=3431 msg=ClientResponse{orderSn=13,clientSn=3431}
-[MESSENGER][OK] client=0 deliver clientSn=3431 sn=13
-[RESPONDER][ENTRY][DONE] sn=13 sent=257/257
-19:16:08.963 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
-[MPX][IN ] COMMIT sn=13 from=3
-19:16:08.964 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
-19:16:08.963 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
-[MPX][IN ] COMMIT sn=13 from=3
-[MPX][IN ] COMMIT sn=13 from=0
-19:16:08.964 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
-[MPX][IN ] COMMIT sn=13 from=0
-19:16:08.965 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
+[RESPONDER][ENTRY][DONE] sn=13 sent=256/256
 [MPX][IN ] COMMIT sn=13 from=1
-19:16:08.965 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=13
 [MPX][IN ] COMMIT sn=13 from=1
-19:16:10.939 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
 [MPX][IN ] ACCEPT sn=14 from=0
-[MPX][QUORUM] ACCEPT sn=14 acceptCount=1 quorum=3 digest=c09d2ed8baceaa97
+[MPX][QUORUM] ACCEPT sn=14 acceptCount=1 quorum=3 digest=d23bb46bac2f648d
 [MPX][NET] SEND Accepted sn=14
-19:16:10.941 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
-19:16:10.941 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
-[MPX][IN ] ACCEPTED sn=14 from=1
-[MPX][QUORUM] ACCEPTED sn=14 count=2/3 digest=c09d2ed8baceaa97
 [MPX][IN ] ACCEPTED sn=14 from=3
-[MPX][QUORUM] ACCEPTED sn=14 count=3/3 digest=c09d2ed8baceaa97
-[MPX][QUORUM] MAJORITY REACHED sn=14 → COMMIT digest=c09d2ed8baceaa97
-[MPX][NET] SEND Commit sn=14 digest=c09d2ed8baceaa97
-[MPX][NET] GOSSIP Commit sn=14 digest=c09d2ed8baceaa97
+[MPX][QUORUM] ACCEPTED sn=14 count=2/3 digest=d23bb46bac2f648d
+[MPX][IN ] ACCEPTED sn=14 from=1
+[MPX][QUORUM] ACCEPTED sn=14 count=3/3 digest=d23bb46bac2f648d
+[MPX][QUORUM] MAJORITY REACHED sn=14 → COMMIT digest=d23bb46bac2f648d
+[MPX][NET] SEND Commit sn=14 digest=d23bb46bac2f648d
+[MPX][NET] GOSSIP Commit sn=14 digest=d23bb46bac2f648d
 [MPX][CHK] ANNOUNCE sn=14 reqs=257
-19:16:10.945 INF Committed entry. latency=0 nReq=257 sn=14
-19:16:10.946 INF Delivered batch. nReq=257 sn=14
+21:15:37.748 INF Committed entry. latency=0 nReq=257 sn=14
+21:15:37.748 INF Delivered batch. nReq=257 sn=14
 SB-DELIVER sn=14 size=257
 COMMIT sn=14 size=257
 DELIVER sn=14 delivered=257
@@ -8365,17 +8240,13 @@ DELIVER sn=14 delivered=257
 [MESSENGER][OK] client=0 deliver clientSn=3516 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3532 msg=ClientResponse{orderSn=14,clientSn=3532}
 [MESSENGER][OK] client=0 deliver clientSn=3532 sn=14
-19:16:10.968 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
-[MPX][IN ] COMMIT sn=14 from=3
 [RESPONDER][SEND] sn=14 client=0 req=3548 msg=ClientResponse{orderSn=14,clientSn=3548}
 [MESSENGER][OK] client=0 deliver clientSn=3548 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3564 msg=ClientResponse{orderSn=14,clientSn=3564}
 [MESSENGER][OK] client=0 deliver clientSn=3564 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3580 msg=ClientResponse{orderSn=14,clientSn=3580}
-19:16:10.969 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
 [MESSENGER][OK] client=0 deliver clientSn=3580 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3596 msg=ClientResponse{orderSn=14,clientSn=3596}
-[MPX][IN ] COMMIT sn=14 from=3
 [MESSENGER][OK] client=0 deliver clientSn=3596 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3612 msg=ClientResponse{orderSn=14,clientSn=3612}
 [MESSENGER][OK] client=0 deliver clientSn=3612 sn=14
@@ -8412,24 +8283,18 @@ DELIVER sn=14 delivered=257
 [RESPONDER][SEND] sn=14 client=0 req=3613 msg=ClientResponse{orderSn=14,clientSn=3613}
 [MESSENGER][OK] client=0 deliver clientSn=3613 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3629 msg=ClientResponse{orderSn=14,clientSn=3629}
-19:16:10.970 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
 [MESSENGER][OK] client=0 deliver clientSn=3629 sn=14
-[MPX][IN ] COMMIT sn=14 from=0
 [RESPONDER][SEND] sn=14 client=0 req=3645 msg=ClientResponse{orderSn=14,clientSn=3645}
 [MESSENGER][OK] client=0 deliver clientSn=3645 sn=14
-19:16:10.970 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3661 msg=ClientResponse{orderSn=14,clientSn=3661}
-[MPX][IN ] COMMIT sn=14 from=0
 [MESSENGER][OK] client=0 deliver clientSn=3661 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3677 msg=ClientResponse{orderSn=14,clientSn=3677}
 [MESSENGER][OK] client=0 deliver clientSn=3677 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3438 msg=ClientResponse{orderSn=14,clientSn=3438}
-19:16:10.970 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
 [MESSENGER][OK] client=0 deliver clientSn=3438 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3454 msg=ClientResponse{orderSn=14,clientSn=3454}
 [MESSENGER][OK] client=0 deliver clientSn=3454 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3470 msg=ClientResponse{orderSn=14,clientSn=3470}
-[MPX][IN ] COMMIT sn=14 from=1
 [MESSENGER][OK] client=0 deliver clientSn=3470 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3486 msg=ClientResponse{orderSn=14,clientSn=3486}
 [MESSENGER][OK] client=0 deliver clientSn=3486 sn=14
@@ -8438,10 +8303,8 @@ DELIVER sn=14 delivered=257
 [RESPONDER][SEND] sn=14 client=0 req=3518 msg=ClientResponse{orderSn=14,clientSn=3518}
 [MESSENGER][OK] client=0 deliver clientSn=3518 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3534 msg=ClientResponse{orderSn=14,clientSn=3534}
-19:16:10.971 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=14
 [MESSENGER][OK] client=0 deliver clientSn=3534 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3550 msg=ClientResponse{orderSn=14,clientSn=3550}
-[MPX][IN ] COMMIT sn=14 from=1
 [MESSENGER][OK] client=0 deliver clientSn=3550 sn=14
 [RESPONDER][SEND] sn=14 client=0 req=3566 msg=ClientResponse{orderSn=14,clientSn=3566}
 [MESSENGER][OK] client=0 deliver clientSn=3566 sn=14
@@ -8494,22 +8357,25 @@ DELIVER sn=14 delivered=257
 [RESPONDER][SEND] sn=14 client=0 req=3688 msg=ClientResponse{orderSn=14,clientSn=3688}
 [MESSENGER][OK] client=0 deliver clientSn=3688 sn=14
 [RESPONDER][ENTRY][DONE] sn=14 sent=257/257
-19:16:12.943 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
+[MPX][IN ] COMMIT sn=14 from=0
+[MPX][IN ] COMMIT sn=14 from=0
+[MPX][IN ] COMMIT sn=14 from=1
+[MPX][IN ] COMMIT sn=14 from=1
+[MPX][IN ] COMMIT sn=14 from=3
+[MPX][IN ] COMMIT sn=14 from=3
 [MPX][IN ] ACCEPT sn=15 from=0
-[MPX][QUORUM] ACCEPT sn=15 acceptCount=1 quorum=3 digest=c605f034cb5980fb
+[MPX][QUORUM] ACCEPT sn=15 acceptCount=1 quorum=3 digest=6891d6e5bd247723
 [MPX][NET] SEND Accepted sn=15
-19:16:12.944 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
-[MPX][IN ] ACCEPTED sn=15 from=3
-[MPX][QUORUM] ACCEPTED sn=15 count=2/3 digest=c605f034cb5980fb
-19:16:12.945 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
 [MPX][IN ] ACCEPTED sn=15 from=1
-[MPX][QUORUM] ACCEPTED sn=15 count=3/3 digest=c605f034cb5980fb
-[MPX][QUORUM] MAJORITY REACHED sn=15 → COMMIT digest=c605f034cb5980fb
-[MPX][NET] SEND Commit sn=15 digest=c605f034cb5980fb
-[MPX][NET] GOSSIP Commit sn=15 digest=c605f034cb5980fb
+[MPX][QUORUM] ACCEPTED sn=15 count=2/3 digest=6891d6e5bd247723
+[MPX][IN ] ACCEPTED sn=15 from=3
+[MPX][QUORUM] ACCEPTED sn=15 count=3/3 digest=6891d6e5bd247723
+[MPX][QUORUM] MAJORITY REACHED sn=15 → COMMIT digest=6891d6e5bd247723
+[MPX][NET] SEND Commit sn=15 digest=6891d6e5bd247723
+[MPX][NET] GOSSIP Commit sn=15 digest=6891d6e5bd247723
 [MPX][CHK] ANNOUNCE sn=15 reqs=153
-19:16:12.947 INF Committed entry. latency=0 nReq=153 sn=15
-19:16:12.948 INF Delivered batch. nReq=153 sn=15
+21:15:39.750 INF Committed entry. latency=0 nReq=153 sn=15
+21:15:39.750 INF Delivered batch. nReq=153 sn=15
 SB-DELIVER sn=15 size=153
 COMMIT sn=15 size=153
 DELIVER sn=15 delivered=153
@@ -8654,10 +8520,6 @@ DELIVER sn=15 delivered=153
 [RESPONDER][SEND] sn=15 client=0 req=3783 msg=ClientResponse{orderSn=15,clientSn=3783}
 [MESSENGER][OK] client=0 deliver clientSn=3783 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3799 msg=ClientResponse{orderSn=15,clientSn=3799}
-19:16:12.961 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
-[MPX][IN ] COMMIT sn=15 from=3
-19:16:12.961 DBG [MPX] HandleMessage from=3 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
-[MPX][IN ] COMMIT sn=15 from=3
 [MESSENGER][OK] client=0 deliver clientSn=3799 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3815 msg=ClientResponse{orderSn=15,clientSn=3815}
 [MESSENGER][OK] client=0 deliver clientSn=3815 sn=15
@@ -8689,7 +8551,6 @@ DELIVER sn=15 delivered=153
 [MESSENGER][OK] client=0 deliver clientSn=3721 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3737 msg=ClientResponse{orderSn=15,clientSn=3737}
 [MESSENGER][OK] client=0 deliver clientSn=3737 sn=15
-19:16:12.963 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3753 msg=ClientResponse{orderSn=15,clientSn=3753}
 [MESSENGER][OK] client=0 deliver clientSn=3753 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3769 msg=ClientResponse{orderSn=15,clientSn=3769}
@@ -8701,13 +8562,10 @@ DELIVER sn=15 delivered=153
 [RESPONDER][SEND] sn=15 client=0 req=3817 msg=ClientResponse{orderSn=15,clientSn=3817}
 [MESSENGER][OK] client=0 deliver clientSn=3817 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3690 msg=ClientResponse{orderSn=15,clientSn=3690}
-19:16:12.963 DBG [MPX] HandleMessage from=0 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
 [MESSENGER][OK] client=0 deliver clientSn=3690 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3706 msg=ClientResponse{orderSn=15,clientSn=3706}
 [MESSENGER][OK] client=0 deliver clientSn=3706 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3722 msg=ClientResponse{orderSn=15,clientSn=3722}
-[MPX][IN ] COMMIT sn=15 from=0
-[MPX][IN ] COMMIT sn=15 from=0
 [MESSENGER][OK] client=0 deliver clientSn=3722 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3738 msg=ClientResponse{orderSn=15,clientSn=3738}
 [MESSENGER][OK] client=0 deliver clientSn=3738 sn=15
@@ -8724,6 +8582,8 @@ DELIVER sn=15 delivered=153
 [RESPONDER][SEND] sn=15 client=0 req=3691 msg=ClientResponse{orderSn=15,clientSn=3691}
 [MESSENGER][OK] client=0 deliver clientSn=3691 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3707 msg=ClientResponse{orderSn=15,clientSn=3707}
+[MPX][IN ] COMMIT sn=15 from=3
+[MPX][IN ] COMMIT sn=15 from=3
 [MESSENGER][OK] client=0 deliver clientSn=3707 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3723 msg=ClientResponse{orderSn=15,clientSn=3723}
 [MESSENGER][OK] client=0 deliver clientSn=3723 sn=15
@@ -8745,6 +8605,8 @@ DELIVER sn=15 delivered=153
 [MESSENGER][OK] client=0 deliver clientSn=3708 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3724 msg=ClientResponse{orderSn=15,clientSn=3724}
 [MESSENGER][OK] client=0 deliver clientSn=3724 sn=15
+[MPX][IN ] COMMIT sn=15 from=1
+[MPX][IN ] COMMIT sn=15 from=1
 [RESPONDER][SEND] sn=15 client=0 req=3740 msg=ClientResponse{orderSn=15,clientSn=3740}
 [MESSENGER][OK] client=0 deliver clientSn=3740 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3756 msg=ClientResponse{orderSn=15,clientSn=3756}
@@ -8793,7 +8655,9 @@ DELIVER sn=15 delivered=153
 [MESSENGER][OK] client=0 deliver clientSn=3806 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3822 msg=ClientResponse{orderSn=15,clientSn=3822}
 [MESSENGER][OK] client=0 deliver clientSn=3822 sn=15
+[MPX][IN ] COMMIT sn=15 from=0
 [RESPONDER][SEND] sn=15 client=0 req=3695 msg=ClientResponse{orderSn=15,clientSn=3695}
+[MPX][IN ] COMMIT sn=15 from=0
 [MESSENGER][OK] client=0 deliver clientSn=3695 sn=15
 [RESPONDER][SEND] sn=15 client=0 req=3711 msg=ClientResponse{orderSn=15,clientSn=3711}
 [MESSENGER][OK] client=0 deliver clientSn=3711 sn=15
@@ -8830,23 +8694,19 @@ DELIVER sn=15 delivered=153
 [RESPONDER][SEND] sn=15 client=0 req=3839 msg=ClientResponse{orderSn=15,clientSn=3839}
 [MESSENGER][OK] client=0 deliver clientSn=3839 sn=15
 [RESPONDER][ENTRY][DONE] sn=15 sent=153/153
-19:16:12.967 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
-[MPX][IN ] COMMIT sn=15 from=1
-19:16:12.967 DBG [MPX] HandleMessage from=1 kind=*protobufs.ProtocolMessage_Multipaxos sn=15
-[MPX][IN ] COMMIT sn=15 from=1
-19:16:13.126 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:54498
-19:16:13.127 INF Finished sending bucket assignments to client. clId=0
-19:16:14.374 INF Stopping profiler.
-19:16:14.374 INF Stopping Tracer. events=3965 fileName=experiment-output/0002/slave-004/peer.trc
+21:15:39.928 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:58070
+21:15:39.929 INF Finished sending bucket assignments to client. clId=0
+21:15:41.172 INF Stopping profiler.
+21:15:41.172 INF Stopping Tracer. events=3965 fileName=experiment-output/0002/slave-004/peer.trc
 ==================
 WARNING: DATA RACE
-Read at 0x00c00090a050 by goroutine 99:
+Read at 0x00c00080c050 by goroutine 99:
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).Stop()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:237 +0x35c
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).StopOnSignal.func1()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:298 +0x47
 
-Previous write at 0x00c00090a050 by goroutine 549:
+Previous write at 0x00c00080c050 by goroutine 565:
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).Event()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:105 +0x2b3
   github.com/hyperledger-labs/mirbft/manager.(*MirManager).handleLogEntries()
@@ -8862,22 +8722,21 @@ Goroutine 99 (running) created at:
   main.main()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/cmd/orderingpeer/main.go:104 +0xac4
 
-Goroutine 549 (running) created at:
+Goroutine 565 (running) created at:
   github.com/hyperledger-labs/mirbft/manager.(*MirManager).Start()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/manager/mirmanager.go:101 +0x15c
   main.main.gowrap4()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/cmd/orderingpeer/main.go:174 +0x50
 ==================
-19:16:14.399 INF Profile data written. filename=experiment-output/0002/slave-004/prof.block name=block
 ==================
 WARNING: DATA RACE
-Read at 0x00c000930b60 by goroutine 99:
+Read at 0x00c000832b60 by goroutine 99:
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).Stop()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:237 +0x35c
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).StopOnSignal.func1()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:298 +0x47
 
-Previous write at 0x00c000930b60 by goroutine 98:
+Previous write at 0x00c000832b60 by goroutine 98:
   github.com/hyperledger-labs/mirbft/tracing.(*BufferedTrace).Event()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/tracing/bufferedtrace.go:105 +0x2b3
   github.com/hyperledger-labs/mirbft/profiling.StartCPUTracing.func1()
@@ -8899,12 +8758,7 @@ Goroutine 98 (running) created at:
   main.main()
       /opt/gopath/src/github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft/cmd/orderingpeer/main.go:104 +0xac4
 ==================
-19:16:14.402 INF Trace data written.
-19:16:14.411 INF Profile data written. filename=experiment-output/0002/slave-004/prof.mutex name=mutex
-19:16:14.592 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:54364
-19:16:14.592 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:54382
-19:16:14.592 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:54324
-19:16:14.592 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:54334
-19:16:14.592 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:54310
-19:16:14.592 INF Connection terminated. error="rpc error: code = Canceled desc = context canceled" address=127.0.0.1:54370
-19:16:14.607 INF Profile data written. filename=experiment-output/0002/slave-004/prof.cpu name=cpu
+21:15:41.197 INF Trace data written.
+21:15:41.329 INF Profile data written. filename=experiment-output/0002/slave-004/prof.cpu name=cpu
+21:15:41.359 INF Profile data written. filename=experiment-output/0002/slave-004/prof.block name=block
+21:15:41.368 INF Profile data written. filename=experiment-output/0002/slave-004/prof.mutex name=mutex
