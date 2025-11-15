@@ -62,7 +62,7 @@ throughputCap=131072000     # The system will always be proposing requests at a 
                             # Used to prevent view changes when too many batches accumulate in a bucket.
 
 # System composition
-orderers="Raft"             # Possible values: MultiPaxos Pbft HotStuff Raft Dummy
+orderers="HotStuff"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
 checkpointers="Signing"
 
 # Parameters chosen for experiments
@@ -489,6 +489,13 @@ function generateCombinations() {
                                                     else
                                                       throughputs=${throughputsAuthMultiPaxos[$numPeers]}
                                                     fi
+                                                  elif [ "$orderer" = "MultiPaxosMulticast" ]; then
+                                                    # === NOVO: use os mesmos perfis do MultiPaxos para o Multicast ===
+                                                    if [ $leaderPolicy = "Single" ]; then
+                                                      throughputs=${throughputsAuthSingleMultiPaxos[$numPeers]}
+                                                    else
+                                                      throughputs=${throughputsAuthMultiPaxos[$numPeers]}
+                                                    fi
                                                   fi
                                                   for thr in $throughputs; do
                                                     if ! skip; then
@@ -518,6 +525,13 @@ function generateCombinations() {
                                                     throughputs=${throughputsNoAuthRaft[$numPeers]}
                                                   fi
                                                 elif [ "$orderer" = "MultiPaxos" ]; then
+                                                  if [ $leaderPolicy = "Single" ]; then
+                                                    throughputs=${throughputsNoAuthSingleMultiPaxos[$numPeers]}
+                                                  else
+                                                    throughputs=${throughputsNoAuthMultiPaxos[$numPeers]}
+                                                  fi
+                                                elif [ "$orderer" = "MultiPaxosMulticast" ]; then
+                                                  # === NOVO: use os mesmos perfis do MultiPaxos para o Multicast ===
                                                   if [ $leaderPolicy = "Single" ]; then
                                                     throughputs=${throughputsNoAuthSingleMultiPaxos[$numPeers]}
                                                   else
@@ -680,3 +694,4 @@ for numPeers in $systemSizes; do
 done
 
 echo "Generated $((exp_id - exp_id_offset)) experiments."
+

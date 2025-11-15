@@ -1,75 +1,75 @@
-{"level":"debug","Logging":"debug","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","UseTLS":true,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","CACertFile":"tls-data/ca.pem","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","KeyFile":"tls-data/auth.key","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","CertFile":"tls-data/auth.pem","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","PriorityConnections":2,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","BasicConnections":4,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","TestConnections":false,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ExcessConnections":1,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ConnectionTestMsgs":4,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ConnectionTestPayload":131072,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","OutMessageBufsize":1024,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","OutMessageBufsize":1,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ThroughputCap":131072000,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","StragglerTolerance":1000,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","BatchSizeIncrement":256,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","Orderer":"HotStuff","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","Manager":"Mir","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","Failures":0,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","CrashTiming":"EpochStart","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","CheckpointInterval":256,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","WatermarkWindowSize":256,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","EpochLength":256,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","SegmentLength":256,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","WaitForCheckpoints":true,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ClientWatermarkWindowSize":4194304,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ClientRequestBacklogSize":4194304,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","RandomSeed":16987,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","NodeToLeaderRatio":1,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","LeaderPolicy":"Single","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","DefaultLeaderBan":2,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","NumBuckets":16,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","BatchSize":1000,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","DisabledViewChange":false,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ViewChangeTimeout":60000,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ClientTraceSampling":10,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","EventBufferSize":2097152,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","TraceSampling":1,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ClientsPerProcess":1,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","RequestsPerClient":15360,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ClientRunTime":30000,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","RequestRate":256,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","HardRequestRateLimit":false,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","RequestPayloadSize":500,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","SignRequests":true,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ClientPrivKeyFile":"tls-data/client-ecdsa-256.key","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","ClientPubKeyFile":"tls-data/client-ecdsa-256.pem","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","PrecomputeRequests":false,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","RequestHandlerThreads":32,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","RequestInputChannelBuffer":8192,"time":"2025-09-28T19:59:26-03:00","message":"Config"}
-{"level":"debug","BatchVerifier":"external","time":"2025-09-28T19:59:26-03:00","message":"Config"}
-19:59:26.864 INF Started Profiler: CPU
-19:59:26.864 INF Started Profiler: BLOCK
-19:59:26.864 INF Started Profiler: MUTEX
-19:59:26.864 INF Starting clients. numClients=1 numRequests=15360
-19:59:26.864 INF Initilizing clients.
-19:59:26.875 INF Registared with discovery server. numOrderers=4 ownClientId=0
-19:59:26.876 INF Clients initialized.
-19:59:26.876 INF Launching clients.
-19:59:26.876 INF Waiting for clients.
-19:59:27.057 INF [CL] Client handshake OK (dummy request/response)
-19:59:27.087 INF [CL] Client handshake OK (dummy request/response)
-19:59:27.100 INF [CL] Client handshake OK (dummy request/response)
-19:59:27.108 INF [CL] Client handshake OK (dummy request/response)
-20:00:01.143 INF Stopping Tracer. events=6191 fileName=experiment-output/0003/slave-000/client-000.trc
+{"level":"debug","Logging":"debug","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","UseTLS":true,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","CACertFile":"tls-data/ca.pem","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","KeyFile":"tls-data/auth.key","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","CertFile":"tls-data/auth.pem","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","PriorityConnections":2,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","BasicConnections":4,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","TestConnections":false,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ExcessConnections":1,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ConnectionTestMsgs":4,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ConnectionTestPayload":131072,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","OutMessageBufsize":1024,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","OutMessageBufsize":1,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ThroughputCap":131072000,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","StragglerTolerance":1000,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","BatchSizeIncrement":256,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","Orderer":"Pbft","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","Manager":"Mir","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","Failures":0,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","CrashTiming":"EpochStart","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","CheckpointInterval":256,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","WatermarkWindowSize":256,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","EpochLength":256,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","SegmentLength":256,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","WaitForCheckpoints":true,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ClientWatermarkWindowSize":4194304,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ClientRequestBacklogSize":4194304,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","RandomSeed":3753,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","NodeToLeaderRatio":1,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","LeaderPolicy":"Single","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","DefaultLeaderBan":2,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","NumBuckets":16,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","BatchSize":1000,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","DisabledViewChange":false,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ViewChangeTimeout":60000,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ClientTraceSampling":10,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","EventBufferSize":2097152,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","TraceSampling":1,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ClientsPerProcess":1,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","RequestsPerClient":15360,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ClientRunTime":30000,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","RequestRate":256,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","HardRequestRateLimit":false,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","RequestPayloadSize":500,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","SignRequests":true,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ClientPrivKeyFile":"tls-data/client-ecdsa-256.key","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","ClientPubKeyFile":"tls-data/client-ecdsa-256.pem","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","PrecomputeRequests":false,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","RequestHandlerThreads":32,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","RequestInputChannelBuffer":8192,"time":"2025-11-08T21:18:03-03:00","message":"Config"}
+{"level":"debug","BatchVerifier":"external","time":"2025-11-08T21:18:03-03:00","message":"Config"}
+21:18:03.848 INF Started Profiler: CPU
+21:18:03.848 INF Started Profiler: BLOCK
+21:18:03.848 INF Started Profiler: MUTEX
+21:18:03.848 INF Starting clients. numClients=1 numRequests=15360
+21:18:03.848 INF Initilizing clients.
+21:18:03.857 INF Registered with discovery server. numOrderers=4 ownClientId=0
+21:18:03.858 INF Clients initialized.
+21:18:03.858 INF Launching clients.
+21:18:03.858 INF Waiting for clients.
+21:18:04.054 INF [CL] Client handshake OK (dummy request/response)
+21:18:04.069 INF [CL] Client handshake OK (dummy request/response)
+21:18:04.069 INF [CL] Client handshake OK (dummy request/response)
+21:18:04.071 INF [CL] Client handshake OK (dummy request/response)
+21:18:35.114 INF Stopping Tracer. events=6189 fileName=experiment-output/0003/slave-000/client-000.trc
 zerolog: could not write event: write experiment-output/0003/slave-000/client-000.log: file already closed
 zerolog: could not write event: write experiment-output/0003/slave-000/client-000.log: file already closed
 zerolog: could not write event: write experiment-output/0003/slave-000/client-000.log: file already closed
 zerolog: could not write event: write experiment-output/0003/slave-000/client-000.log: file already closed
-20:00:01.182 INF Trace data written.
-20:00:01.182 INF Done.
-20:00:01.182 INF Stopping profiler.
-20:00:01.372 INF Profile data written. filename=experiment-output/0003/slave-000/prof-client.cpu name=cpu
-20:00:01.389 INF Profile data written. filename=experiment-output/0003/slave-000/prof-client.block name=block
-20:00:01.395 INF Profile data written. filename=experiment-output/0003/slave-000/prof-client.mutex name=mutex
+21:18:35.159 INF Trace data written.
+21:18:35.159 INF Done.
+21:18:35.159 INF Stopping profiler.
+21:18:35.370 INF Profile data written. filename=experiment-output/0003/slave-000/prof-client.cpu name=cpu
+21:18:35.389 INF Profile data written. filename=experiment-output/0003/slave-000/prof-client.block name=block
+21:18:35.399 INF Profile data written. filename=experiment-output/0003/slave-000/prof-client.mutex name=mutex

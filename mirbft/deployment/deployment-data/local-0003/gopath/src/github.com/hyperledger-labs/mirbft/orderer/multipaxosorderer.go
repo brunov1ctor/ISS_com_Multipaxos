@@ -22,42 +22,8 @@ import (
 
 type AnnounceFn func(sn int32, batchBytes []byte, metadata []byte)
 
-type MultiPaxosOrderer struct {
-	mgr manager.Manager
-
-	dispatcher mpxDispatcher
-	backlog    mpxBacklog
-	last       int32 // SN máximo aceito; descartamos msg/sn <= last
-
-	instances map[int32]*mpxInstance
-	instMu    sync.RWMutex
-	startOnce sync.Once
-
-	emit     func(pm *pb.ProtocolMessage)
-	announce AnnounceFn
-
-	maxBatchSize     int
-	proposeEvery     time.Duration
-	view             int32 // view atual
-	stopWg           sync.WaitGroup
-	sbNilAfter       time.Duration // timeout para ⊥ (default: 6x BatchTimeout)
-	enableNilDeliver bool          // liga/desliga SB-⊥
-
-	segmentChan chan manager.Segment
-}
-
-// líder do SEGMENTO (não por slot)
-func isSegmentLeader(seg manager.Segment, ownID int32, view int32) bool {
-	leaders := seg.Leaders()
-	if len(leaders) == 0 {
-		return false
-	}
-	idx := int(view) % len(leaders)
-	return leaders[idx] == ownID
-}
-
 type mpxDispatcher struct {
-	mm sync.Map // SN -> *mpxInstance
+	mm sync.Map // map[int32]*mpxInstance
 }
 
 func (d *mpxDispatcher) load(sn int32) (*mpxInstance, bool) {
@@ -78,40 +44,64 @@ type mpxBacklog struct {
 func newMPXBacklog() mpxBacklog {
 	return mpxBacklog{
 		qs:   make(map[int32][]*pb.ProtocolMessage),
-		gcCh: make(chan int32, 1024),
+		gcCh: make(chan int32, 1),
+	}
+}
+func (b *mpxBacklog) add(msg *pb.ProtocolMessage) {
+	b.mu.Lock()
+	b.qs[msg.Sn] = append(b.qs[msg.Sn], msg)
+	b.mu.Unlock()
+}
+func (b *mpxBacklog) drainTo(sn int32, f func(*pb.ProtocolMessage)) {
+	b.mu.Lock()
+	items := b.qs[sn]
+	delete(b.qs, sn)
+	b.mu.Unlock()
+	for _, m := range items {
+		f(m)
 	}
 }
 
-func (b *mpxBacklog) enqueue(pm *pb.ProtocolMessage) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.qs[pm.Sn] = append(b.qs[pm.Sn], pm)
+// Hooks/Router (mantidos para compatibilidade e possível multicast futuro).
+type OutboundHooks struct {
+	OnSend func(pm *pb.ProtocolMessage) (dests []int32, err error)
+}
+type GroupResolver func(sn int32) uint32
+
+type MultiPaxosOrderer struct {
+	mgr         manager.Manager
+	segmentChan chan manager.Segment
+
+	dispatcher mpxDispatcher
+	backlog    mpxBacklog
+	last       int32
+
+	instances map[int32]*mpxInstance
+	instMu    sync.RWMutex
+	startOnce sync.Once
+
+	emit     func(pm *pb.ProtocolMessage)
+	announce AnnounceFn
+
+	hooks        OutboundHooks
+	resolveGroup GroupResolver
+
+	maxBatchSize     int
+	proposeEvery     time.Duration
+	view             int32
+	stopWg           sync.WaitGroup
+	sbNilAfter       time.Duration
+	enableNilDeliver bool
 }
 
-func (b *mpxBacklog) drainTo(sn int32, into func(pm *pb.ProtocolMessage)) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if q := b.qs[sn]; len(q) > 0 {
-		for _, pm := range q {
-			into(pm)
-		}
-		delete(b.qs, sn)
+func isSegmentLeader(seg manager.Segment, ownID int32, view int32) bool {
+	leaders := seg.Leaders()
+	if len(leaders) == 0 {
+		return false
 	}
+	idx := int(view) % len(leaders)
+	return leaders[idx] == ownID
 }
-
-func (b *mpxBacklog) gcUntil(sn int32) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for key := range b.qs {
-		if key <= sn {
-			delete(b.qs, key)
-		}
-	}
-}
-
-// =========================
-// API
-// =========================
 
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.mgr = mgr
@@ -123,28 +113,27 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.proposeEvery = time.Duration(config.Config.BatchTimeout)
 	o.view = 0
 
-	// SB-⊥: multiplicador para ⊥ (aqui ajustado para 6× o BatchTimeout).
-	o.sbNilAfter = o.proposeEvery * 6
+	o.sbNilAfter = o.proposeEvery * 3
 	o.enableNilDeliver = true
 
-	logger.Info().
-		Int("batchSize", o.maxBatchSize).
-		Dur("batchTimeout", o.proposeEvery).
-		Dur("sbNilAfter", o.sbNilAfter).
-		Bool("enableNilDeliver", o.enableNilDeliver).
-		Msg("[MPX] Init parameters")
+	o.hooks = OutboundHooks{}
+	o.resolveGroup = func(sn int32) uint32 { return 0 } // não usado por enquanto
 
-	// Announce: aciona Responder e instrumenta traces do pipeline
+	// announce padrão
 	o.announce = func(sn int32, batchBytes []byte, _ []byte) {
+		if len(batchBytes) == 0 {
+			fmt.Printf("[MPX][NIL] DELIVER ⊥ sn=%d\n", sn)
+			tracing.MainTrace.Event(tracing.COMMIT, int64(sn), 0)
+			return
+		}
 		var b pb.Batch
 		if err := proto.Unmarshal(batchBytes, &b); err != nil {
-			logger.Warn().Err(err).Msg("[MPX] announce: unmarshal batch")
+			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d unmarshal: %v\n", sn, err)
 			return
 		}
 		entry := &mirlog.Entry{Sn: sn, Batch: &b}
 		announcer.Announce(entry)
 
-		// marcadores úteis p/ métricas/grep
 		fmt.Printf("SB-DELIVER sn=%d size=%d\n", sn, len(b.Requests))
 		fmt.Printf("COMMIT sn=%d size=%d\n", sn, len(b.Requests))
 		fmt.Printf("DELIVER sn=%d delivered=%d\n", sn, len(b.Requests))
@@ -152,21 +141,54 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(len(b.Requests)))
 	}
 
-	// broadcast de protocolo para os demais peers (cliente continua broadcastando requests)
+	// emit com hook (por ora, broadcast padrão; hook pode selecionar destinos)
 	o.emit = func(pm *pb.ProtocolMessage) {
-		for _, nid := range membership.AllNodeIDs() {
-			if nid == membership.OwnID {
-				continue
+		o.broadcastHooked(pm, func(pm *pb.ProtocolMessage) {
+			for _, nid := range membership.AllNodeIDs() {
+				if nid == membership.OwnID {
+					continue
+				}
+				messenger.EnqueueMsg(pm, nid)
 			}
-			messenger.EnqueueMsg(pm, nid)
-		}
+		})
 	}
 
 	o.segmentChan = o.mgr.SubscribeOrderer()
 	messenger.OrdererMsgHandler = o.HandleMessage
 
-	fmt.Printf("[MPX] Init ok; cfg: batchSize=%d batchTimeout=%s view=%d leaderPolicy=%s (leader per segment)\n",
+	fmt.Printf("[MPX] Init ok; cfg: batchSize=%d batchTimeout=%s view=%d leaderPolicy=%s\n",
 		o.maxBatchSize, o.proposeEvery, o.view, strings.ToLower(config.Config.LeaderPolicy))
+}
+
+func (o *MultiPaxosOrderer) broadcastHooked(pm *pb.ProtocolMessage, fallback func(pm *pb.ProtocolMessage)) {
+	if o.hooks.OnSend != nil {
+		if dests, err := o.hooks.OnSend(pm); err == nil && len(dests) > 0 {
+			fmt.Printf("[MPX][HOOK] selective send sn=%d type=%T dests=%v\n", pm.Sn, pm.GetMultipaxos().GetType(), dests)
+			for _, d := range dests {
+				if d == membership.OwnID {
+					continue
+				}
+				messenger.EnqueueMsg(pm, d)
+			}
+			return
+		}
+	}
+	fallback(pm)
+}
+
+// envio seletivo sem passar por hooks (usado se você quiser forçar destinos)
+func (o *MultiPaxosOrderer) emitTo(pm *pb.ProtocolMessage, dests []int32) {
+	if len(dests) == 0 {
+		o.emit(pm)
+		return
+	}
+	fmt.Printf("[MPX][SEND] sn=%d type=%T to=%v\n", pm.Sn, pm.GetMultipaxos().GetType(), dests)
+	for _, d := range dests {
+		if d == membership.OwnID {
+			continue
+		}
+		messenger.EnqueueMsg(pm, d)
+	}
 }
 
 func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
@@ -179,64 +201,41 @@ func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 					Int32("length", seg.Len()).
 					Int32("firstSN", seg.FirstSN()).
 					Int32("lastSN", seg.LastSN()).
-					Int32("firstLeader", seg.Leaders()[0]).
-					Msg("[MPX] New segment received")
-
-				// IMPORTANTE: sem anúncio de buckets aqui (voltamos ao broadcast do cliente)
-				// Manager (se configurado) pode anunciar; este orderer não interfere.
+					Int32("first leader", seg.Leaders()[0]).
+					Int32("len", seg.Len()).
+					Msgf("MultiPaxos received new segment: %+v", seg.SNs())
 
 				o.runSegment(seg)
 				go o.killSegment(seg)
 			}
 		}()
+		fmt.Printf("[MPX] Start done\n")
 	})
 }
 
-func (o *MultiPaxosOrderer) Stop() {
-	close(o.backlog.gcCh)
-	o.stopWg.Wait()
-}
-
-func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
-	// encerra instâncias e libera dispatcher após término do segmento
-	timer := time.NewTimer(time.Duration(seg.Len()) * o.proposeEvery * 2)
-	defer timer.Stop()
-	<-timer.C
-
-	for _, sn := range seg.SNs() {
-		if inst, ok := o.dispatcher.load(sn); ok && inst != nil {
-			inst.stopWorkers()
-			o.dispatcher.delete(sn)
-		}
-	}
-}
-
 func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
-	// descarta msgs antigas
+	sn := pm.Sn
+
+	if pm.SenderId == membership.OwnID {
+		logger.Warn().Int32("sn", sn).Msg("MPX handles message from self.")
+	}
+
 	last := atomic.LoadInt32(&o.last)
-	if pm.Sn <= last {
+	if sn <= last {
+		logger.Debug().
+			Int32("sn", sn).Int32("senderID", pm.SenderId).
+			Msg("MPX discards message. Message belongs to an old segment.")
 		return
 	}
 
-	// log de chegada (tipo/seq/remetente) — sem depender de nomes de oneof específicos
-	kind := fmt.Sprintf("%T", pm.Msg)
-	logger.Debug().
-		Int32("sn", pm.Sn).
-		Int32("from", pm.SenderId).
-		Str("kind", kind).
-		Msg("[MPX] HandleMessage")
-
-	// pega/instancia e entrega ao SN correto
-	inst, ok := o.dispatcher.load(pm.Sn)
+	inst, ok := o.dispatcher.load(sn)
 	if !ok || inst == nil {
-		// backlog até runSegment instalar as instâncias
-		o.backlog.enqueue(pm)
+		o.backlog.add(pm)
 		return
 	}
 	inst.enqueue(pm)
 }
 
-// HandleEntry: chamado p/ inserção fora do orderer (ex.: state transfer)
 func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 	if e == nil {
 		return
@@ -258,11 +257,9 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 }
 
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
-	// cria/instala instâncias e workers
 	for _, sn := range seg.SNs() {
 		inst := o.ensureInstance(sn)
 		inst.setSegment(seg)
-		// herda parâmetros de drenagem/⊥ do orderer
 		inst.enableNilDeliver = o.enableNilDeliver
 		inst.sbNilAfter = o.sbNilAfter
 		o.dispatcher.store(sn, inst)
@@ -273,37 +270,30 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			o.backlog.drainTo(sn, inst.enqueue)
 		}
 	}
-
-	ownID := membership.OwnID
-	nextSN := seg.FirstSN()
-
 	go func() {
-		t := time.NewTicker(o.proposeEvery / 2)
+		t := time.NewTicker(o.proposeEvery)
 		defer t.Stop()
+
+		nextSN := seg.FirstSN()
 		for range t.C {
 			now := time.Now()
 
-			if isSegmentLeader(seg, ownID, o.view) {
-				logger.Trace().Int32("nextSN", nextSN).Msg("[MPX] Leader tick")
-				// líder: propõe e faz tick
+			if isSegmentLeader(seg, membership.OwnID, o.view) {
 				for sn := nextSN; sn <= seg.LastSN(); sn++ {
 					inst, _ := o.dispatcher.load(sn)
 					if inst == nil {
 						continue
 					}
-					logger.Trace().Int32("sn", sn).Msg("[MPX] ProposeIfDue")
-					inst.ProposeIfDue(nil) // 1a proposta ou idempotente
-					inst.tick(now)         // RTX e (opcional) ⊥
+					inst.ProposeIfDue(nil)
+					inst.tick(now)
 					if inst.isClosed() && sn == nextSN {
 						nextSN++
 					}
 				}
 				if nextSN > seg.LastSN() {
-					logger.Info().Int32("lastSN", seg.LastSN()).Msg("[MPX] Segment done (leader)")
 					return
 				}
 			} else {
-				// seguidores também fazem tick (para SB-⊥ local)
 				for sn := nextSN; sn <= seg.LastSN(); sn++ {
 					inst, _ := o.dispatcher.load(sn)
 					if inst != nil {
@@ -311,7 +301,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					}
 				}
 				if nextSN > seg.LastSN() {
-					logger.Info().Int32("lastSN", seg.LastSN()).Msg("[MPX] Segment done (follower)")
 					return
 				}
 			}
@@ -319,26 +308,46 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	}()
 }
 
-func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
-	o.instMu.RLock()
-	if inst := o.instances[sn]; inst != nil {
-		o.instMu.RUnlock()
-		return inst
+func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
+	checkpoints := mirlog.Checkpoints()
+	currentCheckpoint := mirlog.GetCheckpoint()
+	for currentCheckpoint == nil || currentCheckpoint.Sn < seg.LastSN() {
+		currentCheckpoint = <-checkpoints
 	}
-	o.instMu.RUnlock()
+	mirlog.WaitForEntry(seg.LastSN())
 
 	o.instMu.Lock()
-	defer o.instMu.Unlock()
-	if inst := o.instances[sn]; inst == nil {
-		inst = newMPXInstance(o, sn, o.announce, o.maxBatchSize, o.proposeEvery)
-		o.instances[sn] = inst
-		return inst
-	} else {
-		return inst
+	if seg.LastSN() > o.last {
+		atomic.StoreInt32(&o.last, seg.LastSN())
+	}
+	o.instMu.Unlock()
+
+	logger.Info().Int("segID", seg.SegID()).Msg("Closing MPX instance workers.")
+	for _, sn := range seg.SNs() {
+		if inst, ok := o.dispatcher.load(sn); ok && inst != nil {
+			inst.stopWorkers()
+			o.dispatcher.delete(sn)
+		}
 	}
 }
 
-// Satisfaz a interface orderer.Orderer
+func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
+	o.instMu.RLock()
+	inst := o.instances[sn]
+	o.instMu.RUnlock()
+	if inst != nil {
+		return inst
+	}
+
+	o.instMu.Lock()
+	defer o.instMu.Unlock()
+	if inst = o.instances[sn]; inst == nil {
+		inst = newMPXInstance(o, sn, o.announce, o.maxBatchSize, o.proposeEvery)
+		o.instances[sn] = inst
+	}
+	return inst
+}
+
 func (o *MultiPaxosOrderer) Sign(data []byte) ([]byte, error) { return nil, nil }
 func (o *MultiPaxosOrderer) CheckSig(data []byte, senderID int32, signature []byte) error {
 	return nil
