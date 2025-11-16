@@ -31,7 +31,7 @@ echo -e "\nKilled continuous analysis scripts.\n"
 
 for ip in $(cat $instance_info_file | awk '{print $2}'); do
   ssh $ssh_options $ip "
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms
+    # tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync
     rm -rf $remote_delete_files
     echo RUNNING > $remote_status_file

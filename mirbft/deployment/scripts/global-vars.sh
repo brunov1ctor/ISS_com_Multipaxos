@@ -68,7 +68,7 @@ remote_tls_directory="$remote_code_dir/tls-data"
 remote_log_archives="experiment-output-*.tar.gz"
 downloaded_code_dir=github.com/hyperledger-labs/mirbft/
 # remote_delete_files must be on one line, as it is passed in a string to SSH as a command to execute
-remote_delete_files="$remote_work_dir/experiment-output-*.tar.gz $remote_work_dir/experiment-output $remote_master_log $remote_slave_log $remote_status_file $remote_ready_file $remote_instance_tag_file $remote_master_command_file $remote_code_dir $remote_config_dir $remote_exp_dir"
+remote_delete_files="" #"$remote_work_dir/experiment-output-*.tar.gz $remote_work_dir/experiment-output $remote_master_log $remote_slave_log $remote_status_file $remote_ready_file $remote_instance_tag_file $remote_master_command_file $remote_code_dir $remote_config_dir $remote_exp_dir"
 downloaded_gopath="remote-gopath"
 
 # OLDMIR
