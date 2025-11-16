@@ -8,7 +8,7 @@ analysis_query_params="-q queries/ethereum.sql -q queries/aggregates.sql -q quer
 
 # Private key, of which the corresponding public key needs to be an authorized ssh key at each instance.
 # (Previously uploaded to IBM Cloud and specified at instance creation in the corresponding template file)
-private_key_file=$HOME/.ssh/id_ed25519
+private_key_file="$HOME/.ssh/id_ed25519"
 
 # Options to use when communicating with the remote machines.
 ssh_options="-i $private_key_file -o User=Bruno StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
