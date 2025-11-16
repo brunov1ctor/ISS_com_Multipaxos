@@ -1,14 +1,11 @@
-# deployment/scripts/instance-info
-# id     public_ip     private_ip   role   tag
-node-0   172.20.3.12   10.10.1.1    master master
+# id      public_ip     private_ip   role    tag
+node-0    172.20.3.12   10.10.1.1    master  master
 
-# Réplicas (peers) — até 5 réplicas com os nós abaixo
-node-1   172.20.5.3    10.10.1.2    slave  peers
-node-2   172.20.6.9    10.10.1.3    slave  peers
-node-3   172.20.4.18   10.10.1.4    slave  peers
-node-4   172.20.3.13   10.10.1.5    slave  peers
-node-5   172.20.6.10   10.10.1.6    slave  peers   # libera 5R
+node-1    172.20.5.3    10.10.1.2    slave   peers
+node-2    172.20.6.9    10.10.1.3    slave   peers
+node-3    172.20.4.18   10.10.1.4    slave   peers
+node-4    172.20.3.13   10.10.1.5    slave   peers
+node-5    172.20.6.10   10.10.1.6    slave   peers
 
-# Gerador de carga (clientes)
-node-6   172.20.5.4    10.10.1.7    slave  16clients
+node-6    172.20.5.4    10.10.1.7    slave   16clients
 
