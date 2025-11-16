@@ -14,12 +14,12 @@ init_command="
   export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
 
   cd $remote_work_dir &&
-  rsync --progress -rptz -e \"ssh $ssh_options\" root@$master_ip:$remote_tls_directory . &&
+  rsync --progress -rptz -e \"ssh $ssh_options\" $master_ip:$remote_tls_directory . &&
   cd tls-data &&
   ./generate.sh $public_ip $private_ip &&
 
   cd $remote_work_dir &&
-  rsync --progress -rptz -e \"ssh $ssh_options\" root@$master_ip:$remote_gopath/bin/* $remote_gopath/bin/ &&
+  rsync --progress -rptz -e \"ssh $ssh_options\" $master_ip:$remote_gopath/bin/* $remote_gopath/bin/ &&
   mkdir -p config &&
 
   stubborn-scp.sh 5 $ssh_options $master_ip:$remote_code_dir/oldmir/oldmir-start.sh $remote_work_dir/bin &&
@@ -46,7 +46,7 @@ done
 # This needs to happen before initialization of the slave, as the master needs to prepare files (e.g. code binaries)
 # That the slave downloads during initialization.
 echo "Waiting for master server."
-while ! ssh $ssh_options -q -o "ConnectTimeout=10" "root@$master_ip" "cat $remote_ready_file > /dev/null"; do
+while ! ssh $ssh_options -q -o "ConnectTimeout=10" "$master_ip" "cat $remote_ready_file > /dev/null"; do
   sleep $machine_status_poll_period
   echo "Master not ready. Retrying in $machine_status_poll_period seconds."
 done
@@ -54,10 +54,10 @@ done
 # Initialize slave.
 # Retrying introduced because sometimes, when many instances of this script are run in parallel,
 # The ssh command fails with "connection reset by peer" or similar error.
-while ! ssh $ssh_options root@$public_ip "$init_command"; do
+while ! ssh $ssh_options $public_ip "$init_command"; do
   sleep 1
   echo "Retrying to initialize slave."
 done
 
 echo "Master ready. Starting slave process."
-ssh $ssh_options root@$public_ip "$slave_command"
+ssh $ssh_options $public_ip "$slave_command"

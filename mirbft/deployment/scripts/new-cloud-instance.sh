@@ -63,48 +63,48 @@ function wait_for_instance() {
   >&2 echo "Instance ID: $instance_id   Public IP: $public_ip   Private IP: $private_ip   Tag: $tag"
 
   # Upload instance tag to instance itself. This also serves to see if instance is up and running.
-  ssh $ssh_options -o "LogLevel=QUIET" -o "ConnectTimeout=10" "root@$public_ip" "echo '$tag' > '$remote_instance_tag_file'" > /dev/null
+  ssh $ssh_options -o "LogLevel=QUIET" -o "ConnectTimeout=10" "$public_ip" "echo '$tag' > '$remote_instance_tag_file'" > /dev/null
   exit_code=$?
   # Retry executing dummy command over SSH until it succeeds
   while [ $exit_code -ne 0 ]; do
     >&2 echo "$0: Instance $instance_id with IP ${public_ip} not yet running. Retrying connection in 10 seconds."
     sleep 10
-    ssh $ssh_options -o "LogLevel=QUIET" -o "ConnectTimeout=10" "root@$public_ip" "echo '$tag' > '$remote_instance_tag_file'" > /dev/null
+    ssh $ssh_options -o "LogLevel=QUIET" -o "ConnectTimeout=10" "$public_ip" "echo '$tag' > '$remote_instance_tag_file'" > /dev/null
     exit_code=$?
   done
 
   # Upload instance detail to the instance itself, for use by the guest OS.
   # Suppress standard output from SSH, as the only output from this script should be the instance's public IP (for use with further scripts).
-  scp $ssh_options -o "LogLevel=QUIET" "ic-instance-detail-$instance_id.json.tmp" "root@$public_ip:$remote_instance_detail_file" > /dev/null
+  scp $ssh_options -o "LogLevel=QUIET" "ic-instance-detail-$instance_id.json.tmp" "$public_ip:$remote_instance_detail_file" > /dev/null
   exit_code=$?
   while [ $exit_code -ne 0 ]; do
     >&2 echo "$0: Failed to uplaod detail file to instance ${instance_id}. Retrying in 10 seconds."
     sleep 10
-    scp $ssh_options -o "LogLevel=QUIET" "ic-instance-detail-$instance_id.json.tmp" "root@$public_ip:$remote_instance_detail_file" > /dev/null
+    scp $ssh_options -o "LogLevel=QUIET" "ic-instance-detail-$instance_id.json.tmp" "$public_ip:$remote_instance_detail_file" > /dev/null
     exit_code=$?
   done
   rm "ic-instance-detail-$instance_id.json.tmp"
 
   # Upload user script to the instance.
   # Suppress standard output from SSH, as the only output from this script should be the instance's public IP (for use with further scripts).
-  scp $ssh_options -o "LogLevel=QUIET" "$user_script" "root@$public_ip:$remote_user_script_body" > /dev/null
+  scp $ssh_options -o "LogLevel=QUIET" "$user_script" "$public_ip:$remote_user_script_body" > /dev/null
   exit_code=$?
   while [ $exit_code -ne 0 ]; do
     >&2 echo "$0: Failed to uplaod user script to instance ${instance_id}. Retrying in 10 seconds."
     sleep 10
-    scp $ssh_options -o "LogLevel=QUIET" "$user_script" "root@$public_ip:$remote_user_script_body" > /dev/null
+    scp $ssh_options -o "LogLevel=QUIET" "$user_script" "$public_ip:$remote_user_script_body" > /dev/null
     exit_code=$?
   done
 
   # Notify the the instance about the upload of the previous file.
   # Note that this needs to be done separately. If the instance directly checked for presence of the detail file,
   # it could (and did) happen that the instance proceeds with only a partially uploaded file.
-  ssh $ssh_options -o "LogLevel=QUIET" "root@$public_ip" "touch $remote_user_script_uploaded" > /dev/null
+  ssh $ssh_options -o "LogLevel=QUIET" "$public_ip" "touch $remote_user_script_uploaded" > /dev/null
   exit_code=$?
   while [ $exit_code -ne 0 ]; do
     >&2 echo "$0: Failed to confirm detail file upload to instance ${instance_id}. Retrying in 10 seconds."
     sleep 10
-    ssh $ssh_options -o "LogLevel=QUIET" "root@$public_ip" "touch $remote_user_script_uploaded" > /dev/null
+    ssh $ssh_options -o "LogLevel=QUIET" "$public_ip" "touch $remote_user_script_uploaded" > /dev/null
     exit_code=$?
   done
 

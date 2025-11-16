@@ -18,25 +18,25 @@ envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' < 
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 
 # Create remote code, config, and experiment directories
-ssh $ssh_options root@$master_ip "
+ssh $ssh_options $master_ip "
   mkdir -p $remote_code_dir &&
   mkdir -p $remote_config_dir &&
   mkdir -p $remote_exp_dir/raw-results" || exit 1
 
 # Upload code to the master
-rsync --progress -rptz -e "ssh $ssh_options" $local_code_files "root@$master_ip:$remote_code_dir" || exit 2
+rsync --progress -rptz -e "ssh $ssh_options" $local_code_files "$master_ip:$remote_code_dir" || exit 2
 
 # Upload config to the master
-rsync --progress -rptz -e "ssh $ssh_options" $exp_data_dir/config/* "root@$master_ip:$remote_config_dir" || exit 3
+rsync --progress -rptz -e "ssh $ssh_options" $exp_data_dir/config/* "$master_ip:$remote_config_dir" || exit 3
 
 # Upload analysis scripts and queries to the master
-rsync --progress -rptz -e "ssh $ssh_options" queries scripts "root@$master_ip:$remote_work_dir" || exit 4
+rsync --progress -rptz -e "ssh $ssh_options" queries scripts "$master_ip:$remote_work_dir" || exit 4
 
 # Upload commands to the master
-scp $ssh_options "$exp_data_dir/$local_master_command_file" "root@$master_ip:$remote_master_command_file" || exit 5
+scp $ssh_options "$exp_data_dir/$local_master_command_file" "$master_ip:$remote_master_command_file" || exit 5
 
 # Generate TLS certificates and compile code at the master
-ssh $ssh_options root@$master_ip "
+ssh $ssh_options $master_ip "
   cd $remote_tls_directory &&
   ./generate.sh $master_ip &&
   cd $remote_work_dir &&
@@ -65,14 +65,14 @@ ssh $ssh_options root@$master_ip "
 #  go install ./client" || exit 6
 
 ## Run threshold signature microbenchmark
-#ssh $ssh_options root@$master_ip "
+#ssh $ssh_options $master_ip "
 #  echo 'Running threshold signature microbenchmark.' &&
 #  cd $remote_code_dir/crypto/ &&
 #  go test -bench=TBLS" || exit 7
 
 # Start master server
 echo "Starting result processor and master server."
-ssh $ssh_options root@$master_ip "
+ssh $ssh_options $master_ip "
   ulimit -Sn $open_files_limit &&
   $remote_work_dir/scripts/analyze/analyze-continuously.sh $remote_exp_dir $remote_status_file $remote_work_dir/scripts $remote_work_dir/queries $remote_gopath/bin/orderingpeer $remote_gopath/bin/orderingclient $remote_analysis_processes > $remote_exp_dir/continuous-analysis.log 2>&1 &
   export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
