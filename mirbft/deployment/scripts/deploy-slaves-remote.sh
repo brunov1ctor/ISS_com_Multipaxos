@@ -21,7 +21,7 @@ master_ip=$3
 shift 3
 
 # After deploying slaves, their numbers and tags will be appended here.
-# Each new invocation of remote-deloy-slaves.sh will receive this list as the lat arguments and skip correspondingly
+# Each new invocation of remote-deloy-slaves.sh will receive this list as the last arguments and skip correspondingly
 # many entries in the input.
 skip="skip 0 master" # needs to be initialized with a dummy value for the parameter count to be right
 
@@ -32,7 +32,15 @@ while [ -n "$1" ]; do
   trigger=$1
   n=$2
   tag=$3
-  shift 4 # shifting by one more, because the machine template file (also present in the deploy schedule is ignored).
+  shift 4 # shifting by one more, because the machine template file (also present in the deploy schedule) is ignored.
+
+  # --- PATCH: garantir que trigger é numérico ---
+  # Se trigger não for um número (ex: vazio, com '#', etc.), força 0
+  if ! [[ "$trigger" =~ ^[0-9]+$ ]]; then
+    echo "WARNING: non-numeric trigger '$trigger', forcing 0" >&2
+    trigger=0
+  fi
+  # --- FIM DO PATCH ---
 
   # Wait for trigger
   master_status=$(scripts/remote-machine-status.sh $master_ip)
@@ -46,7 +54,7 @@ while [ -n "$1" ]; do
 
   # Deploy slave nodes.
   echo "Deploying slaves: $n $tag"
-  scripts/start-remote-slaves.sh "$exp_data_dir" "$tag" $n "$master_ip" $skip $(cat $instance_info_file) &
+  scripts/start-remote-slaves.sh "$exp_data_dir" "$tag" $n "$master_ip" $skip $(cat "$instance_info_file") &
 
   skip="$skip skip $n $tag"
 done
@@ -54,3 +62,4 @@ done
 echo "All slaves started. waiting for them to finish."
 wait
 echo "Remote slave deployment finished."
+
