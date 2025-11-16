@@ -22,7 +22,7 @@ echo "Killing everything that is alive and pruning state on the remote machines 
 
 for ip in $(cat $instance_info_file | awk '{print $2}'); do
   # the grep -v \$\$ prevents the script from killing itself
-  ssh $ssh_options root@$ip "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}')" &
+  ssh $ssh_options $ip "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}')" &
   sleep 0.1 # Opening too many SSH connections at once makes some of them fail (keeping many open is OK, however).
 done
 wait
@@ -30,12 +30,12 @@ wait
 echo -e "\nKilled continuous analysis scripts.\n"
 
 for ip in $(cat $instance_info_file | awk '{print $2}'); do
-  ssh $ssh_options root@$ip "
+  ssh $ssh_options $ip "
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync
     rm -rf $remote_delete_files
     echo RUNNING > $remote_status_file
-    kill -9 \$(ps -ef | grep 'sshd: root@notty' | awk '{print \$2}')
+    kill -9 \$(ps -ef | grep 'sshd: notty' | awk '{print \$2}')
     echo -e '\n\n\nBERO\n\n\n'" &
   sleep 0.1 # Opening too many SSH connections at once makes some of them fail (keeping many open is OK, however).
 done
