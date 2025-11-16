@@ -11,7 +11,7 @@ analysis_query_params="-q queries/ethereum.sql -q queries/aggregates.sql -q quer
 private_key_file="$HOME/.ssh/id_ed25519"
 
 # Options to use when communicating with the remote machines.
-ssh_options="-i $private_key_file -o User=Bruno StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
+ssh_options="-i $private_key_file -o User=Bruno -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
 
 # Command to kill children of exiting scripts
 trap_exit_command='{ jobs; if [ -n "$(jobs -p)" ]; then kill $(jobs -p); fi; sleep 0.5; } > /dev/null 2>&1'
@@ -46,7 +46,7 @@ local_master_log=master-log.log
 local_master_status_file=master-status
 local_master_ready_file=master-ready
 local_result_fetching_log=result-fetching.log
-remote_work_dir=/users/Bruno
+remote_work_dir=/users/Bruno/iss
 remote_instance_tag_file=$remote_work_dir/instance-tag
 remote_status_file=$remote_work_dir/status
 remote_ready_file=$remote_work_dir/master-ready
