@@ -66,7 +66,7 @@ scp $ssh_options \
   "$master_ip:$remote_master_command_file" || exit 5
 
 #############################################
-# 4. Gerar TLS e compilar no master         #
+# 4. (Sem run-protoc.sh) compilar direto   #
 #############################################
 
 ssh $ssh_options "$master_ip" "
@@ -80,7 +80,7 @@ ssh $ssh_options "$master_ip" "
   cd \"$remote_work_dir\" &&
   cp -r \"$remote_tls_directory\" . &&
 
-  echo 'Compiling ISS.' &&
+  echo 'Compiling ISS (sem run-protoc.sh, usando *.pb.go existentes).' &&
 
   # Preparar ambiente Go
   export GOPATH=\"$remote_gopath\" &&
@@ -90,9 +90,8 @@ ssh $ssh_options "$master_ip" "
   export GO111MODULE=auto &&
   export GOCACHE=\"$remote_work_dir/.cache/go-build\" &&
 
-  # Compilar protobufs e binários
+  # Compilar binários
   cd \"$remote_code_dir\" &&
-  ./run-protoc.sh &&
   go install ./cmd/...
 " || exit 6
 
