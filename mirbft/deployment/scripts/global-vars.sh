@@ -47,7 +47,7 @@ local_master_ready_file=master-ready
 local_result_fetching_log=result-fetching.log
 
 ###############################################################################
-# Caminhos REMOTOS (adaptados para Emulab / usuário Bruno)
+# Caminhos REMOTOS (Emulab / usuário Bruno)
 ###############################################################################
 
 # Diretório base de trabalho no nó remoto (NFS compartilhado)
@@ -58,7 +58,7 @@ remote_instance_tag_file=$remote_work_dir/instance-tag
 remote_status_file=$remote_work_dir/status
 remote_ready_file=$remote_work_dir/master-ready
 
-# Logs principais AGORA ficam no remote_work_dir (nada em /root)
+# Logs principais ficam no remote_work_dir (nada em /root)
 remote_main_log=$remote_work_dir/main_log.log
 remote_master_log=$remote_work_dir/master-log.log
 remote_slave_log=$remote_work_dir/slave-log.log
@@ -87,7 +87,7 @@ remote_code_dir="$remote_gopath/src/github.com/hyperledger-labs/mirbft"
 # Diretório de configs remotas geradas
 remote_config_dir=$remote_work_dir/experiment-config
 
-# Diretório de certificados TLS
+# Diretório de certificados TLS (dentro do repo mirbft remoto)
 remote_tls_directory="$remote_code_dir/tls-data"
 
 # Arquivos de logs compactados
@@ -120,7 +120,9 @@ user_script_template_master=user-script-master.sh.template
 local_code_dir=".."
 
 # Lista de diretórios/arquivos que serão enviados via rsync para o master.
-# IMPORTANTE: removemos o run-protoc.sh daqui, pois ele não existe em mirbft/.
+# IMPORTANTE:
+#  - removemos o run-protoc.sh (não existe em mirbft/)
+#  - adicionamos multicast (novo pacote do MultiPaxos multicast)
 local_code_files="
 $local_code_dir/announcer
 $local_code_dir/checkpoint
@@ -132,6 +134,7 @@ $local_code_dir/log
 $local_code_dir/manager
 $local_code_dir/membership
 $local_code_dir/messenger
+$local_code_dir/multicast
 $local_code_dir/oldmir
 $local_code_dir/orderer
 $local_code_dir/profiling
