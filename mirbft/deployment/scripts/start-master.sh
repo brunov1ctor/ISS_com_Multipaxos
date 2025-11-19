@@ -8,7 +8,11 @@ trap "$trap_exit_command" EXIT
 exp_data_dir=$1
 master_ip=$2
 
-# Generate final master command file
+###############################################################################
+# 1) Gerar arquivo de comandos do master
+###############################################################################
+
+# Essas variáveis são usadas no master-commands-template.cmd
 export ssh_key_file=$remote_private_key_file
 export own_public_ip=$master_ip
 export master_port
@@ -21,72 +25,90 @@ envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
 
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 
-# ----------------------------------------------------------------------
-# 1) Criar diretórios no master remoto
-# ----------------------------------------------------------------------
-ssh $ssh_options $master_ip "
+###############################################################################
+# 2) Criar diretórios remotos no master
+###############################################################################
+
+ssh $ssh_options "$master_ip" "
   mkdir -p $remote_code_dir &&
   mkdir -p $remote_config_dir &&
   mkdir -p $remote_exp_dir/raw-results &&
-  mkdir -p $remote_gopath/bin
+  mkdir -p $remote_gopath/bin &&
+  mkdir -p $remote_work_dir/scripts &&
+  mkdir -p $remote_work_dir/queries
 " || exit 1
 
-# ----------------------------------------------------------------------
-# 2) Enviar árvore de código, configs, scripts, queries
-# ----------------------------------------------------------------------
-# Código (fonte)
-rsync --progress -rptz -e "ssh $ssh_options" $local_code_files "$master_ip:$remote_code_dir" || exit 2
+###############################################################################
+# 3) Compilar ISS LOCALMENTE (no node-0) usando Go em \$HOME/go-root
+###############################################################################
 
-# Configs geradas
-rsync --progress -rptz -e "ssh $ssh_options" "$exp_data_dir/config/" "$master_ip:$remote_config_dir" || exit 3
-
-# Scripts de análise e queries
-rsync --progress -rptz -e "ssh $ssh_options" queries scripts "$master_ip:$remote_work_dir" || exit 4
-
-# arquivo de comandos do master
-scp $ssh_options "$exp_data_dir/$local_master_command_file" "$master_ip:$remote_master_command_file" || exit 5
-
-# ----------------------------------------------------------------------
-# 3) Gerar certificados TLS no master (usa generate.sh remoto)
-# ----------------------------------------------------------------------
-ssh $ssh_options $master_ip "
-  set -e
-  cd $remote_tls_directory
-  ./generate.sh $master_ip
-" || exit 6
-
-# ----------------------------------------------------------------------
-# 4) Compilar tudo LOCALMENTE (no node-0) e enviar binários para o master
-# ----------------------------------------------------------------------
 echo 'Compiling ISS localmente (Go modules ativados)...'
 
-(
-  cd .. || exit 1
+# Ajusta ambiente de Go LOCAL
+export GOROOT=\"\$HOME/go-root\"
+export GOPATH=\"\$HOME/go\"
+export GOBIN=\"\$GOPATH/bin\"
+export PATH=\"\$GOROOT/bin:\$PATH\"
 
-  # Ajusta ambiente local para compilar o mirbft
-  export GOPATH=\$HOME/go
+(
+  # Ir para a raiz do repositório (.. a partir de deployment/)
+  cd \"$local_code_dir\" || exit 1
+
+  # Garante uso de módulos
   export GO111MODULE=on
 
-  # Garante que dependências estão ok e baixa libs externas (zerolog, grpc, kyber, etc.)
+  # Baixa/atualiza dependências
   go mod tidy
 
-  # Compila todos os binários em cmd/* (discoverymaster, discoveryslave, orderingpeer, orderingclient, etc.)
+  # Instala todos os binários (discoverymaster, discoveryslave, orderingpeer, etc.)
   go install ./cmd/...
-) || exit 7
+) || { echo 'Erro ao compilar ISS localmente'; exit 2; }
 
-echo 'Enviando binários compilados para o master remoto...'
+###############################################################################
+# 4) Enviar código-fonte + binários já compilados para o master
+###############################################################################
 
-# Copia o conteúdo de $HOME/go/bin para o GOPATH remoto
-rsync --progress -rptz -e "ssh $ssh_options" "$HOME/go/bin/" "$master_ip:$remote_gopath/bin/" || exit 8
+# Código-fonte para $remote_code_dir
+rsync --progress -rptz -e "ssh $ssh_options" \
+  $local_code_files "$master_ip:$remote_code_dir" || exit 3
 
-# ----------------------------------------------------------------------
-# 5) Iniciar master no nó remoto
-# ----------------------------------------------------------------------
-echo "Starting result processor and master server."
-ssh $ssh_options $master_ip "
+# Binários compilados (ficam em $GOBIN) para $remote_gopath/bin no master
+rsync --progress -rptz -e "ssh $ssh_options" \
+  "$GOBIN/" "$master_ip:$remote_gopath/bin" || exit 4
+
+# Configuração experimental (configs geradas pelo generate-*-config.sh)
+rsync --progress -rptz -e "ssh $ssh_options" \
+  "$exp_data_dir/config/" "$master_ip:$remote_config_dir" || exit 5
+
+# Scripts de análise e queries SQL
+rsync --progress -rptz -e "ssh $ssh_options" \
+  queries scripts "$master_ip:$remote_work_dir" || exit 6
+
+# Arquivo de comandos do master
+scp $ssh_options \
+  "$exp_data_dir/$local_master_command_file" \
+  "$master_ip:$remote_master_command_file" || exit 7
+
+###############################################################################
+# 5) Gerar certificados TLS NO MASTER (só usa openssl, não usa go)
+###############################################################################
+
+ssh $ssh_options "$master_ip" "
+  cd $remote_tls_directory &&
+  ./generate.sh $master_ip &&
+  cd $remote_work_dir &&
+  cp -r $remote_tls_directory .
+" || exit 8
+
+###############################################################################
+# 6) Iniciar análise contínua + discoverymaster NO MASTER (usando binários)
+###############################################################################
+
+echo 'Starting result processor and master server.'
+ssh $ssh_options "$master_ip" "
   ulimit -Sn $open_files_limit &&
 
-  # Inicia análise contínua em background
+  # análise contínua (usa orderingpeer e orderingclient em $remote_gopath/bin)
   $remote_work_dir/scripts/analyze/analyze-continuously.sh \
     $remote_exp_dir \
     $remote_status_file \
@@ -97,11 +119,9 @@ ssh $ssh_options $master_ip "
     $remote_analysis_processes \
     > $remote_exp_dir/continuous-analysis.log 2>&1 &
 
-  # Coloca binários no PATH
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin
-
-  # Sobe o discoverymaster (coordenador do experimento)
+  # iniciar discoverymaster
+  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
   discoverymaster $master_port file $remote_master_command_file \
     > $remote_master_log 2>&1 < /dev/null
-"
+" || exit 9
 
