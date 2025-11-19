@@ -21,57 +21,67 @@ envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
 
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 
-# Create remote code, config, and experiment directories
+# ----------------------------------------------------------------------
+# 1) Criar diretórios no master remoto
+# ----------------------------------------------------------------------
 ssh $ssh_options $master_ip "
   mkdir -p $remote_code_dir &&
   mkdir -p $remote_config_dir &&
-  mkdir -p $remote_exp_dir/raw-results" || exit 1
+  mkdir -p $remote_exp_dir/raw-results &&
+  mkdir -p $remote_gopath/bin
+" || exit 1
 
-# Upload code to the master
+# ----------------------------------------------------------------------
+# 2) Enviar árvore de código, configs, scripts, queries
+# ----------------------------------------------------------------------
+# Código (fonte)
 rsync --progress -rptz -e "ssh $ssh_options" $local_code_files "$master_ip:$remote_code_dir" || exit 2
 
-# Upload config to the master
-rsync --progress -rptz -e "ssh $ssh_options" $exp_data_dir/config/* "$master_ip:$remote_config_dir" || exit 3
+# Configs geradas
+rsync --progress -rptz -e "ssh $ssh_options" "$exp_data_dir/config/" "$master_ip:$remote_config_dir" || exit 3
 
-# Upload analysis scripts and queries to the master
+# Scripts de análise e queries
 rsync --progress -rptz -e "ssh $ssh_options" queries scripts "$master_ip:$remote_work_dir" || exit 4
 
-# Upload commands to the master
+# arquivo de comandos do master
 scp $ssh_options "$exp_data_dir/$local_master_command_file" "$master_ip:$remote_master_command_file" || exit 5
 
-# Generate TLS certificates and compile code at the master
+# ----------------------------------------------------------------------
+# 3) Gerar certificados TLS no master (usa generate.sh remoto)
+# ----------------------------------------------------------------------
 ssh $ssh_options $master_ip "
   set -e
-
-  cd $remote_tls_directory &&
-  ./generate.sh $master_ip &&
-  cd $remote_work_dir &&
-  cp -r $remote_tls_directory . &&
-
-  echo 'Compiling ISS (Go modules ativados).' &&
-
-  # PATH precisa incluir o bin do Go e o bin do usuário
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin
-
-  # GOPATH para cache de módulos (pkg/mod) e binários
-  export GOPATH=$remote_gopath
-
-  # Usar Go modules explicitamente
-  export GO111MODULE=on
-
-  # Cache de compilação em diretório acessível ao usuário Bruno
-  export GOCACHE=/users/Bruno/.cache/go-build
-
-  cd $remote_code_dir &&
-
-  # Garante que go.sum/go.mod estão coerentes e baixa dependências
-  go mod tidy &&
-
-  # Compila todos os binários necessários (discoverymaster, discoveryslave, orderingpeer, orderingclient, etc.)
-  go install ./cmd/...
+  cd $remote_tls_directory
+  ./generate.sh $master_ip
 " || exit 6
 
-# Start master server
+# ----------------------------------------------------------------------
+# 4) Compilar tudo LOCALMENTE (no node-0) e enviar binários para o master
+# ----------------------------------------------------------------------
+echo 'Compiling ISS localmente (Go modules ativados)...'
+
+(
+  cd .. || exit 1
+
+  # Ajusta ambiente local para compilar o mirbft
+  export GOPATH=\$HOME/go
+  export GO111MODULE=on
+
+  # Garante que dependências estão ok e baixa libs externas (zerolog, grpc, kyber, etc.)
+  go mod tidy
+
+  # Compila todos os binários em cmd/* (discoverymaster, discoveryslave, orderingpeer, orderingclient, etc.)
+  go install ./cmd/...
+) || exit 7
+
+echo 'Enviando binários compilados para o master remoto...'
+
+# Copia o conteúdo de $HOME/go/bin para o GOPATH remoto
+rsync --progress -rptz -e "ssh $ssh_options" "$HOME/go/bin/" "$master_ip:$remote_gopath/bin/" || exit 8
+
+# ----------------------------------------------------------------------
+# 5) Iniciar master no nó remoto
+# ----------------------------------------------------------------------
 echo "Starting result processor and master server."
 ssh $ssh_options $master_ip "
   ulimit -Sn $open_files_limit &&
@@ -87,9 +97,11 @@ ssh $ssh_options $master_ip "
     $remote_analysis_processes \
     > $remote_exp_dir/continuous-analysis.log 2>&1 &
 
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
+  # Coloca binários no PATH
+  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin
 
-  # Sobe o discoverymaster (master do experimento)
+  # Sobe o discoverymaster (coordenador do experimento)
   discoverymaster $master_port file $remote_master_command_file \
     > $remote_master_log 2>&1 < /dev/null
 "
+
