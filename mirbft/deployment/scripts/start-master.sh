@@ -2,13 +2,15 @@
 
 source scripts/global-vars.sh
 
-# Kill all children of this script when exiting
 trap "$trap_exit_command" EXIT
 
 exp_data_dir=$1
 master_ip=$2
 
-# Generate final master command file
+###############################################################################
+# Gerar master-commands.cmd
+###############################################################################
+
 export ssh_key_file=$remote_private_key_file
 export own_public_ip=$master_ip
 export master_port
@@ -22,7 +24,7 @@ envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 
 ###############################################################################
-# Criar diretórios remotos do experimento no MASTER
+# Criar diretórios remotos
 ###############################################################################
 
 ssh $ssh_options "$master_ip" "
@@ -32,7 +34,7 @@ ssh $ssh_options "$master_ip" "
 " || exit 1
 
 ###############################################################################
-# Enviar código para o MASTER
+# Copiar código
 ###############################################################################
 
 rsync --progress -rptz -e "ssh $ssh_options" \
@@ -40,32 +42,31 @@ rsync --progress -rptz -e "ssh $ssh_options" \
   "$master_ip:$remote_code_dir" || exit 2
 
 ###############################################################################
-# Enviar configs
+# Copiar configs
 ###############################################################################
 
 rsync --progress -rptz -e "ssh $ssh_options" \
-  "$exp_data_dir/config/"* \
-  "$master_ip:$remote_config_dir" || exit 3
+  \"$exp_data_dir/config/\"* \
+  \"$master_ip:$remote_config_dir\" || exit 3
 
 ###############################################################################
-# Enviar scripts de análise e queries
+# Copiar scripts e queries
 ###############################################################################
 
 rsync --progress -rptz -e "ssh $ssh_options" \
   queries scripts \
-  "$master_ip:$remote_work_dir" || exit 4
+  \"$master_ip:$remote_work_dir\" || exit 4
 
 ###############################################################################
-# Enviar master-commands.cmd
+# Copiar master-commands.cmd
 ###############################################################################
 
 scp $ssh_options \
-  "$exp_data_dir/$local_master_command_file" \
-  "$master_ip:$remote_master_command_file" || exit 5
+  \"$exp_data_dir/$local_master_command_file\" \
+  \"$master_ip:$remote_master_command_file\" || exit 5
 
 ###############################################################################
-# Gerar TLS e Compilar ISS no MASTER
-# (REMOVIDO run-protoc.sh porque os pb.go já estão no repositório)
+# Gerar TLS e Compilar ISS (sem protoc)
 ###############################################################################
 
 ssh $ssh_options "$master_ip" "
@@ -88,25 +89,26 @@ ssh $ssh_options "$master_ip" "
 " || exit 6
 
 ###############################################################################
-# Iniciar processador contínuo + master
+# Iniciar servidor master
 ###############################################################################
 
-echo "Starting result processor and master server."
-ssh $ssh_options "$master_ip" "
+echo \"Starting result processor and master server.\"
+
+ssh $ssh_options \"$master_ip\" \"
   ulimit -Sn $open_files_limit &&
-  export PATH=\"\$PATH:$remote_gopath/bin:$remote_work_dir/bin\" &&
+  export PATH=\\\"\$PATH:$remote_gopath/bin:$remote_work_dir/bin\\\" &&
 
-  \"$remote_work_dir/scripts/analyze/analyze-continuously.sh\" \
-    \"$remote_exp_dir\" \
-    \"$remote_status_file\" \
-    \"$remote_work_dir/scripts\" \
-    \"$remote_work_dir/queries\" \
-    \"$remote_gopath/bin/orderingpeer\" \
-    \"$remote_gopath/bin/orderingclient\" \
+  $remote_work_dir/scripts/analyze/analyze-continuously.sh \
+    $remote_exp_dir \
+    $remote_status_file \
+    $remote_work_dir/scripts \
+    $remote_work_dir/queries \
+    $remote_gopath/bin/orderingpeer \
+    $remote_gopath/bin/orderingclient \
     $remote_analysis_processes \
-    > \"$remote_exp_dir/continuous-analysis.log\" 2>&1 &
+    > $remote_exp_dir/continuous-analysis.log 2>&1 &
 
-  discoverymaster $master_port file \"$remote_master_command_file\" \
-    > \"$remote_master_log\" 2>&1 < /dev/null
-"
+  discoverymaster $master_port file $remote_master_command_file \
+    > $remote_master_log 2>&1 < /dev/null
+\"
 
