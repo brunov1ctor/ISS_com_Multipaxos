@@ -23,7 +23,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240604185151-ef581f913117 // indirect
 )
 
-replace github.com/hyperledger-labs/mirbft => .
-
-replace github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft => .
+replace github.com/hyperledger-labs/mirbft => /tmp/ISS_com_Multipaxos/mirbft
+replace github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft => /tmp/ISS_com_Multipaxos/mirbft
 
