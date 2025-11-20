@@ -106,7 +106,6 @@ user_script_template_slave=user-script-slave.sh.template
 user_script_template_master=user-script-master.sh.template
 
 local_code_dir=".."
-
 local_code_files="
 $local_code_dir/announcer
 $local_code_dir/checkpoint
@@ -129,5 +128,6 @@ $local_code_dir/tracing
 $local_code_dir/util
 $local_code_dir/validator
 $local_code_dir/multicast
-"
+$local_code_dir/go.mod
+$local_code_dir/go.sum"
 
