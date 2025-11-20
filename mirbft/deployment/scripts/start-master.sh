@@ -2,6 +2,7 @@
 
 source scripts/global-vars.sh
 
+# Kill all children of this script when exiting
 trap "$trap_exit_command" EXIT
 
 exp_data_dir=$1
@@ -24,7 +25,7 @@ envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 
 ###############################################################################
-# Criar diretórios remotos
+# Criar diretórios remotos no MASTER
 ###############################################################################
 
 ssh $ssh_options "$master_ip" "
@@ -34,7 +35,7 @@ ssh $ssh_options "$master_ip" "
 " || exit 1
 
 ###############################################################################
-# Copiar código
+# Enviar código para o MASTER
 ###############################################################################
 
 rsync --progress -rptz -e "ssh $ssh_options" \
@@ -42,31 +43,32 @@ rsync --progress -rptz -e "ssh $ssh_options" \
   "$master_ip:$remote_code_dir" || exit 2
 
 ###############################################################################
-# Copiar configs
+# Enviar configs
 ###############################################################################
 
 rsync --progress -rptz -e "ssh $ssh_options" \
-  \"$exp_data_dir/config/\"* \
-  \"$master_ip:$remote_config_dir\" || exit 3
+  "$exp_data_dir/config/"* \
+  "$master_ip:$remote_config_dir" || exit 3
 
 ###############################################################################
-# Copiar scripts e queries
+# Enviar scripts de análise e queries
 ###############################################################################
 
 rsync --progress -rptz -e "ssh $ssh_options" \
   queries scripts \
-  \"$master_ip:$remote_work_dir\" || exit 4
+  "$master_ip:$remote_work_dir" || exit 4
 
 ###############################################################################
-# Copiar master-commands.cmd
+# Enviar master-commands.cmd
 ###############################################################################
 
 scp $ssh_options \
-  \"$exp_data_dir/$local_master_command_file\" \
-  \"$master_ip:$remote_master_command_file\" || exit 5
+  "$exp_data_dir/$local_master_command_file" \
+  "$master_ip:$remote_master_command_file" || exit 5
 
 ###############################################################################
-# Gerar TLS e Compilar ISS (sem protoc)
+# Gerar TLS e Compilar ISS no MASTER
+# (sem run-protoc.sh, usando os .pb.go já no repo)
 ###############################################################################
 
 ssh $ssh_options "$master_ip" "
@@ -89,26 +91,25 @@ ssh $ssh_options "$master_ip" "
 " || exit 6
 
 ###############################################################################
-# Iniciar servidor master
+# Iniciar processador contínuo + master
 ###############################################################################
 
-echo \"Starting result processor and master server.\"
-
-ssh $ssh_options \"$master_ip\" \"
+echo "Starting result processor and master server."
+ssh $ssh_options "$master_ip" "
   ulimit -Sn $open_files_limit &&
-  export PATH=\\\"\$PATH:$remote_gopath/bin:$remote_work_dir/bin\\\" &&
+  export PATH=\"\$PATH:$remote_gopath/bin:$remote_work_dir/bin\" &&
 
-  $remote_work_dir/scripts/analyze/analyze-continuously.sh \
-    $remote_exp_dir \
-    $remote_status_file \
-    $remote_work_dir/scripts \
-    $remote_work_dir/queries \
-    $remote_gopath/bin/orderingpeer \
-    $remote_gopath/bin/orderingclient \
+  \"$remote_work_dir/scripts/analyze/analyze-continuously.sh\" \
+    \"$remote_exp_dir\" \
+    \"$remote_status_file\" \
+    \"$remote_work_dir/scripts\" \
+    \"$remote_work_dir/queries\" \
+    \"$remote_gopath/bin/orderingpeer\" \
+    \"$remote_gopath/bin/orderingclient\" \
     $remote_analysis_processes \
-    > $remote_exp_dir/continuous-analysis.log 2>&1 &
+    > \"$remote_exp_dir/continuous-analysis.log\" 2>&1 &
 
-  discoverymaster $master_port file $remote_master_command_file \
-    > $remote_master_log 2>&1 < /dev/null
-\"
+  discoverymaster $master_port file \"$remote_master_command_file\" \
+    > \"$remote_master_log\" 2>&1 < /dev/null
+"
 
