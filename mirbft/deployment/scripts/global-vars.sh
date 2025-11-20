@@ -154,5 +154,7 @@ $local_code_dir/statetransfer
 $local_code_dir/tls-data
 $local_code_dir/tracing
 $local_code_dir/util
-$local_code_dir/validator"
+$local_code_dir/validator
+$local_code_dir/multicast
+$local_code_dir/run-protoc.sh"
 

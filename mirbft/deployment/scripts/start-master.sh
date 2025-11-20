@@ -8,10 +8,7 @@ trap "$trap_exit_command" EXIT
 exp_data_dir=$1
 master_ip=$2
 
-# ------------------------------------------------------------------------------
-# Gerar arquivo de comandos do master (master-commands.cmd) via envsubst
-# ------------------------------------------------------------------------------
-
+# Generate final master command file
 export ssh_key_file=$remote_private_key_file
 export own_public_ip=$master_ip
 export master_port
@@ -26,14 +23,12 @@ echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command
 
 # ------------------------------------------------------------------------------
 # Criar diretórios remotos de código, config e experimentos no MASTER
-# (usando usuário Bruno, compatível com /users/Bruno/iss e /users/Bruno/go)
 # ------------------------------------------------------------------------------
 
 ssh $ssh_options "$master_ip" "
   mkdir -p \"$remote_code_dir\" &&
   mkdir -p \"$remote_config_dir\" &&
-  mkdir -p \"$remote_exp_dir/raw-results\" &&
-  mkdir -p \"$remote_work_dir/.cache/go-build\"
+  mkdir -p \"$remote_exp_dir/raw-results\"
 " || exit 1
 
 # ------------------------------------------------------------------------------
@@ -84,11 +79,18 @@ ssh $ssh_options "$master_ip" "
   echo 'Compiling ISS.' &&
   export PATH=\"\$PATH:$remote_gopath/bin:$remote_work_dir/bin\" &&
   export GOPATH=\"$remote_gopath\" &&
-  # Ajuste para Go novo
-  export GO111MODULE=auto &&
+  export GO111MODULE=off &&
   export GOCACHE=\"$remote_work_dir/.cache/go-build\" &&
 
   cd \"$remote_code_dir\" &&
+
+  # Baixar dependências externas no GOPATH
+  go get ./... &&
+
+  # Gerar arquivos protobuf
+  ./run-protoc.sh &&
+
+  # Instalar os binários (discoverymaster, discoveryslave, orderingpeer, orderingclient, etc.)
   go install ./cmd/...
 " || exit 6
 
@@ -112,7 +114,7 @@ ssh $ssh_options "$master_ip" "
     $remote_analysis_processes \
     > \"$remote_exp_dir/continuous-analysis.log\" 2>&1 &
 
-  # master discovery
+  # master
   discoverymaster $master_port file \"$remote_master_command_file\" \
     > \"$remote_master_log\" 2>&1 < /dev/null
 "
