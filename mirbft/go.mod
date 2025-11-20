@@ -1,8 +1,6 @@
 module github.com/hyperledger-labs/mirbft
 
-go 1.21
-
-toolchain go1.23.1
+go 1.18
 
 require (
 	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8
@@ -25,6 +23,8 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240604185151-ef581f913117 // indirect
 )
 
-replace github.com/hyperledger-labs/mirbft => .
+# IMPORTANTÍSSIMO:
+# No Emulab, o deploy copia PARA DENTRO de $remote_code_dir.
+# Portanto o replace correto é exatamente ESSE:
+replace github.com/hyperledger-labs/mirbft => ./
 
-replace github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft => .
