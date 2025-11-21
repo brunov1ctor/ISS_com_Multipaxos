@@ -109,7 +109,7 @@ ssh $ssh_options "$master_ip" "
     $remote_analysis_processes \
     > \"$remote_exp_dir/continuous-analysis.log\" 2>&1 &
 
-  discoverymaster $master_port file \"$remote_master_command_file\" \
+  \"$remote_gopath/bin/discoverymaster\" $master_port file \"$remote_master_command_file\" \
     > \"$remote_master_log\" 2>&1 < /dev/null
 "
 
