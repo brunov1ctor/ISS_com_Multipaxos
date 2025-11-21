@@ -15,8 +15,8 @@ analysis_query_params="-q queries/ethereum.sql -q queries/aggregates.sql -q quer
 ###############################################################################
 # SSH
 ###############################################################################
-
-private_key_file="$HOME/.ssh/id_ed25519_emulab"
+# Usar a chave privada correta instalada no Emulab
+private_key_file="$HOME/.ssh/id_ed25519"
 
 ssh_options="-i $private_key_file -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
 
@@ -63,7 +63,7 @@ remote_main_log="$remote_work_dir/main_log.log"
 remote_master_log="$remote_work_dir/master-log.log"
 remote_slave_log="$remote_work_dir/slave-log.log"
 
-remote_private_key_file="$remote_work_dir/ibmcloud-ssh-key"
+remote_private_key_file="$private_key_file"
 
 remote_instance_detail_file="$remote_work_dir/instance-detail.json"
 remote_user_script_body="$remote_work_dir/user-script-body.sh"
@@ -98,7 +98,7 @@ oldmir_git_branch=mir
 oldmir_git_directory=sbft
 
 ###############################################################################
-# QUÉ VAI PARA O MASTER E SLAVES
+# ARQUIVOS PARA MASTER E SLAVES
 ###############################################################################
 
 server_bootstrap_script=server-bootstrap-script.sh
