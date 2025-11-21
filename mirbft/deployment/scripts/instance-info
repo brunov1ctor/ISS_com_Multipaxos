@@ -4,5 +4,5 @@ node-2    172.19.135.3    10.10.1.3    slave     peers
 node-3    172.19.135.4    10.10.1.4    slave     peers
 node-4    172.19.135.5    10.10.1.5    slave     peers
 node-5    172.19.135.6    10.10.1.6    slave     peers
-node-6    172.19.135.7    10.10.1.7    slave     16clients
+node-6    172.19.135.7    10.10.1.7    slave     1clients
 
