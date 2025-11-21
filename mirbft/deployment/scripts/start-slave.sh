@@ -32,19 +32,12 @@ slave_command="
 
 echo "Setting up slave: $public_ip ($private_ip)"
 
-# Periodically check slave status and wait until it is running.
-slave_status=$(scripts/remote-machine-status.sh $public_ip)
-echo "Slave status ($public_ip): $slave_status"
-while ! [[ "$slave_status" = "RUNNING" ]]; do
-  # Sleep a bit and obtain new status.
-  sleep $machine_status_poll_period
-  slave_status=$(scripts/remote-machine-status.sh $public_ip)
-  echo "Slave status: $slave_status"
-done
+# Emulab: assumimos que o nó já está operacional.
+echo "Assumindo que o slave $public_ip já está RUNNING (Emulab, sem remote_status_file)."
 
 # Wait until master server is ready.
 # This needs to happen before initialization of the slave, as the master needs to prepare files (e.g. code binaries)
-# That the slave downloads during initialization.
+# that the slave downloads during initialization.
 echo "Waiting for master server."
 while ! ssh $ssh_options -q -o "ConnectTimeout=10" "$master_ip" "cat $remote_ready_file > /dev/null"; do
   sleep $machine_status_poll_period
@@ -53,7 +46,7 @@ done
 
 # Initialize slave.
 # Retrying introduced because sometimes, when many instances of this script are run in parallel,
-# The ssh command fails with "connection reset by peer" or similar error.
+# the ssh command fails with "connection reset by peer" or similar error.
 while ! ssh $ssh_options $public_ip "$init_command"; do
   sleep 1
   echo "Retrying to initialize slave."
@@ -61,3 +54,4 @@ done
 
 echo "Master ready. Starting slave process."
 ssh $ssh_options $public_ip "$slave_command"
+
