@@ -15,10 +15,9 @@ analysis_query_params="-q queries/ethereum.sql -q queries/aggregates.sql -q quer
 ###############################################################################
 # SSH
 ###############################################################################
-# Usar a chave privada correta instalada no Emulab
-private_key_file="$HOME/.ssh/id_ed25519"
-
-ssh_options="-i $private_key_file -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
+# Aqui NÃO usamos -i, pois o Emulab já gerencia as chaves internas automaticamente.
+# Isso permite que o SSH use a chave privada local criada pelo Emulab (node-0).
+ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
 
 trap_exit_command='{ jobs; if [ -n "$(jobs -p)" ]; then kill $(jobs -p); fi; sleep 0.5; } > /dev/null 2>&1'
 
@@ -63,7 +62,8 @@ remote_main_log="$remote_work_dir/main_log.log"
 remote_master_log="$remote_work_dir/master-log.log"
 remote_slave_log="$remote_work_dir/slave-log.log"
 
-remote_private_key_file="$private_key_file"
+# Arquivo de chave privada usado remotamente (não precisa existir localmente)
+remote_private_key_file=""
 
 remote_instance_detail_file="$remote_work_dir/instance-detail.json"
 remote_user_script_body="$remote_work_dir/user-script-body.sh"
