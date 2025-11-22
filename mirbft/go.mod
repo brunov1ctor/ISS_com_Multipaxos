@@ -1,6 +1,8 @@
 module github.com/hyperledger-labs/mirbft
 
-go 1.18
+go 1.21
+
+toolchain go1.23.1
 
 require (
 	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8
@@ -24,5 +26,5 @@ require (
 )
 
 replace github.com/hyperledger-labs/mirbft => /tmp/ISS_com_Multipaxos/mirbft
-replace github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft => /tmp/ISS_com_Multipaxos/mirbft
 
+replace github.com/hyperledger-labs/ISS_com_Multipaxos/mirbft => /tmp/ISS_com_Multipaxos/mirbft

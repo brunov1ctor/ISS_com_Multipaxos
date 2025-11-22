@@ -30,27 +30,25 @@
 # tor05 dal13
 #
 
-
 # Deployment setup
+# NOTE: this section is not meaningful for the local deployment, but the scripts try to read those parameters so it has to be here.
 machineType="cloud-machine-templates/small-machine"
 machineLocations="fra05"
-faultyMachineLocations="fra05"
-#machineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 dal10 fra05 mil01 mex01 tor01 tor04 seo01"
-#faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 dal10 fra05 mil01 mex01 tor01 tor04 seo01"
+faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 dal10 fra05 mil01 mex01 tor01 tor04 seo01"
 
 # number of client instances per node for 1/16/32 client machines
 clients1="1"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
-systemSizes="4" # Must be sorted in ascending order!
-failureCounts=(0) # For each system size, the corresponding failure count (on top of the correct nodes)
+systemSizes="4" #"4 16 64 128"  Must be sorted in ascending order!
+failureCounts=(0 0 0 0) # For each system size, the corresponding failure count (on top of the correct nodes)
 reuseFaulty=true  # If true, both correct and faulty peers will have the same tag and will be launched together, with the same config file.
                   # The failure count is only expressed as a parameter in (every peer's) config file, and even the faulty peers will see
                   # Faulty=false in their config file. They need to derive their behavior from the Failures config field (and potentially
                   # the RandomSeed field).
 
 # Low-level system parameters
-loggingLevel="info"
+loggingLevel="debug" #"info"
 peerTag="peers"
 faultyPeerTag="faultyPeers"
 minConcurrentRequests=$((256 * 16384)) # Based on empirical data. At saturation, makes the throughput-latency plot nicely go up (as it is equivalent to may concurrent clients).
@@ -64,12 +62,12 @@ throughputCap=131072000     # The system will always be proposing requests at a 
                             # Used to prevent view changes when too many batches accumulate in a bucket.
 
 # System composition
-orderers="Pbft"             # Possible values: Pbft HotStuff Raft Dummy
+orderers="MultiPaxosMulticast"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
 checkpointers="Signing"
 
 # Parameters chosen for experiments
-durations="30"            # [s]   !!! Don't forget to change the timeout in generate-master-commands.py if increasing this value !!!
-bandwidths="1gbit"         # any value accepted by the tc command or "unlimited" !!! ATTENTION: Adapt MaxProposeDataRate in config accordingly !!!
+durations="30"             # [s]   !!! Don't forget to change the timeout in generate-master-commands.py if increasing this value !!!
+bandwidths="unlimited" #"1gbit"         # any value accepted by the tc command or "unlimited" !!! ATTENTION: Adapt MaxProposeDataRate in config accordingly !!!
 payloadSizes="500"         # [Bytes]
 fixedEpochLength=false
 auths="true"
@@ -111,20 +109,14 @@ function skip() {
   return 1
 }
 
-# Target throughput
-# The name of the variables below correspond to:
-#       orderer configuration ("Pbft", "HotStuff", "Raft")
-#       cient authentication configuration (true -> "Auth", false -> "NoAuth"
-#       leader policy ("Single" -> "Single", other -> "")
-# An expriment will be run for specified target throughput, for each configuration parameters combination
-# If left empty, no experiments will run
 throughputsAuthPbft=$()
-throughputsAuthPbft[4]="1024 2048 4096"
+throughputsAuthPbft[4]="128 256"
 throughputsAuthPbft[8]=""
-throughputsAuthPbft[16]=""
+throughputsAuthPbft[16]="128 256"
 throughputsAuthPbft[32]=""
-throughputsAuthPbft[64]=""
-throughputsAuthPbft[128]=""
+throughputsAuthPbft[64]="128 256"
+throughputsAuthPbft[128]="128 256"
+
 throughputsNoAuthPbft=$()
 throughputsNoAuthPbft[4]=""
 throughputsNoAuthPbft[8]=""
@@ -132,13 +124,15 @@ throughputsNoAuthPbft[16]=""
 throughputsNoAuthPbft[32]=""
 throughputsNoAuthPbft[64]=""
 throughputsNoAuthPbft[128]=""
+
 throughputsAuthSinglePbft=$()
-throughputsAuthSinglePbft[4]="1024 2048 4096"
+throughputsAuthSinglePbft[4]="128 256"
 throughputsAuthSinglePbft[8]=""
-throughputsAuthSinglePbft[16]=""
+throughputsAuthSinglePbft[16]="128 256"
 throughputsAuthSinglePbft[32]=""
-throughputsAuthSinglePbft[64]=""
-throughputsAuthSinglePbft[128]=""
+throughputsAuthSinglePbft[64]="128 256"
+throughputsAuthSinglePbft[128]="128 256"
+
 throughputsNoAuthSinglePbft=$()
 throughputsNoAuthSinglePbft[4]=""
 throughputsNoAuthSinglePbft[8]=""
@@ -148,12 +142,13 @@ throughputsNoAuthSinglePbft[64]=""
 throughputsNoAuthSinglePbft[128]=""
 
 throughputsAuthHotStuff=$()
-throughputsAuthHotStuff[4]=""
+throughputsAuthHotStuff[4]="128 256"
 throughputsAuthHotStuff[8]=""
-throughputsAuthHotStuff[16]=""
+throughputsAuthHotStuff[16]="128 256"
 throughputsAuthHotStuff[32]=""
-throughputsAuthHotStuff[64]=""
-throughputsAuthHotStuff[128]=""
+throughputsAuthHotStuff[64]="128 256"
+throughputsAuthHotStuff[128]="128 256"
+
 throughputsNoAuthHotStuff=$()
 throughputsNoAuthHotStuff[4]=""
 throughputsNoAuthHotStuff[8]=""
@@ -161,13 +156,15 @@ throughputsNoAuthHotStuff[16]=""
 throughputsNoAuthHotStuff[32]=""
 throughputsNoAuthHotStuff[64]=""
 throughputsNoAuthHotStuff[128]=""
+
 throughputsAuthSingleHotStuff=$()
-throughputsAuthSingleHotStuff[4]=""
+throughputsAuthSingleHotStuff[4]="128 256"
 throughputsAuthSingleHotStuff[8]=""
-throughputsAuthSingleHotStuff[16]=""
+throughputsAuthSingleHotStuff[16]="128 256"
 throughputsAuthSingleHotStuff[32]=""
-throughputsAuthSingleHotStuff[64]=""
-throughputsAuthSingleHotStuff[128]=""
+throughputsAuthSingleHotStuff[64]="128 256"
+throughputsAuthSingleHotStuff[128]="128 256"
+
 throughputsNoAuthSingleHotStuff=$()
 throughputsNoAuthSingleHotStuff[4]=""
 throughputsNoAuthSingleHotStuff[8]=""
@@ -177,12 +174,13 @@ throughputsNoAuthSingleHotStuff[64]=""
 throughputsNoAuthSingleHotStuff[128]=""
 
 throughputsAuthRaft=$()
-throughputsAuthRaft[4]=""
+throughputsAuthRaft[4]="128 256"
 throughputsAuthRaft[8]=""
-throughputsAuthRaft[16]=""
+throughputsAuthRaft[16]="128 256"
 throughputsAuthRaft[32]=""
-throughputsAuthRaft[64]=""
-throughputsAuthRaft[128]=""
+throughputsAuthRaft[64]="128 256"
+throughputsAuthRaft[128]="128 256"
+
 throughputsNoAuthRaft=$()
 throughputsNoAuthRaft[4]=""
 throughputsNoAuthRaft[8]=""
@@ -190,13 +188,15 @@ throughputsNoAuthRaft[16]=""
 throughputsNoAuthRaft[32]=""
 throughputsNoAuthRaft[64]=""
 throughputsNoAuthRaft[128]=""
+
 throughputsAuthSingleRaft=$()
-throughputsAuthSingleRaft[4]=""
+throughputsAuthSingleRaft[4]="128 256"
 throughputsAuthSingleRaft[8]=""
-throughputsAuthSingleRaft[16]=""
+throughputsAuthSingleRaft[16]="128 256"
 throughputsAuthSingleRaft[32]=""
-throughputsAuthSingleRaft[64]=""
-throughputsAuthSingleRaft[128]=""
+throughputsAuthSingleRaft[64]="128 256"
+throughputsAuthSingleRaft[128]="128 256"
+
 throughputsNoAuthSingleRaft=$()
 throughputsNoAuthSingleRaft[4]=""
 throughputsNoAuthSingleRaft[8]=""
@@ -204,6 +204,39 @@ throughputsNoAuthSingleRaft[16]=""
 throughputsNoAuthSingleRaft[32]=""
 throughputsNoAuthSingleRaft[64]=""
 throughputsNoAuthSingleRaft[128]=""
+
+# ===== MultiPaxos throughput profiles =====
+throughputsAuthMultiPaxos=$()
+throughputsAuthMultiPaxos[4]="128 256"
+throughputsAuthMultiPaxos[8]=""
+throughputsAuthMultiPaxos[16]="128 256"
+throughputsAuthMultiPaxos[32]=""
+throughputsAuthMultiPaxos[64]="128 256"
+throughputsAuthMultiPaxos[128]="128 256"
+
+throughputsNoAuthMultiPaxos=$()
+throughputsNoAuthMultiPaxos[4]=""
+throughputsNoAuthMultiPaxos[8]=""
+throughputsNoAuthMultiPaxos[16]=""
+throughputsNoAuthMultiPaxos[32]=""
+throughputsNoAuthMultiPaxos[64]=""
+throughputsNoAuthMultiPaxos[128]=""
+
+throughputsAuthSingleMultiPaxos=$()
+throughputsAuthSingleMultiPaxos[4]="128 256"
+throughputsAuthSingleMultiPaxos[8]=""
+throughputsAuthSingleMultiPaxos[16]="128 256"
+throughputsAuthSingleMultiPaxos[32]=""
+throughputsAuthSingleMultiPaxos[64]="128 256"
+throughputsAuthSingleMultiPaxos[128]="128 256"
+
+throughputsNoAuthSingleMultiPaxos=$()
+throughputsNoAuthSingleMultiPaxos[4]=""
+throughputsNoAuthSingleMultiPaxos[8]=""
+throughputsNoAuthSingleMultiPaxos[16]=""
+throughputsNoAuthSingleMultiPaxos[32]=""
+throughputsNoAuthSingleMultiPaxos[64]=""
+throughputsNoAuthSingleMultiPaxos[128]=""
 
 # "Round" throughput values:
 # 8192 16384 32768 49152
@@ -450,6 +483,19 @@ function generateCombinations() {
                                                     else
                                                       throughputs=${throughputsAuthRaft[$numPeers]}
                                                     fi
+                                                  elif [ "$orderer" = "MultiPaxos" ]; then
+                                                    if [ $leaderPolicy = "Single" ]; then
+                                                      throughputs=${throughputsAuthSingleMultiPaxos[$numPeers]}
+                                                    else
+                                                      throughputs=${throughputsAuthMultiPaxos[$numPeers]}
+                                                    fi
+                                                  elif [ "$orderer" = "MultiPaxosMulticast" ]; then
+                                                    # === NOVO: use os mesmos perfis do MultiPaxos para o Multicast ===
+                                                    if [ $leaderPolicy = "Single" ]; then
+                                                      throughputs=${throughputsAuthSingleMultiPaxos[$numPeers]}
+                                                    else
+                                                      throughputs=${throughputsAuthMultiPaxos[$numPeers]}
+                                                    fi
                                                   fi
                                                   for thr in $throughputs; do
                                                     if ! skip; then
@@ -477,6 +523,19 @@ function generateCombinations() {
                                                     throughputs=${throughputsNoAuthSingleRaft[$numPeers]}
                                                   else
                                                     throughputs=${throughputsNoAuthRaft[$numPeers]}
+                                                  fi
+                                                elif [ "$orderer" = "MultiPaxos" ]; then
+                                                  if [ $leaderPolicy = "Single" ]; then
+                                                    throughputs=${throughputsNoAuthSingleMultiPaxos[$numPeers]}
+                                                  else
+                                                    throughputs=${throughputsNoAuthMultiPaxos[$numPeers]}
+                                                  fi
+                                                elif [ "$orderer" = "MultiPaxosMulticast" ]; then
+                                                  # === NOVO: use os mesmos perfis do MultiPaxos para o Multicast ===
+                                                  if [ $leaderPolicy = "Single" ]; then
+                                                    throughputs=${throughputsNoAuthSingleMultiPaxos[$numPeers]}
+                                                  else
+                                                    throughputs=${throughputsNoAuthMultiPaxos[$numPeers]}
                                                   fi
                                                 fi
                                                 for thr in $throughputs; do
