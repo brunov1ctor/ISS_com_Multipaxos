@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script de inicialização do slave (peer ou client) para o ISS no Emulab.
-
+#
 # Parâmetros:
 #   $1 = TAG         (ex.: "peers", "1client")
 #   $2 = MASTER_IP   (ex.: 172.19.135.1)
@@ -24,7 +24,7 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
-# Redireciona stdout/stderr para o log
+# Garante que o diretório existe e redireciona stdout/stderr para o log
 mkdir -p "$BASE_DIR" 2>/dev/null
 exec >>"$LOG_FILE" 2>&1
 
@@ -32,7 +32,7 @@ log "==============================================="
 log "Iniciando start-slave.sh"
 log "TAG=$TAG MASTER_IP=$MASTER_IP PUBLIC_IP=$PUBLIC_IP PRIVATE_IP=$PRIVATE_IP"
 
-# Arquivo de status
+# Arquivo de status (peers usa status-peers, resto usa status)
 if [ "$TAG" = "peers" ]; then
   STATUS_FILE="$BASE_DIR/status-peers"
 else
@@ -54,10 +54,11 @@ log "Marcando STATUS=0 em $STATUS_FILE"
 export GOPATH="/users/Bruno/go"
 
 # Adiciona:
-#   - $GOPATH/bin         (onde ficam os binários Go instalados)
-#   - /usr/local/go/bin   (caso necessário)
-#   - diretório dos scripts de deployment (p/ stubborn-scp.sh)
-export PATH="$GOPATH/bin:/usr/local/go/bin:/users/Bruno/go/src/github.com/hyperledger-labs/mirbft/deployment/scripts:$PATH"
+#   - $GOPATH/bin                   (binários go instalados)
+#   - /usr/local/go/bin             (caso necessário)
+#   - $BASE_DIR/scripts             (onde fica start-slave.sh e stubborn-scp.sh nos slaves)
+#   - $BASE_DIR/deployment/scripts  (caso o stubborn-scp.sh esteja lá)
+export PATH="$GOPATH/bin:/usr/local/go/bin:$BASE_DIR/scripts:$BASE_DIR/deployment/scripts:$PATH"
 
 log "PATH=$PATH"
 
