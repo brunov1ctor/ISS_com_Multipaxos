@@ -9,10 +9,10 @@
 # onde:
 #   - <tentativas> é um inteiro (por ex.: 10)
 #   - "-i" é só um marcador (não é a opção -i do scp), então ignoramos
-#   - <SRC> e <DST> são caminhos padrão do scp, podendo ser:
-#       172.19.135.1:experiment-config/config-0000.yml  config/config.yml
+#   - <SRC> e <DST> são caminhos padrão do scp, por ex.:
+#       172.19.135.1:iss/experiment-config/config-0000.yml  config/config.yml
 #     ou
-#       experiment-output-0000-slave-__id__.tar.gz  172.19.135.1:current-deployment-data/raw-results/
+#       experiment-output-0000-slave-__id__.tar.gz  172.19.135.1:iss/current-deployment-data/raw-results/
 #
 
 if [ "$#" -lt 3 ]; then
@@ -47,7 +47,8 @@ dst="$2"
 attempt=1
 while [ "$attempt" -le "$retries" ]; do
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tentativa $attempt/$retries: scp '$src' '$dst'"
-  scp "$src" "$dst"
+  # Opções extras para evitar prompts interativos de host key
+  scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$src" "$dst"
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -62,3 +63,4 @@ done
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Desisti após $retries tentativas. Último status: $status" >&2
 exit "$status"
+
