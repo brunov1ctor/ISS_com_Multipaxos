@@ -1,81 +1,107 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
-set -euo pipefail
+# Script de inicialização do slave (peer ou client) para o ISS no Emulab.
 
-# Uso:
-#   start-slave.sh <tag> <masterIP> <publicIP> <privateIP>
-#
-# Exemplo típico:
-#   start-slave.sh peers 172.19.135.1 172.19.135.2 10.10.1.2
-
-if [ "$#" -ne 4 ]; then
-  echo "Uso: $0 <tag> <masterIP> <publicIP> <privateIP>" >&2
-  exit 1
-fi
+# Parâmetros:
+#   $1 = TAG         (ex.: "peers", "1client")
+#   $2 = MASTER_IP   (ex.: 172.19.135.1)
+#   $3 = PUBLIC_IP   (ex.: 172.19.135.2)
+#   $4 = PRIVATE_IP  (ex.: 10.10.1.2)
 
 TAG="$1"
 MASTER_IP="$2"
 PUBLIC_IP="$3"
 PRIVATE_IP="$4"
 
-# O deploy-remote.sh exporta status_file=$remote_status_file.
-# Se não vier nada (teste manual), usamos um padrão.
-STATUS_FILE="${status_file:-/users/$USER/iss/status-$TAG}"
+# Diretório base no nó remoto onde o ISS está sendo executado
+BASE_DIR="/users/Bruno/iss"
 
-BASE_DIR="/users/$USER/iss"
+# Arquivo de log local (no nó remoto)
 LOG_FILE="$BASE_DIR/start-slave-$TAG.log"
 
+# Função de log com timestamp
 log() {
-  echo "[$(date '+%F %T')] $*" | tee -a "$LOG_FILE"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
+
+# Redireciona stdout/stderr para o log
+mkdir -p "$BASE_DIR" 2>/dev/null
+exec >>"$LOG_FILE" 2>&1
 
 log "==============================================="
 log "Iniciando start-slave.sh"
 log "TAG=$TAG MASTER_IP=$MASTER_IP PUBLIC_IP=$PUBLIC_IP PRIVATE_IP=$PRIVATE_IP"
+
+# Arquivo de status
+if [ "$TAG" = "peers" ]; then
+  STATUS_FILE="$BASE_DIR/status-peers"
+else
+  STATUS_FILE="$BASE_DIR/status"
+fi
+
 log "STATUS_FILE=$STATUS_FILE"
 log "PWD inicial: $(pwd)"
 
-# Garante PATH com os binários Go (discoveryslave, orderingpeer, etc.)
-export PATH="$PATH:/users/$USER/go/bin"
-
-# Marca status 0 (inicializando)
+# Marca STATUS=0 (inicializando)
+echo "0" > "$STATUS_FILE" 2>/dev/null || true
 log "Marcando STATUS=0 em $STATUS_FILE"
-echo 0 > "$STATUS_FILE"
 
-# Gera/atualiza certificados TLS para este nó
-cd "$BASE_DIR/tls-data"
-log "Executando TLS generate.sh para $PUBLIC_IP / $PRIVATE_IP"
-./generate.sh "$PUBLIC_IP" "$PRIVATE_IP" >>"$LOG_FILE" 2>&1 || {
-  log "ERRO ao executar generate.sh"
-  exit 1
-}
+########################################
+# Configuração de ambiente / PATH
+########################################
 
-# Volta para o diretório base
-cd "$BASE_DIR"
-log "Diretório base: $(pwd)"
+# GOPATH padrão que você está usando
+export GOPATH="/users/Bruno/go"
 
-# Sobe o discoveryslave em background
+# Adiciona:
+#   - $GOPATH/bin         (onde ficam os binários Go instalados)
+#   - /usr/local/go/bin   (caso necessário)
+#   - diretório dos scripts de deployment (p/ stubborn-scp.sh)
+export PATH="$GOPATH/bin:/usr/local/go/bin:/users/Bruno/go/src/github.com/hyperledger-labs/mirbft/deployment/scripts:$PATH"
+
+log "PATH=$PATH"
+
+########################################
+# Geração de certificados TLS
+########################################
+
+TLS_DIR="$BASE_DIR/tls-data"
+
+if [ -d "$TLS_DIR" ] && [ -x "$TLS_DIR/generate.sh" ]; then
+  log "Executando TLS generate.sh para $PUBLIC_IP / $PRIVATE_IP"
+  (
+    cd "$TLS_DIR" || exit 1
+    ./generate.sh "$PUBLIC_IP" "$PRIVATE_IP"
+  )
+else
+  log "Aviso: diretório TLS ou script generate.sh não encontrado em $TLS_DIR"
+fi
+
+########################################
+# Inicializa o discoveryslave
+########################################
+
+log "Diretório base: $BASE_DIR"
+cd "$BASE_DIR" || exit 1
+
 log "Subindo discoveryslave..."
-log "Comando: discoveryslave $TAG ${MASTER_IP}:9999 $PUBLIC_IP $PRIVATE_IP"
+CMD="discoveryslave $TAG ${MASTER_IP}:9999 $PUBLIC_IP $PRIVATE_IP"
+log "Comando: $CMD"
 
-# Redireciona saída do discoveryslave para o mesmo log
-discoveryslave "$TAG" "${MASTER_IP}:9999" "$PUBLIC_IP" "$PRIVATE_IP" >>"$LOG_FILE" 2>&1 &
+$CMD &
+DISCOVERY_PID=$!
+log "discoveryslave iniciado com PID=$DISCOVERY_PID"
 
-SLAVE_PID=$!
-log "discoveryslave iniciado com PID=$SLAVE_PID"
-
-# Espera um pouco para dar tempo de registrar no master
+# Espera alguns segundos para ver se o processo morreu ou continua vivo
 sleep 5
 
-# Se o processo ainda estiver vivo, consideramos OK e marcamos STATUS=1
-if kill -0 "$SLAVE_PID" 2>/dev/null; then
+if kill -0 "$DISCOVERY_PID" 2>/dev/null; then
+  echo "1" > "$STATUS_FILE" 2>/dev/null || true
   log "discoveryslave ainda rodando, marcando STATUS=1"
-  echo 1 > "$STATUS_FILE"
 else
-  log "discoveryslave morreu logo após iniciar. Mantendo STATUS=0"
-  echo 0 > "$STATUS_FILE"
+  echo "0" > "$STATUS_FILE" 2>/dev/null || true
+  log "discoveryslave não está rodando, STATUS=0"
 fi
 
 log "start-slave.sh finalizado"
-exit 0
 
