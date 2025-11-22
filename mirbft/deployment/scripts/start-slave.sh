@@ -1,64 +1,81 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-source scripts/global-vars.sh
+set -euo pipefail
 
-# Kill all children of this script when exiting
-trap "$trap_exit_command" EXIT
+# Uso:
+#   start-slave.sh <tag> <masterIP> <publicIP> <privateIP>
+#
+# Exemplo típico:
+#   start-slave.sh peers 172.19.135.1 172.19.135.2 10.10.1.2
 
-tag=$1
-master_ip=$2
-public_ip=$3
-private_ip=$4
+if [ "$#" -ne 4 ]; then
+  echo "Uso: $0 <tag> <masterIP> <publicIP> <privateIP>" >&2
+  exit 1
+fi
 
-init_command="
-  set -x
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
-  cd $remote_work_dir &&
+TAG="$1"
+MASTER_IP="$2"
+PUBLIC_IP="$3"
+PRIVATE_IP="$4"
 
-  # Copia diretório de TLS do master e gera certificados locais
-  rsync --progress -rptz -e \"ssh $ssh_options\" $master_ip:$remote_tls_directory . &&
-  cd tls-data &&
-  ./generate.sh $public_ip $private_ip &&
+# O deploy-remote.sh exporta status_file=$remote_status_file.
+# Se não vier nada (teste manual), usamos um padrão.
+STATUS_FILE="${status_file:-/users/$USER/iss/status-$TAG}"
 
-  # Volta para o diretório de trabalho
-  cd $remote_work_dir &&
+BASE_DIR="/users/$USER/iss"
+LOG_FILE="$BASE_DIR/start-slave-$TAG.log"
 
-  # Copia os binários compilados do master para o GOPATH remoto
-  rsync --progress -rptz -e \"ssh $ssh_options\" $master_ip:$remote_gopath/bin/ $remote_gopath/bin/ &&
+log() {
+  echo "[$(date '+%F %T')] $*" | tee -a "$LOG_FILE"
+}
 
-  # Copia o script oldmir-start.sh do master para o bin local e torna executável
-  rsync --progress -rptz -e \"ssh $ssh_options\" $master_ip:$remote_code_dir/oldmir/oldmir-start.sh $remote_work_dir/bin/ &&
-  chmod u+x $remote_work_dir/bin/oldmir-start.sh
-"
+log "==============================================="
+log "Iniciando start-slave.sh"
+log "TAG=$TAG MASTER_IP=$MASTER_IP PUBLIC_IP=$PUBLIC_IP PRIVATE_IP=$PRIVATE_IP"
+log "STATUS_FILE=$STATUS_FILE"
+log "PWD inicial: $(pwd)"
 
-slave_command="
-  ulimit -Sn $open_files_limit &&
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
-  cd $remote_work_dir &&
-  nohup discoveryslave $tag $master_ip:$master_port $public_ip $private_ip \
-    > discoveryslave.log 2>&1 &
-"
+# Garante PATH com os binários Go (discoveryslave, orderingpeer, etc.)
+export PATH="$PATH:/users/$USER/go/bin"
 
-echo "Setting up slave: $public_ip ($private_ip)"
+# Marca status 0 (inicializando)
+log "Marcando STATUS=0 em $STATUS_FILE"
+echo 0 > "$STATUS_FILE"
 
-# Apenas log de status, não bloqueia mais
-slave_status=\$(scripts/remote-machine-status.sh $public_ip 2>/dev/null || echo \"UNKNOWN\")
-echo "Slave status ($public_ip): $slave_status"
+# Gera/atualiza certificados TLS para este nó
+cd "$BASE_DIR/tls-data"
+log "Executando TLS generate.sh para $PUBLIC_IP / $PRIVATE_IP"
+./generate.sh "$PUBLIC_IP" "$PRIVATE_IP" >>"$LOG_FILE" 2>&1 || {
+  log "ERRO ao executar generate.sh"
+  exit 1
+}
 
-# Espera o master ficar pronto (criar master-ready)
-echo "Waiting for master server."
-while ! ssh $ssh_options -q -o \"ConnectTimeout=10\" \"$master_ip\" \"cat $remote_ready_file > /dev/null 2>&1\"; do
-  sleep $machine_status_poll_period
-  echo "Master not ready. Retrying in $machine_status_poll_period seconds."
-done
+# Volta para o diretório base
+cd "$BASE_DIR"
+log "Diretório base: $(pwd)"
 
-# Inicializa o slave (TLS, binários, script oldmir)
-echo "Initializing slave: $public_ip"
-while ! ssh $ssh_options $public_ip \"$init_command\"; do
-  sleep 1
-  echo "Retrying to initialize slave."
-done
+# Sobe o discoveryslave em background
+log "Subindo discoveryslave..."
+log "Comando: discoveryslave $TAG ${MASTER_IP}:9999 $PUBLIC_IP $PRIVATE_IP"
 
-echo "Master ready. Starting slave process on $public_ip."
-ssh $ssh_options $public_ip \"$slave_command\"
+# Redireciona saída do discoveryslave para o mesmo log
+discoveryslave "$TAG" "${MASTER_IP}:9999" "$PUBLIC_IP" "$PRIVATE_IP" >>"$LOG_FILE" 2>&1 &
+
+SLAVE_PID=$!
+log "discoveryslave iniciado com PID=$SLAVE_PID"
+
+# Espera um pouco para dar tempo de registrar no master
+sleep 5
+
+# Se o processo ainda estiver vivo, consideramos OK e marcamos STATUS=1
+if kill -0 "$SLAVE_PID" 2>/dev/null; then
+  log "discoveryslave ainda rodando, marcando STATUS=1"
+  echo 1 > "$STATUS_FILE"
+else
+  log "discoveryslave morreu logo após iniciar. Mantendo STATUS=0"
+  echo 0 > "$STATUS_FILE"
+fi
+
+log "start-slave.sh finalizado"
+exit 0
 
