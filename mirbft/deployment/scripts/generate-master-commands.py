@@ -8,7 +8,7 @@ SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 MASTER_CONFIG_DIR = "iss/experiment-config"
-MASTER_EXP_DIR="current-deployment-data"
+MASTER_EXP_DIR = "iss/current-deployment-data"
 SLAVE_CONFIG_FILE = "config/config.yml"
 OLDMIR_SERVER_CONFIG = "config/oldmir-config-server.yml"
 OLDMIR_CLIENT_CONFIG = "config/oldmir-config-client.yml"
@@ -621,3 +621,4 @@ stopAll()
 printDeploymentSchedule()
 
 outFile.close()
+
