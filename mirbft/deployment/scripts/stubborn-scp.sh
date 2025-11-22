@@ -2,21 +2,16 @@
 #
 # stubborn-scp.sh
 #
-# Wrapper em volta do scp com tentativas de repetição.
+# Wrapper simples em volta do scp com tentativas de repetição.
 #
-# Interface esperada pelas master-commands:
-#   stubborn-scp.sh <tentativas> -i <ID_FILE> <SRC> <DST>
-# onde:
-#   - <tentativas> é um inteiro (ex.: 10)
-#   - "-i <ID_FILE>" é repassado para o scp (opção de identidade)
-#   - <SRC> e <DST> são caminhos padrão do scp, podendo ser:
-#       172.19.135.1:iss/experiment-config/config-0000.yml  config/config.yml
-#     ou
-#       experiment-output-0000-slave-__id__.tar.gz  172.19.135.1:iss/current-deployment-data/raw-results/
+# Uso esperado pelas master-commands:
+#   stubborn-scp.sh <tentativas> -i <ALGUMA_COISA> <SRC> <DST>
 #
+# Neste ambiente, o "-i" e o argumento seguinte não são usados de verdade
+# (às vezes nem vêm definidos), então os ignoramos e usamos apenas SRC/DST.
 
 if [ "$#" -lt 3 ]; then
-  echo "Uso: $0 <tentativas> [-i ID_FILE] <SRC> <DST>" >&2
+  echo "Uso: $0 <tentativas> [-i QUALQUER_COISA] <SRC> <DST>" >&2
   exit 1
 fi
 
@@ -31,36 +26,26 @@ case "$retries" in
     ;;
 esac
 
-identity=""
-# Se vier "-i", tratamos como opção de identidade do scp
+# Se o próximo argumento for "-i", ignoramos ele e o argumento seguinte
 if [ "$1" = "-i" ]; then
-  shift
-  if [ "$#" -lt 3 ]; then
-    echo "Uso: $0 <tentativas> [-i ID_FILE] <SRC> <DST>" >&2
-    exit 1
+  shift          # tira o "-i"
+  if [ "$#" -ge 1 ]; then
+    shift        # joga fora o "ssh_key_file" (ou o que vier no lugar)
   fi
-  identity="$1"
-  shift
 fi
 
 if [ "$#" -lt 2 ]; then
-  echo "Uso: $0 <tentativas> [-i ID_FILE] <SRC> <DST>" >&2
+  echo "Uso: $0 <tentativas> [-i QUALQUER_COISA] <SRC> <DST>" >&2
   exit 1
 fi
 
 src="$1"
 dst="$2"
 
-# Monta comando scp (com ou sem -i)
-scp_cmd=(scp)
-if [ -n "$identity" ]; then
-  scp_cmd+=( -i "$identity" )
-fi
-
 attempt=1
 while [ "$attempt" -le "$retries" ]; do
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tentativa $attempt/$retries: ${scp_cmd[*]} '$src' '$dst'"
-  "${scp_cmd[@]}" "$src" "$dst"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tentativa $attempt/$retries: scp '$src' '$dst'"
+  scp "$src" "$dst"
   status=$?
 
   if [ "$status" -eq 0 ]; then
