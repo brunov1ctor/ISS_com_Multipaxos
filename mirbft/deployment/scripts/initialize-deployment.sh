@@ -1,7 +1,7 @@
 #!/bin/bash
 # This script is not to be ran on its own.
 # It is the only included as the common part of the different kinds of deployments,
-# Initializing the experiment, reading command-line arguments and stting some variables.
+# Initializing the experiment, reading command-line arguments and setting some variables.
 # It must be sourced, NOT ran even inside those scripts.
 # It consumes up to 4 command line parameters and sets the following variables:
 # - configuration_generator_script
@@ -14,6 +14,9 @@
 # - cancel_instances
 # Some of them are used only internally some of them are used by this including script.
 
+# -----------------------------------------------------------------------------
+# 1) Optional "-c" flag (cancel instances)
+# -----------------------------------------------------------------------------
 if [ "$1" = "-c" ]; then
   cancel_instances=true
   shift
@@ -21,6 +24,9 @@ else
   cancel_instances=false
 fi
 
+# -----------------------------------------------------------------------------
+# 2) Deployment type: local | cloud | remote
+# -----------------------------------------------------------------------------
 if [ -n "$1" ] && [ "$1" = "local" ]; then
   depl_type="$1"
   shift
@@ -35,41 +41,45 @@ else
   depl_type="local" # Default deployment type
 fi
 
-# Get experiment data directory to work with, or create a new one.
+# -----------------------------------------------------------------------------
+# 3) Experiment data directory or "new"
+# -----------------------------------------------------------------------------
 if [ "$1" = "new" ]; then
-  exp_data_dir=$(scripts/new-experiment-state.sh $depl_type)
+  exp_data_dir=$(scripts/new-experiment-state.sh "$depl_type")
   new_experiment=true
 else
-  exp_data_dir=$1
+  exp_data_dir="$1"
   new_experiment=false
 fi
 shift
 echo "Using experiment data directory: $exp_data_dir"
 
-# If we are creating a new set of experiments, generate the necessary config and deploy files.
+# -----------------------------------------------------------------------------
+# 4) If new experiment, generate configs
+# -----------------------------------------------------------------------------
 if $new_experiment; then
-
-  # Get config generator script to use.
+  # Config generator script
   configuration_generator_script="$1"
-  shift 1
+  shift
 
-  # Get the experiment id offset.
-  # The experiments generated will start with this ID.
+  # Experiment id offset (optional)
   if [ -n "$1" ]; then
-    exp_id_offset=$1
+    exp_id_offset="$1"
     shift
   else
     exp_id_offset=0
   fi
 
-  # Generate deployment file and configuration files
-  "$configuration_generator_script" "$exp_data_dir" $exp_id_offset || exit 1
+  # Generate deployment + configs
+  "$configuration_generator_script" "$exp_data_dir" "$exp_id_offset" || exit 1
 
-  # Save a copy of the configuration generator for easier reproducibility
+  # Save copy of generator
   cp "$configuration_generator_script" "$exp_data_dir"
 fi
 
-# Parse deployment file, generating the master command file and a deployment schedule
+# -----------------------------------------------------------------------------
+# 5) Parse deployment file and generate master command template + schedule
+# -----------------------------------------------------------------------------
 deployment_file="$exp_data_dir/$dpl_filename"
 echo "Using deployment file: $deployment_file"
 
