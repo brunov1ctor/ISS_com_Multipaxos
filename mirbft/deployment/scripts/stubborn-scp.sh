@@ -1,16 +1,5 @@
 #!/bin/bash
 
-# Uso:
-#   stubborn-scp.sh <tentativas> [opções-do-scp...] <SRC> <DEST>
-#
-# Exemplo:
-#   stubborn-scp.sh 10 -i ~/.ssh/id_rsa arquivo foo@10.0.0.1:/tmp/arquivo
-#
-# Este script:
-#   - força modo não interativo (sem perguntar "yes/no" de host key)
-#   - repete o scp até <tentativas> vezes
-#   - imprime logs com data/hora em stdout
-
 if [ $# -lt 3 ]; then
   echo "Uso: $0 <tentativas> [opções-do-scp...] <SRC> <DEST>" >&2
   exit 1
