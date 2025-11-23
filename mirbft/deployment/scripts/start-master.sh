@@ -17,7 +17,7 @@ master_ip="$2"      # ex.: 172.20.3.2
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
 
-# Diretório local com os dados do experimento
+# Diretório local com os dados do experimento (no node-0)
 export exp_dir="$exp_data_dir"
 
 master_command_file="$exp_data_dir/$local_master_command_file"
@@ -87,11 +87,19 @@ echo "Starting result processor and master server."
 
 ssh $ssh_options "$master_ip" "
   cd \"$remote_work_dir\" || exit 1
+
+  # Aumenta limite de arquivos abertos
   ulimit -Sn $open_files_limit
+
   export GOPATH=\"$remote_gopath\"
   export GOROOT=\"/usr/local/go\"
   export PATH=\"\$GOPATH/bin:\$GOROOT/bin:$remote_work_dir/scripts:$remote_work_dir/deployment/scripts:\$PATH\"
 
+  # Marca o master como PRONTO para o fetch-results.sh
+  # (scripts/fetch-results.sh fica esperando esse arquivo aparecer)
+  echo READY > \"$remote_ready_file\"
+
+  # Inicia análise contínua em background
   \"$remote_work_dir/scripts/analyze/analyze-continuously.sh\" \
     \"$remote_exp_dir\" \
     \"$remote_status_file\" \
@@ -102,6 +110,7 @@ ssh $ssh_options "$master_ip" "
     $remote_analysis_processes \
     > \"$remote_exp_dir/continuous-analysis.log\" 2>&1 &
 
+  # Inicia discoverymaster que usa o master-commands.cmd
   \"$remote_gopath/bin/discoverymaster\" $master_port file \"$remote_master_command_file\" \
     > \"$remote_master_log\" 2>&1 < /dev/null
 "
