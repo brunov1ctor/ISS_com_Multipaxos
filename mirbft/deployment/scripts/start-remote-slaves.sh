@@ -1,26 +1,6 @@
 #!/bin/bash
 
-###############################################################################
-# start-remote-slaves.sh
-#
-# Inicia slaves remotos (peers / clientes) a partir das informações já
-# "achatadas" que o deploy.sh passa na linha de comando.
-#
-# Além de apenas disparar os slaves, este script agora também garante que,
-# para cada nó remoto listado, os binários Go necessários
-# (discoverymaster, discoveryslave, orderingpeer, orderingclient)
-# estejam presentes em /users/$USER/go/bin do respectivo nó.
-###############################################################################
-
-set -e
-
-# Carrega variáveis globais (ssh_options, etc.)
-. "$(dirname "$0")/global-vars.sh"
-
-if [ $# -lt 4 ]; then
-    echo "Uso: $0 <exp_data_dir> <tag> <n> <master_ip> [skip <k> <tag>] <instance list...>" >&2
-    exit 1
-fi
+set -euo pipefail
 
 exp_data_dir="$1"
 tag="$2"
@@ -36,177 +16,179 @@ echo "  n            = $n"
 echo "  master_ip    = $master_ip"
 echo "  args rest    = $*"
 echo "====================================================================="
+
+# Diretórios locais/remotos dos binários
+local_gopath="/users/Bruno/go"
+local_bin_dir="$local_gopath/bin"
+remote_gopath="/users/Bruno/go"
+remote_bin_dir="$remote_gopath/bin"
+
+# Opções de SSH/SCP (para evitar prompts de host key e manter semelhante ao deploy.sh)
+ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
+
 echo
+echo "==== [start-remote-slaves] (LOCAL) Verificando binários em $local_bin_dir ===="
+echo "  remote_gopath = $remote_gopath"
+echo "  local_bin_dir = $local_bin_dir"
 
-# Diretório local dos binários Go (no node-0).
-local_gopath="${GOPATH:-/users/$USER/go}"
-local_bin_dir="${local_gopath}/bin"
-
-echo "==== [start-remote-slaves] (LOCAL) Verificando binários em ${local_bin_dir} ===="
-echo "  remote_gopath = /users/$USER/go"
-echo "  local_bin_dir = ${local_bin_dir}"
-
-BINARIES=(discoverymaster discoveryslave orderingpeer orderingclient)
-
-for bin in "${BINARIES[@]}"; do
-    if [ ! -x "${local_bin_dir}/${bin}" ]; then
-        echo "  [LOCAL] ERRO  : ${local_bin_dir}/${bin} não existe ou não é executável."
-        echo "                  Compile os binários primeiro (go install ...) e tente novamente."
-        exit 1
-    else
-        echo "  [LOCAL] OK     : ${local_bin_dir}/${bin}"
-    fi
+for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
+  if [ -x "$local_bin_dir/$bin" ]; then
+    echo "  [LOCAL] OK     : $local_bin_dir/$bin"
+  else
+    echo "  [LOCAL] ERRO   : $local_bin_dir/$bin não existe ou não é executável!"
+    exit 1
+  fi
 done
+
 echo "==== [start-remote-slaves] Binários locais OK. ===="
 echo
 
-# Tratamento opcional de 'skip <k> <tag>'
-skip=0
-skip_tag=""
-if [ "$1" = "skip" ]; then
-    skip="$2"
-    skip_tag="$3"
-    echo "==== [start-remote-slaves] Encontrado parâmetro 'skip': skip=$skip skip_tag=$skip_tag ===="
-    shift 3
-fi
+###############################################################################
+# PARSE DOS ARGUMENTOS RESTANTES
+# Ignora blocos 'skip X tag' e monta uma lista de nós:
+#   nodes[i] = "instance_id|public_ip|private_ip|role|node_tag"
+###############################################################################
 
-# Guarda todos os argumentos restantes (lista de instâncias) em um array
-nodes_args=("$@")
+nodes=()
+args=( "$@" )
+i=0
+total=${#args[@]}
+
+# OBS: aqui NÃO aplicamos lógica de 'skip' para seleção de nós.
+#      Apenas limpamos os tokens 'skip' para conseguir extrair os grupos (5 em 5).
+while [ "$i" -lt "$total" ]; do
+  if [ "${args[$i]}" = "skip" ]; then
+    # pular "skip <num> <tag>"
+    if [ "$((i+2))" -ge "$total" ]; then
+      echo "WARN: bloco 'skip' incompleto nos argumentos: ${args[*]}" >&2
+      break
+    fi
+    i=$((i+3))
+    continue
+  fi
+
+  if [ "$((i+4))" -ge "$total" ]; then
+    echo "WARN: argumentos restantes não formam um grupo completo de 5 campos a partir de '${args[$i]}'" >&2
+    break
+  fi
+
+  instance_id="${args[$i]}"
+  public_ip="${args[$i+1]}"
+  private_ip="${args[$i+2]}"
+  role="${args[$i+3]}"
+  node_tag="${args[$i+4]}"
+
+  nodes+=( "${instance_id}|${public_ip}|${private_ip}|${role}|${node_tag}" )
+
+  i=$((i+5))
+done
 
 ###############################################################################
-# Função: garante que os binários existam no nó remoto.
+# ETAPA 1: GARANTIR BINÁRIOS EM TODOS OS SLAVES
 ###############################################################################
-ensure_remote_bins() {
-    local ip="$1"
-    local user_home="/users/$USER"
-    local remote_gopath="${GOPATH:-${user_home}/go}"
-    local remote_bin_dir="${remote_gopath}/bin"
 
-    echo "---------------------------------------------------------------------"
-    echo "  [REMOTO] Garantindo binários em ${ip}"
-    echo "           remote_gopath = ${remote_gopath}"
-    echo "           remote_bin_dir = ${remote_bin_dir}"
-    echo "---------------------------------------------------------------------"
-
-    # Garante diretório remoto
-    ssh $ssh_options "${ip}" "mkdir -p '${remote_bin_dir}'" >/dev/null 2>&1 || {
-        echo "    [REMOTO:${ip}] ERRO ao criar diretório ${remote_bin_dir}"
-        return 1
-    }
-
-    for bin in "${BINARIES[@]}"; do
-        local local_path="${local_bin_dir}/${bin}"
-        # Verifica remoto; se já existe e é executável, não copia.
-        ssh $ssh_options "${ip}" "test -x '${remote_bin_dir}/${bin}'" >/dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            echo "    [REMOTO-${bin}] Já existe em ${ip}:${remote_bin_dir}/${bin}"
-            continue
-        fi
-
-        echo "    [REMOTO:${ip}] Copiando binário '${bin}' para ${remote_bin_dir}/ ..."
-        scp $ssh_options "${local_path}" "${ip}:${remote_bin_dir}/" >/dev/null 2>&1 || {
-            echo "    [REMOTO-${bin}] ERRO ao copiar para ${ip}"
-            continue
-        }
-
-        # Confere permissão de execução
-        ssh $ssh_options "${ip}" "chmod +x '${remote_bin_dir}/${bin}'" >/dev/null 2>&1 || true
-        echo "    [REMOTO-${bin}] OK: ${ip}:${remote_bin_dir}/${bin}"
-    done
-}
-
-###############################################################################
-# Primeiro passo: distribuir/garantir binários em TODOS os slaves listados.
-# A lista de instâncias vem nos argumentos, em grupos de 5:
-#   instance_id public_ip private_ip role tag
-###############################################################################
 echo "==== [start-remote-slaves] (REMOTO) Garantindo binários em todos os slaves listados ===="
 
-i=0
-total=${#nodes_args[@]}
-while [ $i -lt $total ]; do
-    instance_id="${nodes_args[$i]}"
-    public_slave_ip="${nodes_args[$i+1]}"
-    private_slave_ip="${nodes_args[$i+2]}"
-    slave_role="${nodes_args[$i+3]}"
-    slave_tag_i="${nodes_args[$i+4]}"
+for node in "${nodes[@]}"; do
+  IFS='|' read -r instance_id public_ip private_ip role node_tag <<< "$node"
 
-    echo "---------------------------------------------------------------------"
-    echo "  [REMOTO] Nó ${instance_id} (${public_slave_ip} / ${private_slave_ip})"
-    echo "           role=${slave_role} tag=${slave_tag_i}"
-    echo "---------------------------------------------------------------------"
+  echo "---------------------------------------------------------------------"
+  echo "  [REMOTO] Nó $instance_id ($public_ip / $private_ip)"
+  echo "           role=$role tag=$node_tag"
+  echo "---------------------------------------------------------------------"
 
-    # Só precisa garantir binários nos nós que são 'slave' (não no master).
-    if [ "${slave_role}" = "slave" ]; then
-        ensure_remote_bins "${public_slave_ip}"
-    else
-        echo "    [REMOTO] role='${slave_role}' (provavelmente master); ignorando distribuição de binários."
-    fi
+  if [ "$role" != "slave" ]; then
+    echo "    [REMOTO] role='$role' (provavelmente master); ignorando distribuição de binários."
+    continue
+  fi
 
-    i=$((i + 5))
+  echo "---------------------------------------------------------------------"
+  echo "  [REMOTO] Garantindo binários em $public_ip"
+  echo "           remote_gopath = $remote_gopath"
+  echo "           remote_bin_dir = $remote_bin_dir"
+  echo "---------------------------------------------------------------------"
+
+  # Cria diretório remoto
+  ssh $ssh_options "$public_ip" "mkdir -p '$remote_bin_dir'"
+
+  # Copia binários sempre (idempotente, só sobrescreve)
+  scp $ssh_options \
+    "$local_bin_dir/discoverymaster" \
+    "$local_bin_dir/discoveryslave"  \
+    "$local_bin_dir/orderingpeer"    \
+    "$local_bin_dir/orderingclient"  \
+    "$public_ip:$remote_bin_dir/"
+
+  echo "    [REMOTO-discoverymaster] OK em $public_ip:$remote_bin_dir/discoverymaster"
+  echo "    [REMOTO-discoveryslave]  OK em $public_ip:$remote_bin_dir/discoveryslave"
+  echo "    [REMOTO-orderingpeer]    OK em $public_ip:$remote_bin_dir/orderingpeer"
+  echo "    [REMOTO-orderingclient]  OK em $public_ip:$remote_bin_dir/orderingclient"
 done
 
 echo "==== [start-remote-slaves] Distribuição/garantia de binários concluída. ===="
 echo
 
 ###############################################################################
-# Segundo passo: seguir lógica original de 'skip' e disparo dos slaves.
+# ETAPA 2: INICIAR APENAS OS NÓS COM A TAG SOLICITADA
+# Aqui simplificamos: ignoramos 'skip' e apenas iniciamos nós cujo 'node_tag == tag',
+# até atingir 'n' instâncias.
 ###############################################################################
-echo "==== [start-remote-slaves] Processando 'skip' nos argumentos extras ===="
-echo "  args atuais: $*"
-echo
-echo "  [SKIP] Valor final de 'skip' para tag '${tag}': ${skip}"
-echo "==== [start-remote-slaves] Iniciando loop pelos nós (n = ${n}) ===="
-echo
 
-# Restaura $@ a partir de nodes_args para o loop principal
-set -- "${nodes_args[@]}"
+echo "==== [start-remote-slaves] Iniciando loop pelos nós (n = $n) ===="
 
-# Loop principal (igual ao original, mas com mais logs)
-while [ $# -ge 5 ] && [ "$n" -gt 0 ]; do
-    instance_id="$1"
-    public_slave_ip="$2"
-    private_slave_ip="$3"
-    slave_role="$4"
-    slave_tag="$5"
-    shift 5
+started=0
+pids=()
 
-    echo "---------------------------------------------------------------------"
-    echo "  [LOOP] instance_id=${instance_id}"
-    echo "         public_slave_ip=${public_slave_ip}"
-    echo "         private_slave_ip=${private_slave_ip}"
-    echo "         slave_role=${slave_role}"
-    echo "         slave_tag=${slave_tag}"
-    echo "         tag alvo=${tag}, skip atual=${skip}, n restante=${n}"
-    echo "---------------------------------------------------------------------"
+for node in "${nodes[@]}"; do
+  IFS='|' read -r instance_id public_ip private_ip role node_tag <<< "$node"
 
-    if [ "$slave_tag" != "$tag" ]; then
-        echo "  [LOOP] slave_tag='${slave_tag}' não bate com a tag alvo='${tag}'; ignorando esse nó."
-        continue
-    fi
+  echo "---------------------------------------------------------------------"
+  echo "  [LOOP] instance_id=$instance_id"
+  echo "         public_slave_ip=$public_ip"
+  echo "         private_slave_ip=$private_ip"
+  echo "         slave_role=$role"
+  echo "         slave_tag=$node_tag"
+  echo "         tag alvo=$tag, n restante=$((n - started))"
+  echo "---------------------------------------------------------------------"
 
-    if [ "$skip" -gt 0 ]; then
-        echo "  [LOOP] skip=${skip} > 0 e slave_tag='${slave_tag}' == tag alvo; ignorando e decrementando skip."
-        skip=$((skip - 1))
-        continue
-    fi
+  # Só queremos nós com a tag correspondente (peers ou 1client, etc.)
+  if [ "$node_tag" != "$tag" ]; then
+    echo "  [LOOP] slave_tag='$node_tag' não bate com a tag alvo='$tag'; ignorando esse nó."
+    continue
+  fi
 
-    echo "  [DEPLOY] Vai iniciar slave em ${public_slave_ip} (${instance_id}), tag=${slave_tag}"
-    echo "  [DEPLOY] Log remoto será gravado em: ${exp_data_dir}/ssh-${slave_tag}-${public_slave_ip}.log"
+  if [ "$started" -ge "$n" ]; then
+    echo "  [LOOP] Já atingimos n=$n nós iniciados para tag='$tag'; ignorando nós extras."
+    continue
+  fi
 
-    scripts/start-slave.sh "$slave_tag" "$master_ip" "$public_slave_ip" "$private_slave_ip" > "${exp_data_dir}/ssh-${slave_tag}-${public_slave_ip}.log" 2>&1 &
-    echo "  [DEPLOY] start-slave.sh disparado em background (PID=$!)."
-    echo "  [DEPLOY] Aguardando pequena pausa para não sobrecarregar o SSH."
-    echo
-    sleep 0.2
+  echo "  [DEPLOY] Vai iniciar slave em $public_ip ($instance_id), tag=$tag"
+  log_file="$exp_data_dir/ssh-$tag-$public_ip.log"
+  echo "  [DEPLOY] Log remoto será gravado em: $log_file"
 
-    n=$((n - 1))
-    echo "  [DEPLOY] n restante agora = ${n}"
-    echo
+  # Dispara o script de inicialização do slave no host remoto.
+  # Este script está em /users/Bruno/iss/start-slave.sh no remoto.
+  ssh $ssh_options "$public_ip" \
+    "/users/Bruno/iss/start-slave.sh '$tag' '$master_ip' '$public_ip' '$private_ip'" \
+    > "$log_file" 2>&1 &
+
+  pid=$!
+  echo "  [DEPLOY] SSH disparado para $public_ip em background (PID=$pid)."
+  echo "  [DEPLOY] Aguardando pequena pausa para não sobrecarregar o SSH."
+  sleep 0.2
+
+  pids+=( "$pid" )
+  started=$((started + 1))
+  echo "  [DEPLOY] n restante agora = $((n - started))"
 done
 
+echo
 echo "==== [start-remote-slaves] Todos os SSHs disparados. Chamando 'wait' para aguardar término dos comandos locais. ===="
-wait || true
+
+for pid in "${pids[@]}"; do
+  wait "$pid" || true
+done
+
 echo "==== [start-remote-slaves] FIM ==========================================="
 echo "====================================================================="
 
