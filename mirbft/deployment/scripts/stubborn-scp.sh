@@ -4,9 +4,9 @@
 #   stubborn-scp.sh <tentativas> [opções-do-scp...] <SRC> <DEST>
 #
 # Exemplo:
-#   stubborn-scp.sh 10 -i ~/.ssh/id_rsa arquivo foo@10.0.0.1:/tmp/arquivo
+#   ./scripts/stubborn-scp.sh 10 deployment-data/.../master-commands.cmd 172.20.3.2:/users/Bruno/iss/master-commands.cmd
 
-if [ $# < 3 ]; then
+if [ $# -lt 3 ]; then
   echo "Uso: $0 <tentativas> [opções-do-scp...] <SRC> <DEST>" >&2
   exit 1
 fi
@@ -14,45 +14,34 @@ fi
 retries="$1"
 shift
 
-# Vamos montar as opções extras de forma filtrada
+# Tudo menos os dois últimos argumentos são opções extras pro scp
 extra_opts=()
-
 while [ "$#" -gt 2 ]; do
-  arg="$1"
-
-  # Caso especial: "-o X=Y" separado em 2 argumentos
-  if [ "$arg" = "-o" ] && [ "$#" -gt 3 ]; then
-    next="$2"
-
-    case "$next" in
-      StrictHostKeyChecking=*|UserKnownHostsFile=*|BatchMode=* )
-        # Ignora essa opção e seu valor
-        shift 2
-        continue
-        ;;
-    esac
-  fi
-
-  # Caso "-oX=Y" em um único argumento
-  case "$arg" in
-    -oStrictHostKeyChecking=*|-oUserKnownHostsFile=*|-oBatchMode=* )
-      shift
-      continue
-      ;;
-  esac
-
-  extra_opts+=("$arg")
+  extra_opts+=("$1")
   shift
 done
 
 src="$1"
 dst="$2"
 
+# Extrai o host da forma HOST:CAMINHO
+host="$dst"
+host="${host%%:*}"
+
+# Garante que a chave do host está em known_hosts para evitar prompts
+if [ -n "$host" ]; then
+  mkdir -p "$HOME/.ssh"
+  # Se ainda não existe entrada para esse host, adiciona com ssh-keyscan
+  if ! ssh-keygen -F "$host" >/dev/null 2>&1; then
+    ssh-keyscan -H "$host" >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
+  fi
+fi
+
 # Opções de SSH/SCP para evitar qualquer interação
 SSH_OPTS=(
   -o BatchMode=yes
   -o StrictHostKeyChecking=no
-  -o UserKnownHostsFile=/dev/null
+  -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
 )
 
 for ((i=1; i<=retries; i++)); do
