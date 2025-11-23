@@ -3,7 +3,10 @@
 # start-remote-slaves.sh
 #
 # Sobe os slaves (peers / 1client) em modo remoto.
-# Agora com logs de debug mais detalhados para facilitar o diagnóstico.
+# Versão com logs de debug mais detalhados e correções:
+#   - Garante cópia dos binários para TODOS os nós da tag (sem depender só de "já existe").
+#   - Usa caminho absoluto para discoveryslave: $remote_gopath/bin/discoveryslave
+#   - Loga verificação pós-cópia no nó remoto.
 
 set -euo pipefail
 
@@ -30,8 +33,6 @@ echo ""
 
 ###############################################################################
 # 1) Garantir que os binários existem LOCALMENTE
-#    - Usa remote_gopath como GOPATH/GOBIN
-#    - Se algum binário estiver faltando, roda "go install ./cmd/..."
 ###############################################################################
 
 binaries="discoverymaster discoveryslave orderingpeer orderingclient"
@@ -54,7 +55,7 @@ done
 if [ $missing_local -ne 0 ]; then
   echo "  -> Alguns binários locais estão faltando. Tentando compilar com 'go install ./cmd/...'."
 
-  # Detecta diretório do script e raiz do repositório (mirbft)
+  # Diretório do script e raiz do repo
   script_dir="$(cd "$(dirname "$0")" && pwd)"
   repo_root="$(cd "$script_dir/../.." && pwd)"
 
@@ -90,8 +91,6 @@ echo ""
 
 ###############################################################################
 # 2) Garantir que os binários existem nos NÓS REMOTOS daquela TAG
-#    - Usa scripts/instance-info para descobrir os IPs públicos
-#    - Se binário estiver faltando no nó, copia do local via scp
 ###############################################################################
 
 instance_info_file="scripts/instance-info"
@@ -99,7 +98,7 @@ instance_info_file="scripts/instance-info"
 if [ ! -f "$instance_info_file" ]; then
   echo "WARNING: $instance_info_file não encontrado. Não será possível checar/copiar binários remotos." >&2
 else
-  echo "==== [start-remote-slaves] (REMOTO) Verificando binários para tag '$tag' usando $instance_info_file ===="
+  echo "==== [start-remote-slaves] (REMOTO) Verificando/copindo binários para tag '$tag' usando $instance_info_file ===="
 
   while read -r instance_id public_ip private_ip role slave_tag; do
     # Ignora linhas em branco/comentários
@@ -118,29 +117,35 @@ else
     echo "           role=$role tag=$slave_tag (tag alvo=$tag)"
     echo "---------------------------------------------------------------------"
 
-    # Garante diretório remoto para os binários
     echo "    [REMOTO:$public_ip] mkdir -p \"$remote_gopath/bin\""
     ssh $ssh_options "$public_ip" "mkdir -p \"$remote_gopath/bin\"" >/dev/null 2>&1 || {
       echo "     [ERRO] Não foi possível criar $remote_gopath/bin em $public_ip" >&2
       continue
     }
 
-    # Para cada binário, verifica se existe; se não, copia
+    # Copia TODOS os binários sempre (para garantir consistência)
     for b in $binaries; do
-      ssh $ssh_options "$public_ip" "[ -x \"$remote_gopath/bin/$b\" ]" >/dev/null 2>&1
-      if [ $? -eq 0 ]; then
-        echo "    [REMOTO:$public_ip] $b já existe em $remote_gopath/bin/$b"
-      else
-        echo "    [REMOTO:$public_ip] $b AUSENTE. Copiando de $local_bin_dir/$b..."
-        scp "$local_bin_dir/$b" "$public_ip:$remote_gopath/bin/" >/dev/null 2>&1 || {
-          echo "      [ERRO] Falha ao copiar $b para $public_ip:$remote_gopath/bin/" >&2
+      echo "    [REMOTO:$public_ip] Copiando binário '$b' para $remote_gopath/bin/..."
+      if scp "$local_bin_dir/$b" "$public_ip:$remote_gopath/bin/" >/dev/null 2>&1; then
+        # Verifica no nó remoto se o binário ficou executável
+        ssh $ssh_options "$public_ip" "
+          if [ -x \"$remote_gopath/bin/$b\" ]; then
+            echo \"      [REMOTO-$b] OK: $remote_gopath/bin/$b (executável)\"
+          else
+            echo \"      [REMOTO-$b] ERRO: $remote_gopath/bin/$b NÃO é executável ou não existe.\"
+            ls -l \"$remote_gopath/bin\" || true
+          fi
+        " 2>/dev/null || {
+          echo "      [REMOTO-$b] ERRO ao verificar $remote_gopath/bin/$b em $public_ip" >&2
         }
+      else
+        echo "      [ERRO] Falha ao copiar $b para $public_ip:$remote_gopath/bin/" >&2
       fi
     done
 
   done < "$instance_info_file"
 
-  echo "==== [start-remote-slaves] (REMOTO) Verificação/cópia de binários concluída para tag '$tag'. ===="
+  echo "==== [start-remote-slaves] (REMOTO) Distribuição de binários concluída para tag '$tag'. ===="
   echo ""
 fi
 
@@ -209,6 +214,8 @@ while [ -n "${1-}" ] && [ $n -gt 0 ]; do
       export GOROOT=\"/usr/local/go\"
       export PATH=\"\$GOPATH/bin:\$GOROOT/bin:\$PATH\"
 
+      DISCOVERY_BIN=\"$remote_gopath/bin/discoveryslave\"
+
       LOG_DIR=\"\$HOME/iss-logs\"
       mkdir -p \"\$LOG_DIR\"
       LOG_FILE=\"\$LOG_DIR/start-slave-$slave_tag.log\"
@@ -223,19 +230,27 @@ while [ -n "${1-}" ] && [ $n -gt 0 ]; do
         echo \"  GOPATH     = \$GOPATH\"
         echo \"  GOROOT     = \$GOROOT\"
         echo \"  PATH       = \$PATH\"
+        echo \"  DISCOVERY_BIN = \$DISCOVERY_BIN\"
         echo \"-----------------------------------------------------------------\"
-        echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] Executando discoveryslave...\"
-        echo \"  Comando: discoveryslave $slave_tag ${master_ip}:9999 $public_slave_ip $private_slave_ip\"
 
-        discoveryslave \"$slave_tag\" ${master_ip}:9999 \"$public_slave_ip\" \"$private_slave_ip\" &
-        DISCOVERY_PID=\$!
-        echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] discoveryslave iniciado com PID=\$DISCOVERY_PID\"
-
-        sleep 5
-        if kill -0 \"\$DISCOVERY_PID\" 2>/dev/null; then
-          echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] discoveryslave ainda está rodando (PID=\$DISCOVERY_PID).\"
+        if [ ! -x \"\$DISCOVERY_BIN\" ]; then
+          echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] ERRO: \$DISCOVERY_BIN não existe ou não é executável.\"
+          echo \"Conteúdo de $remote_gopath/bin:\"
+          ls -l \"$remote_gopath/bin\" || true
         else
-          echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] discoveryslave JÁ MORREU (PID=\$DISCOVERY_PID).\" 
+          echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] Executando discoveryslave via caminho absoluto...\"
+          echo \"  Comando: \$DISCOVERY_BIN $slave_tag ${master_ip}:9999 $public_slave_ip $private_slave_ip\"
+
+          \"\$DISCOVERY_BIN\" \"$slave_tag\" ${master_ip}:9999 \"$public_slave_ip\" \"$private_slave_ip\" &
+          DISCOVERY_PID=\$!
+          echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] discoveryslave iniciado com PID=\$DISCOVERY_PID\"
+
+          sleep 5
+          if kill -0 \"\$DISCOVERY_PID\" 2>/dev/null; then
+            echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] discoveryslave ainda está rodando (PID=\$DISCOVERY_PID).\"
+          else
+            echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] discoveryslave JÁ MORREU (PID=\$DISCOVERY_PID).\"
+          fi
         fi
 
         echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] [REMOTE-$slave_tag] Fim do bloco remoto.\"
