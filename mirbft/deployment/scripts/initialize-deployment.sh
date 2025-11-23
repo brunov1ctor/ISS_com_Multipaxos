@@ -83,6 +83,11 @@ fi
 deployment_file="$exp_data_dir/$dpl_filename"
 echo "Using deployment file: $deployment_file"
 
+# generate-master-commands.py expects:
+#   1) deployment type (local|cloud|remote)
+#   2) deployment file (.dpl)
+#   3) output master command template file
+#   4) experiment data directory
 deploy_schedule=$(python3 scripts/generate-master-commands.py "$depl_type" "$deployment_file" "$exp_data_dir/$local_master_command_template_file" "$exp_data_dir")
 if [ $? -ne 0 ] || [ -z "$deploy_schedule" ]; then
   >&2 echo "remote-deploy.sh: failed processing deployment file: $deployment_file"
