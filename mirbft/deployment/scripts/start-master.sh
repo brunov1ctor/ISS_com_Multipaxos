@@ -16,7 +16,6 @@ master_ip="$2"      # ex.: 172.20.3.2
 
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
-export request_payload_dir="$remote_request_payload_dir"
 
 # Diretório local com os dados do experimento
 export exp_dir="$exp_data_dir"
