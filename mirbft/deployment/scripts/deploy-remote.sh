@@ -2,18 +2,19 @@
 set -euo pipefail
 
 ###############################################################################
-# Este script é carregado via "source" por deploy.sh para executar um
-# experimento remoto. As seguintes variáveis devem estar definidas por
-# scripts/initialize-deployment.sh:
-#   - exp_data_dir
-#   - instance_info_file
-#   - deploy_schedule
-#   - cancel_instances
+# Parâmetros
+#   $1 = exp_data_dir          (ex: deployment-data/remote-0000)
+#   $2 = instance_info_file    (ex: scripts/instance-info)
+#   $3 = deploy_schedule       (ex: new, reuse, etc.)
 ###############################################################################
+if [ "$#" -lt 3 ]; then
+  >&2 echo "Usage: $0 <exp_data_dir> <instance_info_file> <deploy_schedule>"
+  exit 1
+fi
 
-: "${exp_data_dir:?exp_data_dir not set}"
-: "${instance_info_file:?instance_info_file not set}"
-: "${deploy_schedule:?deploy_schedule not set}"
+exp_data_dir="$1"
+instance_info_file="$2"
+deploy_schedule="$3"
 
 # Garantir que estamos no diretório de deployment (onde estão scripts/global-vars.sh)
 # Se você já garante isso em deploy.sh, isso aqui é só redundância inofensiva.
@@ -48,103 +49,71 @@ export master_port
 export status_file="$remote_status_file"
 
 envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
-  < "$local_master_command_template_file" \
+  < "$exp_data_dir/$local_master_command_template_file" \
   > "$exp_data_dir/$local_master_command_file"
 
-echo "Using master command file: $exp_data_dir/$local_master_command_file"
+# No fim do comando do master, escrever DONE no status
+echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 
 ###############################################################################
-# Preparar diretórios remotos e copiar arquivos necessários
+# Matar tudo que estiver rodando nas máquinas remotas e limpar estado antigo
 ###############################################################################
 
-echo "Creating remote experiment directory: $remote_exp_dir"
-ssh $ssh_options "$ssh_user@$master_ip" "mkdir -p '$remote_exp_dir'" || {
-  >&2 echo "deploy-remote.sh: failed to create remote experiment directory on master: $master_ip"
-  exit 1
-}
+echo "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
-echo "Copying experiment data to master."
-scp $scp_options -r \
-  "$exp_data_dir"/* \
-  "$ssh_user@$master_ip:$remote_exp_dir/" || {
-  >&2 echo "deploy-remote.sh: failed to copy experiment data to master: $master_ip"
-  exit 1
-}
+# 1) matar analyze-continuously
+for ip in $(awk '{print $2}' "$instance_info_file"); do
+  ssh $ssh_options "$ip" \
+    "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}')" \
+    || true &
+  # Abrir muitas conexões ao mesmo tempo faz algumas falharem; pequeno sleep ajuda.
+  sleep 0.1
+done
+wait
 
-###############################################################################
-# Iniciar master remoto
-###############################################################################
+echo -e "\nKilled continuous analysis scripts.\n"
 
-echo "Starting remote master on $master_ip"
+# 2) matar processos de experimento, limpar diretórios, garantir dirs do novo experimento
+for ip in $(awk '{print $2}' "$instance_info_file"); do
+  ssh $ssh_options "$ip" "
+    # tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms
 
-ssh $ssh_options "$ssh_user@$master_ip" "
-  set -euo pipefail
+    # matar processos antigos (se não existirem, ignorar erro)
+    killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
 
-  cd '$remote_exp_dir'
+    # remover arquivos/diretórios antigos
+    rm -rf $remote_delete_files
 
-  echo \"Compiling on master node.\"
-  initial_directory=\$(pwd)
-  cd '$remote_work_dir/..'
-  ./run-protoc.sh
-  cd \"\$initial_directory\"
-  go install -race ./cmd/...
+    # garantir diretórios remotos necessários
+    mkdir -p $remote_work_dir $remote_exp_dir
+    mkdir -p \$(dirname \"$remote_status_file\")
 
-  echo \"Copy TLS keys and certificates to experiment directory on master.\"
-  cp -r tls-data '$remote_exp_dir'
+    # (re)criar arquivo de status
+    echo RUNNING > \"$remote_status_file\"
 
-  echo \"Copying binaries into gopath/bin inside experiment directory on master.\"
-  mkdir -p '$remote_exp_dir/gopath/bin'
-  cp \"\$GOPATH/bin/orderingpeer\" \
-     \"\$GOPATH/bin/orderingclient\" \
-     \"\$GOPATH/bin/discoverymaster\" \
-     \"\$GOPATH/bin/discoveryslave\" \
-     '$remote_exp_dir/gopath/bin/'
+    # matar sessões ssh 'notty' antigas (se existirem)
+    kill -9 \$(ps -ef | grep 'sshd: notty' | awk '{print \$2}') 2>/dev/null || true
 
-  echo \"Starting discoverymaster on master node.\"
-  discoverymaster $master_port file '$local_master_command_file' '$remote_status_file' \
-    > '$remote_exp_dir/master.log' 2>&1 &
-" || {
-  >&2 echo "deploy-remote.sh: failed to start discoverymaster on master: $master_ip"
-  exit 1
-}
+    echo -e '\n\n\nBERO\n\n\n'
+  " &
+  sleep 0.1
+done
+wait
+
+echo -e "\n Reset machine state.\n"
 
 ###############################################################################
-# Iniciar slaves remotos conforme o schedule
+# Iniciar master, slaves e coleta de resultados
 ###############################################################################
 
-echo "Starting remote slaves according to schedule: $deploy_schedule"
+# 1) Master: copia comandos + config e inicia discoverymaster + analyze-continuously
+scripts/start-master.sh "$exp_data_dir" "$master_ip" &
 
-# Ler informações de instâncias (peers, clientes, etc.)
-if ! [ -r "$exp_data_dir/$instance_info_file_name" ]; then
-  >&2 echo "deploy-remote.sh: cannot read instance info file: $exp_data_dir/$instance_info_file_name"
-  exit 1
-fi
+# 2) Slaves: start orderingpeer / orderingclient conforme o schedule
+scripts/deploy-slaves-remote.sh "$exp_data_dir" "$instance_info_file" "$master_ip" "$deploy_schedule" &
 
-# O script start-remote-slaves.sh lê o arquivo de instance-info, filtra pelo tag
-# e inicia os grupos conforme o deploy_schedule.
-scripts/start-remote-slaves.sh "$exp_data_dir" "$deploy_schedule" \
-  "$master_ip" "$exp_data_dir/$instance_info_file_name" &
-
-###############################################################################
-# Acompanhar status das máquinas remotas (opcional)
-###############################################################################
-
-if [ "${remote_status_check:-true}" = true ]; then
-  echo "Checking remote machine status periodically."
-  scripts/remote-machine-status.sh "$master_ip" &
-fi
-
-###############################################################################
-# Buscar resultados do experimento
-###############################################################################
-
-local_result_fetching_log="result-fetching.log"
-
-echo "Starting result fetching in the background."
-(
-  cd "$DEPLOY_DIR"
-  scripts/analyze/untar.sh "$exp_data_dir" > "$exp_data_dir/$local_result_fetching_log" 2>&1
-) &
+# 3) Coleta de resultados em background
+scripts/fetch-results.sh "$master_ip" "$exp_data_dir" > "$exp_data_dir/$local_result_fetching_log" 2>&1 &
 
 echo "Waiting for deployment process and result fetching to finish."
 echo "For progress on experiment result fetching, see $exp_data_dir/$local_result_fetching_log."
@@ -153,10 +122,9 @@ wait
 ###############################################################################
 # Cancelar VMs na nuvem, se configurado
 ###############################################################################
-
-if ${cancel_instances:-false}; then
+if $cancel_instances; then
   scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"
 else
-  echo -e "Do not forget to cancel the used virtual servers using:\n  scripts/cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name\n"
+  echo -e "Do not forget to cancel the used virtual servers using\n\n    scripts/cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name \n"
 fi
 
