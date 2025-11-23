@@ -35,12 +35,17 @@ echo ""
 
 echo "Copying master commands and configs."
 
-./scripts/stubborn-scp.sh 10 $ssh_options \
+# Copia o arquivo de comandos do master
+./scripts/stubborn-scp.sh 10 \
   "$master_command_file" \
   "$master_ip:$remote_master_command_file" || exit 4
 
-./scripts/stubborn-scp.sh 10 $ssh_options \
-  "$exp_data_dir/config-0000.yml" \
+# ATENÇÃO: os configs estão em $exp_data_dir/config/config-000X.yml
+# então o config do master é:
+local_master_config_file="$exp_data_dir/config/config-0000.yml"
+
+./scripts/stubborn-scp.sh 10 \
+  "$local_master_config_file" \
   "$master_ip:$remote_master_config_file" || exit 4
 
 echo "Done."
@@ -72,7 +77,8 @@ while read line; do
   fi
 
   # Caminho local do config gerado para esse experimento
-  local_config_file="$exp_data_dir/config-$(printf "%04d" "$exp_id").yml"
+  # IMPORTANTE: está dentro de "config/"
+  local_config_file="$exp_data_dir/config/config-$(printf "%04d" "$exp_id").yml"
 
   # Caminho remoto do config no slave
   remote_config_file="$remote_slave_config_dir/config-$config_id.yml"
@@ -82,7 +88,7 @@ done < "$exp_data_dir/$dpl_filename"
 
 # Agora faz o SCP de todos os configs necessários
 while read slave_ip local_cfg remote_cfg; do
-  ./scripts/stubborn-scp.sh 10 $ssh_options \
+  ./scripts/stubborn-scp.sh 10 \
     "$local_cfg" \
     "$slave_ip:$remote_cfg" || exit 5
 done < "$tmp_config_scp_cmds"
