@@ -1,47 +1,52 @@
 #!/bin/bash
+#
+# Wrapper "teimoso" para scp: tenta N vezes antes de desistir.
+#
+# Uso:
+#   stubborn-scp.sh <tentativas> [opções scp...] <origem> <destino>
+#
+# Exemplo:
+#   stubborn-scp.sh 10 -i ~/.ssh/id_rsa arquivo.txt user@host:/caminho/
+#
 
 if [ $# -lt 3 ]; then
-  echo "Uso: $0 <tentativas> [opções-do-scp...] <SRC> <DEST>" >&2
+  echo "Uso: $0 <tentativas> [opções scp...] <origem> <destino>" >&2
   exit 1
 fi
 
-retries="$1"
+max_tries="$1"
 shift
 
-# Tudo menos os dois últimos argumentos são opções extras pro scp
-extra_opts=()
-while [ "$#" -gt 2 ]; do
-  extra_opts+=("$1")
-  shift
-done
+# Separar origem e destino (últimos dois argumentos)
+if [ $# -lt 2 ]; then
+  echo "Erro: argumentos insuficientes para scp." >&2
+  exit 1
+fi
 
-src="$1"
-dst="$2"
+src="${@: -2:1}"
+dst="${@: -1:1}"
+scp_opts=("${@:1:$(($#-2))}")
 
-# Opções de SSH/SCP para evitar qualquer interação
-SSH_OPTS=(
-  -o BatchMode=yes
-  -o StrictHostKeyChecking=no
-  -o UserKnownHostsFile=/dev/null
-)
+try=1
+status=1
 
-for ((i=1; i<=retries; i++)); do
-  ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  echo "[$ts] Tentativa $i/$retries: scp '$src' '$dst'"
+timestamp() {
+  date +"%Y-%m-%d %H:%M:%S"
+}
 
-  scp "${SSH_OPTS[@]}" "${extra_opts[@]}" "$src" "$dst"
+while [ "$try" -le "$max_tries" ]; do
+  echo "[$(timestamp)] Tentativa $try/$max_tries: scp '${src}' '${dst}'"
+  scp "${scp_opts[@]}" "$src" "$dst"
   status=$?
-
   if [ $status -eq 0 ]; then
-    echo "[$ts] Sucesso na tentativa $i."
+    echo "[$(timestamp)] scp concluído com sucesso."
     exit 0
   fi
-
-  echo "[$ts] Falha na tentativa $i (status=$status). Aguardando 3 segundos..."
-  sleep 3
+  echo "[$(timestamp)] scp falhou com status $status. Tentando novamente..." >&2
+  try=$((try+1))
+  sleep 1
 done
 
-ts="$(date '+%Y-%m-%d %H:%M:%S')"
-echo "[$ts] Todas as $retries tentativas falharam." >&2
-exit 1
+echo "[$(timestamp)] Desisti após $max_tries tentativas. Último status: $status" >&2
+exit $status
 
