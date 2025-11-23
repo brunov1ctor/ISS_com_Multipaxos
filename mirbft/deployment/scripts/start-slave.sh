@@ -10,6 +10,11 @@ PRIVATE_IP="$4"
 # Diretório base no nó remoto onde o ISS está sendo executado
 BASE_DIR="/users/Bruno/iss"
 
+# PATH para encontrar discovery e orderingpeer no nó remoto
+export GOPATH="/users/Bruno/go"
+export GOROOT="/usr/local/go"
+export PATH="$GOPATH/bin:$GOROOT/bin:$BASE_DIR/scripts:$BASE_DIR/deployment/scripts:$PATH"
+
 # Arquivo de log local (no nó remoto)
 LOG_FILE="$BASE_DIR/start-slave-$TAG.log"
 
@@ -25,6 +30,8 @@ exec >>"$LOG_FILE" 2>&1
 log "==============================================="
 log "Iniciando start-slave.sh"
 log "TAG=$TAG MASTER_IP=$MASTER_IP PUBLIC_IP=$PUBLIC_IP PRIVATE_IP=$PRIVATE_IP"
+log "BASE_DIR=$BASE_DIR"
+log "PATH=$PATH"
 
 # Arquivo de status (peers usa status-peers, resto usa status)
 if [ "$TAG" = "peers" ]; then
@@ -34,43 +41,6 @@ else
 fi
 
 log "STATUS_FILE=$STATUS_FILE"
-log "PWD inicial: $(pwd)"
-
-# Marca STATUS=0 (inicializando)
-echo "0" > "$STATUS_FILE" 2>/dev/null || true
-log "Marcando STATUS=0 em $STATUS_FILE"
-
-########################################
-# Configuração de ambiente / PATH
-########################################
-
-# GOPATH padrão que você está usando
-export GOPATH="/users/Bruno/go"
-
-# Adiciona:
-#   - $GOPATH/bin                   (binários go instalados)
-#   - /usr/local/go/bin             (caso necessário)
-#   - $BASE_DIR/scripts             (onde fica start-slave.sh e stubborn-scp.sh nos slaves)
-#   - $BASE_DIR/deployment/scripts  (caso o stubborn-scp.sh esteja lá)
-export PATH="$GOPATH/bin:/usr/local/go/bin:$BASE_DIR/scripts:$BASE_DIR/deployment/scripts:$PATH"
-
-log "PATH=$PATH"
-
-########################################
-# Geração de certificados TLS
-########################################
-
-TLS_DIR="$BASE_DIR/tls-data"
-
-if [ -d "$TLS_DIR" ] && [ -x "$TLS_DIR/generate.sh" ]; then
-  log "Executando TLS generate.sh para $PUBLIC_IP / $PRIVATE_IP"
-  (
-    cd "$TLS_DIR" || exit 1
-    ./generate.sh "$PUBLIC_IP" "$PRIVATE_IP"
-  )
-else
-  log "Aviso: diretório TLS ou script generate.sh não encontrado em $TLS_DIR"
-fi
 
 ########################################
 # Inicializa o discoveryslave
