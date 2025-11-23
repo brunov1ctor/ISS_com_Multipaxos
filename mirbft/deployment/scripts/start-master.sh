@@ -35,11 +35,11 @@ echo ""
 
 echo "Copying master commands and configs."
 
-./scripts/stubborn-scp.sh 10 \
+./scripts/stubborn-scp.sh 10 $ssh_options \
   "$master_command_file" \
   "$master_ip:$remote_master_command_file" || exit 4
 
-./scripts/stubborn-scp.sh 10 \
+./scripts/stubborn-scp.sh 10 $ssh_options \
   "$exp_data_dir/config-0000.yml" \
   "$master_ip:$remote_master_config_file" || exit 4
 
@@ -82,7 +82,7 @@ done < "$exp_data_dir/$dpl_filename"
 
 # Agora faz o SCP de todos os configs necessários
 while read slave_ip local_cfg remote_cfg; do
-  ./scripts/stubborn-scp.sh 10 \
+  ./scripts/stubborn-scp.sh 10 $ssh_options \
     "$local_cfg" \
     "$slave_ip:$remote_cfg" || exit 5
 done < "$tmp_config_scp_cmds"
