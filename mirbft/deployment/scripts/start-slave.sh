@@ -1,12 +1,6 @@
 #!/bin/bash
 
 # Script de inicialização do slave (peer ou client) para o ISS no Emulab.
-#
-# Parâmetros:
-#   $1 = TAG         (ex.: "peers", "1client")
-#   $2 = MASTER_IP   (ex.: 172.19.135.1)
-#   $3 = PUBLIC_IP   (ex.: 172.19.135.2)
-#   $4 = PRIVATE_IP  (ex.: 10.10.1.2)
 
 TAG="$1"
 MASTER_IP="$2"
