@@ -14,60 +14,73 @@ master_ip=$2
 
 export ssh_key_file=$remote_private_key_file
 export own_public_ip=$master_ip
-export master_port
-export status_file=$remote_status_file
-export ready_file=$remote_ready_file
+export request_payload_dir=$remote_request_payload_dir
 
-envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
-  < "$exp_data_dir/$local_master_command_template_file" \
-  > "$exp_data_dir/$local_master_command_file"
+# Diretório local onde o experimento será rodado (vai virar $remote_exp_dir)
+export exp_dir=$exp_data_dir
 
-echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
+# Arquivo de saída dos commands (lido pelo discoverymaster)
+master_command_file="master-commands.cmd"
 
-###############################################################################
-# Criar diretórios remotos no MASTER
-###############################################################################
+python3 scripts/generate-master-commands.py > "$master_command_file" || exit 3
 
-ssh $ssh_options "$master_ip" "
-  mkdir -p \"$remote_code_dir\" &&
-  mkdir -p \"$remote_config_dir\" &&
-  mkdir -p \"$remote_exp_dir/raw-results\"
-" || exit 1
+echo ""
+echo "Master command script written to $master_command_file."
+echo ""
 
 ###############################################################################
-# Enviar código para o MASTER
+# Copiar master-commands e config para o master
 ###############################################################################
 
-rsync --progress -rptz -e "ssh $ssh_options" \
-  $local_code_files \
-  "$master_ip:$remote_code_dir" || exit 2
+echo "Copying master commands and configs."
+
+./scripts/stubborn-scp.sh 10 \
+  "$master_command_file" \
+  "$master_ip:$remote_master_command_file" || exit 4
+
+./scripts/stubborn-scp.sh 10 \
+  "$exp_data_dir/config-0000.yml" \
+  "$master_ip:$remote_master_config_file" || exit 4
+
+echo "Done."
 
 ###############################################################################
-# Enviar configs
+# Copiar arquivos de configuração para slaves
 ###############################################################################
 
-rsync --progress -rptz -e "ssh $ssh_options" \
-  "$exp_data_dir/config/"* \
-  "$master_ip:$remote_config_dir" || exit 3
+echo "Copying configs to slaves."
+
+# Gera um arquivo com:
+#   <IP> <config-local> <config-remoto>
+tmp_config_scp_cmds=$(mktemp)
+
+for ((i=0; i<exp_num_peers; i++)); do
+  ip_var_name="peer${i}_public_ip"
+  ip="${!ip_var_name}"
+
+  # config-000X.yml (e -faulty, se existir)
+  local_cfg="$exp_data_dir/config-$(printf '%04d' "$i").yml"
+  remote_cfg="$remote_config_dir/config-$(printf '%04d' "$i").yml"
+
+  echo "$ip $local_cfg $remote_cfg" >> "$tmp_config_scp_cmds"
+
+  local_cfg_faulty="$exp_data_dir/config-$(printf '%04d' "$i")-faulty.yml"
+  if [ -f "$local_cfg_faulty" ]; then
+    remote_cfg_faulty="$remote_config_dir/config-$(printf '%04d' "$i")-faulty.yml"
+    echo "$ip $local_cfg_faulty $remote_cfg_faulty" >> "$tmp_config_scp_cmds"
+  fi
+done
+
+# Executa cópias em paralelo
+parallel -a "$tmp_config_scp_cmds" --colsep ' ' -j "$max_parallel_scp" \
+  ./scripts/stubborn-scp.sh 10 {2} {1}:{3} || exit 5
+
+rm -f "$tmp_config_scp_cmds"
+
+echo "Configs copied."
 
 ###############################################################################
-# Enviar scripts de análise e queries
-###############################################################################
-
-rsync --progress -rptz -e "ssh $ssh_options" \
-  queries scripts \
-  "$master_ip:$remote_work_dir" || exit 4
-
-###############################################################################
-# Enviar master-commands.cmd
-###############################################################################
-
-scp $ssh_options \
-  "$exp_data_dir/$local_master_command_file" \
-  "$master_ip:$remote_master_command_file" || exit 5
-
-###############################################################################
-# Gerar TLS e Compilar ISS no MASTER
+# Preparar TLS e compilar ISS no master
 # (sem run-protoc.sh, usando os .pb.go já no repo)
 ###############################################################################
 
@@ -81,7 +94,8 @@ ssh $ssh_options "$master_ip" "
   cp -r \"$remote_tls_directory\" . &&
 
   echo 'Compiling ISS (sem protoc).' &&
-  export PATH=\"\$PATH:$remote_gopath/bin:$remote_work_dir/bin\" &&
+  # Garante que o binário go seja encontrado mesmo em sessão ssh não interativa
+  export PATH=\"/usr/local/go/bin:\$PATH:$remote_gopath/bin:$remote_work_dir/bin\" &&
   export GOPATH=\"$remote_gopath\" &&
   export GO111MODULE=auto &&
   export GOCACHE=\"$remote_work_dir/.cache/go-build\" &&
