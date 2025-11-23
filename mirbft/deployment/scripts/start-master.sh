@@ -20,10 +20,11 @@ export request_payload_dir=$remote_request_payload_dir
 export exp_dir=$exp_data_dir
 
 # Arquivo de saída dos commands (lido pelo discoverymaster)
-master_command_file="master-commands.cmd"
+# IMPORTANTE: aqui usamos o arquivo JÁ GERADO pelo initialize-deployment.sh
+master_command_file="$exp_data_dir/$local_master_command_file"
 
-python3 scripts/generate-master-commands.py > "$master_command_file" || exit 3
-
+echo ""
+echo "Using pre-generated master command script at $master_command_file."
 echo ""
 echo "Master command script written to $master_command_file."
 echo ""
@@ -54,55 +55,41 @@ echo "Copying configs to slaves."
 #   <IP> <config-local> <config-remoto>
 tmp_config_scp_cmds=$(mktemp)
 
-for ((i=0; i<exp_num_peers; i++)); do
-  ip_var_name="peer${i}_public_ip"
-  ip="${!ip_var_name}"
+# Para cada experimento, cada linha adiciona os comandos de SCP necessários
+# para enviar o config certo para cada slave.
+while read line; do
+  # Formato esperado do deployment.dpl:
+  # expID slaveID slaveIP slaveRole configID ...
+  exp_id=$(echo "$line" | awk '{print $1}')
+  slave_id=$(echo "$line" | awk '{print $2}')
+  slave_ip=$(echo "$line" | awk '{print $3}')
+  slave_role=$(echo "$line" | awk '{print $4}')
+  config_id=$(echo "$line" | awk '{print $5}')
 
-  # config-000X.yml (e -faulty, se existir)
-  local_cfg="$exp_data_dir/config-$(printf '%04d' "$i").yml"
-  remote_cfg="$remote_config_dir/config-$(printf '%04d' "$i").yml"
-
-  echo "$ip $local_cfg $remote_cfg" >> "$tmp_config_scp_cmds"
-
-  local_cfg_faulty="$exp_data_dir/config-$(printf '%04d' "$i")-faulty.yml"
-  if [ -f "$local_cfg_faulty" ]; then
-    remote_cfg_faulty="$remote_config_dir/config-$(printf '%04d' "$i")-faulty.yml"
-    echo "$ip $local_cfg_faulty $remote_cfg_faulty" >> "$tmp_config_scp_cmds"
+  # Ignorar linhas vazias/comentários
+  if [ -z "$exp_id" ] || [[ "$exp_id" =~ ^# ]]; then
+    continue
   fi
-done
 
-# Executa cópias em paralelo
-parallel -a "$tmp_config_scp_cmds" --colsep ' ' -j "$max_parallel_scp" \
-  ./scripts/stubborn-scp.sh 10 {2} {1}:{3} || exit 5
+  # Caminho local do config gerado para esse experimento
+  local_config_file="$exp_data_dir/config-$(printf "%04d" "$exp_id").yml"
+
+  # Caminho remoto do config no slave
+  remote_config_file="$remote_slave_config_dir/config-$config_id.yml"
+
+  echo "$slave_ip $local_config_file $remote_config_file" >> "$tmp_config_scp_cmds"
+done < "$exp_data_dir/$dpl_filename"
+
+# Agora faz o SCP de todos os configs necessários
+while read slave_ip local_cfg remote_cfg; do
+  ./scripts/stubborn-scp.sh 10 \
+    "$local_cfg" \
+    "$slave_ip:$remote_cfg" || exit 5
+done < "$tmp_config_scp_cmds"
 
 rm -f "$tmp_config_scp_cmds"
 
 echo "Configs copied."
-
-###############################################################################
-# Preparar TLS e compilar ISS no master
-# (sem run-protoc.sh, usando os .pb.go já no repo)
-###############################################################################
-
-ssh $ssh_options "$master_ip" "
-  set -e
-
-  cd \"$remote_tls_directory\" &&
-  ./generate.sh \"$master_ip\" &&
-
-  cd \"$remote_work_dir\" &&
-  cp -r \"$remote_tls_directory\" . &&
-
-  echo 'Compiling ISS (sem protoc).' &&
-  # Garante que o binário go seja encontrado mesmo em sessão ssh não interativa
-  export PATH=\"/usr/local/go/bin:\$PATH:$remote_gopath/bin:$remote_work_dir/bin\" &&
-  export GOPATH=\"$remote_gopath\" &&
-  export GO111MODULE=auto &&
-  export GOCACHE=\"$remote_work_dir/.cache/go-build\" &&
-
-  cd \"$remote_code_dir\" &&
-  go install ./cmd/...
-" || exit 6
 
 ###############################################################################
 # Iniciar processador contínuo + master
