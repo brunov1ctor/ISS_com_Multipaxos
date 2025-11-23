@@ -14,8 +14,8 @@ shift 4
 # Count how many slaves need to be skipped in the input
 skip=0
 while [ -n "$1" ] && [ "$1" = "skip" ] && [ $n -gt 0 ]; do
-  # Formato do trecho "skip":  skip <QTD> <TAG>
-  # exemplo: "skip 4 peers"
+  # Formato:  skip <QTD> <TAG>
+  # Exemplo:  skip 4 peers
   if [ "$3" = "$tag" ]; then
     s=$2
     skip=$((skip + s))
@@ -26,8 +26,6 @@ done
 # Para cada linha de scripts/instance-info:
 # node-X  <public_ip>  <private_ip>  <role>  <tag>
 while [ -n "$1" ] && [ $n -gt 0 ]; do
-
-  # Ler argumentos da linha
   instance_id=$1
   public_slave_ip=$2
   private_slave_ip=$3
@@ -42,8 +40,34 @@ while [ -n "$1" ] && [ $n -gt 0 ]; do
   elif [ "$slave_tag" = "$tag" ]; then
     echo "Deploying slave at public IP $public_slave_ip ($instance_id) tagged $slave_tag"
 
-    scripts/start-slave.sh "$slave_tag" "$master_ip" "$public_slave_ip" "$private_slave_ip" \
-      > "$exp_data_dir/ssh-$slave_tag-$public_slave_ip.log" 2>&1 &
+    ssh $ssh_options "$public_slave_ip" "
+      set -e
+
+      export GOPATH=\"$remote_gopath\"
+      export GOROOT=\"/usr/local/go\"
+      export PATH=\"\$GOPATH/bin:\$GOROOT/bin:\$PATH\"
+
+      LOG_DIR=\"\$HOME/iss-logs\"
+      mkdir -p \"\$LOG_DIR\"
+      LOG_FILE=\"\$LOG_DIR/start-slave-$slave_tag.log\"
+
+      {
+        echo \"[\\\$(date '+%Y-%m-%d %H:%M:%S')] Starting discoveryslave on \$HOSTNAME\"
+        echo \"TAG=$slave_tag MASTER_IP=$master_ip PUBLIC_IP=$public_slave_ip PRIVATE_IP=$private_slave_ip\"
+        echo \"PATH=\$PATH\"
+
+        discoveryslave \"$slave_tag\" ${master_ip}:9999 \"$public_slave_ip\" \"$private_slave_ip\" &
+        DISCOVERY_PID=\$!
+        echo \"discoveryslave PID=\$DISCOVERY_PID\"
+
+        sleep 5
+        if kill -0 \"\$DISCOVERY_PID\" 2>/dev/null; then
+          echo \"[\\\$(date '+%Y-%m-%d %H:%M:%S')] discoveryslave still running\"
+        else
+          echo \"[\\\$(date '+%Y-%m-%d %H:%M:%S')] discoveryslave exited\"
+        fi
+      } >>\"\$LOG_FILE\" 2>&1 &
+    " > "$exp_data_dir/ssh-$slave_tag-$public_slave_ip.log" 2>&1 &
 
     # Evitar abrir conexões SSH demais ao mesmo tempo
     sleep 0.1

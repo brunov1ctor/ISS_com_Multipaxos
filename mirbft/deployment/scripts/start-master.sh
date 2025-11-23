@@ -36,10 +36,11 @@ echo "Ensuring remote directories on master ($master_ip)."
 
 ssh $ssh_options "$master_ip" "
   cd \"\$HOME\" &&
-  mkdir -p iss \
-           iss/experiment-config \
-           iss/current-deployment-data \
-           iss/current-deployment-data/raw-results
+  mkdir -p \
+    \"$remote_work_dir\" \
+    \"$remote_work_dir/experiment-config\" \
+    \"$remote_exp_dir\" \
+    \"$remote_exp_dir/raw-results\"
 "
 
 ###############################################################################
@@ -85,9 +86,11 @@ echo "Done."
 echo "Starting result processor and master server."
 
 ssh $ssh_options "$master_ip" "
-  cd \"\$HOME\" &&
-  ulimit -Sn $open_files_limit &&
-  export PATH=\"\$PATH:$remote_gopath/bin:$remote_work_dir/bin\" &&
+  cd \"$remote_work_dir\" || exit 1
+  ulimit -Sn $open_files_limit
+  export GOPATH=\"$remote_gopath\"
+  export GOROOT=\"/usr/local/go\"
+  export PATH=\"\$GOPATH/bin:\$GOROOT/bin:$remote_work_dir/scripts:$remote_work_dir/deployment/scripts:\$PATH\"
 
   \"$remote_work_dir/scripts/analyze/analyze-continuously.sh\" \
     \"$remote_exp_dir\" \
