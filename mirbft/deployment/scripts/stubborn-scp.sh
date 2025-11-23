@@ -1,6 +1,12 @@
 #!/bin/bash
 
-if [ $# -lt 3 ]; then
+# Uso:
+#   stubborn-scp.sh <tentativas> [opções-do-scp...] <SRC> <DEST>
+#
+# Exemplo:
+#   stubborn-scp.sh 10 -i ~/.ssh/id_rsa arquivo foo@10.0.0.1:/tmp/arquivo
+
+if [ $# < 3 ]; then
   echo "Uso: $0 <tentativas> [opções-do-scp...] <SRC> <DEST>" >&2
   exit 1
 fi
@@ -8,10 +14,34 @@ fi
 retries="$1"
 shift
 
-# Tudo menos os dois últimos argumentos são opções extras pro scp
+# Vamos montar as opções extras de forma filtrada
 extra_opts=()
+
 while [ "$#" -gt 2 ]; do
-  extra_opts+=("$1")
+  arg="$1"
+
+  # Caso especial: "-o X=Y" separado em 2 argumentos
+  if [ "$arg" = "-o" ] && [ "$#" -gt 3 ]; then
+    next="$2"
+
+    case "$next" in
+      StrictHostKeyChecking=*|UserKnownHostsFile=*|BatchMode=* )
+        # Ignora essa opção e seu valor
+        shift 2
+        continue
+        ;;
+    esac
+  fi
+
+  # Caso "-oX=Y" em um único argumento
+  case "$arg" in
+    -oStrictHostKeyChecking=*|-oUserKnownHostsFile=*|-oBatchMode=* )
+      shift
+      continue
+      ;;
+  esac
+
+  extra_opts+=("$arg")
   shift
 done
 
