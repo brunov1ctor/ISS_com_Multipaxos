@@ -4,7 +4,6 @@
 # It is only included as the common part of the different kinds of deployments,
 # initializing the experiment, reading command-line arguments and setting some variables.
 # It must be sourced, NOT ran even inside those scripts.
-#
 # It consumes command line parameters and sets the following variables:
 # - configuration_generator_script
 # - depl_type
@@ -15,10 +14,10 @@
 # - deploy_schedule
 # - instance_info_file
 # - cancel_instances
-# Some of them are used only internally, some of them are used by the including script.
+# Some of them are used only internally, some of them are used by this including script.
 
 ###############################################################################
-# 1) Optional "-c" flag (cancel cloud instances)
+# 1) Optional "-c" flag (cancel instances)
 ###############################################################################
 
 cancel_instances=false
@@ -74,14 +73,12 @@ fi
 
 if [ "$1" = "new" ]; then
   new_experiment=true
+  shift
 else
   new_experiment=false
 fi
 
-if $new_experiment; then
-  # We will create a new experiment directory later
-  shift
-else
+if ! $new_experiment; then
   # Use existing experiment directory
   exp_data_dir="$1"
   shift
@@ -109,7 +106,7 @@ if $new_experiment; then
     exp_id_offset=0
   fi
 
-  # Defaults from global-vars.sh
+  # Defaults from global-vars.sh (already sourced by deploy.sh)
   : "${deployment_data_root:=deployment-data}"
   : "${exp_id_digits:=4}"
 
@@ -133,7 +130,7 @@ if $new_experiment; then
 fi
 
 ###############################################################################
-# 6) Parse deployment file and generate master command template + schedule
+# 6) Parse deployment file, generating master command template + schedule
 ###############################################################################
 
 : "${dpl_filename:=deployment.dpl}"
@@ -149,16 +146,10 @@ fi
 
 # generate-master-commands.py expects:
 #   1) deployment type (local|cloud|remote)
-#   2) deployment file
+#   2) deployment file (.dpl)
 #   3) output master command template file
 #   4) experiment data directory
-deploy_schedule=$(
-  python3 scripts/generate-master-commands.py \
-    "$depl_type" \
-    "$deployment_file" \
-    "$exp_data_dir/$local_master_command_template_file" \
-    "$exp_data_dir"
-)
+deploy_schedule=$(python3 scripts/generate-master-commands.py "$depl_type" "$deployment_file" "$exp_data_dir/$local_master_command_template_file" "$exp_data_dir")
 
 if [ $? -ne 0 ] || [ -z "$deploy_schedule" ]; then
   >&2 echo "remote-deploy.sh: failed processing deployment file: $deployment_file"
