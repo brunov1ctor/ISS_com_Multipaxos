@@ -4,9 +4,10 @@
 #
 # Sobe os slaves (peers / 1client) em modo remoto.
 # Versão com logs de debug mais detalhados e correções:
-#   - Garante cópia dos binários para TODOS os nós da tag (sem depender só de "já existe").
+#   - Garante cópia dos binários para TODOS os nós (role=slave) do cloud-instance-info.
 #   - Usa caminho absoluto para discoveryslave: $remote_gopath/bin/discoveryslave
 #   - Loga verificação pós-cópia no nó remoto.
+#   - Continua usando 'tag' apenas para decidir quais nós iniciar (peers / 1client).
 
 set -euo pipefail
 
@@ -32,7 +33,7 @@ echo "====================================================================="
 echo ""
 
 ###############################################################################
-# 1) Garantir que os binários existem LOCALMENTE
+# 1) Garantir que os binários existem LOCALMENTE (no node-0, onde roda deploy.sh)
 ###############################################################################
 
 binaries="discoverymaster discoveryslave orderingpeer orderingclient"
@@ -90,15 +91,16 @@ echo "==== [start-remote-slaves] Binários locais OK. ===="
 echo ""
 
 ###############################################################################
-# 2) Garantir que os binários existem nos NÓS REMOTOS daquela TAG
+# 2) Copiar binários para TODOS os nós 'slave' do cloud-instance-info
+#    (porque /users/Bruno não é compartilhado entre máquinas)
 ###############################################################################
 
-instance_info_file="scripts/instance-info"
+instance_info_file="$exp_data_dir/cloud-instance-info"
 
 if [ ! -f "$instance_info_file" ]; then
   echo "WARNING: $instance_info_file não encontrado. Não será possível checar/copiar binários remotos." >&2
 else
-  echo "==== [start-remote-slaves] (REMOTO) Verificando/copindo binários para tag '$tag' usando $instance_info_file ===="
+  echo "==== [start-remote-slaves] (REMOTO) Distribuindo binários usando $instance_info_file ===="
 
   while read -r instance_id public_ip private_ip role slave_tag; do
     # Ignora linhas em branco/comentários
@@ -107,14 +109,14 @@ else
       \#*) continue ;;
     esac
 
-    # Só interessa quem tem a tag que estamos subindo nessa chamada (peers ou 1client)
-    if [ "$slave_tag" != "$tag" ]; then
+    # Vamos copiar para todo mundo com role=slave (peers e 1client)
+    if [ "$role" != "slave" ]; then
       continue
     fi
 
     echo "---------------------------------------------------------------------"
     echo "  [REMOTO] Nó $instance_id ($public_ip / $private_ip)"
-    echo "           role=$role tag=$slave_tag (tag alvo=$tag)"
+    echo "           role=$role tag=$slave_tag"
     echo "---------------------------------------------------------------------"
 
     echo "    [REMOTO:$public_ip] mkdir -p \"$remote_gopath/bin\""
@@ -123,7 +125,7 @@ else
       continue
     }
 
-    # Copia TODOS os binários sempre (para garantir consistência)
+    # Copia todos os binários para esse nó
     for b in $binaries; do
       echo "    [REMOTO:$public_ip] Copiando binário '$b' para $remote_gopath/bin/..."
       if scp "$local_bin_dir/$b" "$public_ip:$remote_gopath/bin/" >/dev/null 2>&1; then
@@ -145,12 +147,12 @@ else
 
   done < "$instance_info_file"
 
-  echo "==== [start-remote-slaves] (REMOTO) Distribuição de binários concluída para tag '$tag'. ===="
+  echo "==== [start-remote-slaves] (REMOTO) Distribuição de binários concluída. ===="
   echo ""
 fi
 
 ###############################################################################
-# 3) Processar argumentos extras (skip / lista de nós) e iniciar discoveryslave
+# 3) Processar 'skip' e iniciar discoveryslave APENAS nos nós com tag desejada
 ###############################################################################
 
 echo "==== [start-remote-slaves] Processando 'skip' nos argumentos extras ===="
@@ -177,7 +179,7 @@ echo "  [SKIP] Valor final de 'skip' para tag '$tag': $skip"
 echo "==== [start-remote-slaves] Iniciando loop pelos nós (n = $n) ===="
 echo ""
 
-# Para cada linha de scripts/instance-info passada como argumentos:
+# Para cada linha passada como argumentos (vindo de scripts/instance-info via deploy.sh):
 # instance_id  public_ip  private_ip  role  slave_tag
 while [ -n "${1-}" ] && [ $n -gt 0 ]; do
   instance_id=$1
