@@ -33,8 +33,9 @@ local_discoveryslave="${local_bin_dir}/discoveryslave"
 local_orderingpeer="${local_bin_dir}/orderingpeer"
 local_orderingclient="${local_bin_dir}/orderingclient"
 
-# Script start-slave que será copiado para os slaves
+# Scripts locais a copiar
 local_start_slave_script="scripts/start-slave.sh"
+local_scripts_dir="scripts"   # ***NOVO: inclui stubborn-scp.sh***
 
 # ----------------------------------------------------------------------
 # Verificação dos binários locais
@@ -57,11 +58,17 @@ if [[ ! -f "${local_start_slave_script}" ]]; then
   exit 1
 fi
 
+# Verificar se stubborn-scp existe — ESSENCIAL!
+if [[ ! -f "${local_scripts_dir}/stubborn-scp.sh" ]]; then
+  echo "  [LOCAL] ERRO: scripts/stubborn-scp.sh não encontrado!"
+  exit 1
+fi
+
 echo "==== [start-remote-slaves] Binários locais OK. ===="
 echo
 
 # ----------------------------------------------------------------------
-# Função para garantir binários e start-slave.sh em um slave
+# Função para garantir binários + scripts em um slave
 # ----------------------------------------------------------------------
 ensure_remote_slave() {
   local instance_id="$1"
@@ -70,32 +77,21 @@ ensure_remote_slave() {
   local role="$4"
   local slave_tag="$5"
 
-  # Só trata nodes com role=slave
   if [[ "${role}" != "slave" ]]; then
     echo "    [REMOTO] role='${role}' (não é slave); ignorando."
     return
   fi
 
   echo "---------------------------------------------------------------------"
-  echo "  [REMOTO] Garantindo binários e start-slave.sh em ${public_ip}"
+  echo "  [REMOTO] Garantindo binários e scripts em ${public_ip}"
   echo "           instance_id    = ${instance_id}"
   echo "           role           = ${role}"
   echo "           tag            = ${slave_tag}"
-  echo "           remote_gopath  = ${remote_gopath}"
-  echo "           remote_bin_dir = ${remote_bin_dir}"
-  echo "           remote_work_dir= ${remote_work_dir}"
-  echo "           remote_logs_dir= ${remote_logs_dir}"
   echo "---------------------------------------------------------------------"
 
-  # Cria diretórios remotos
   ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
     mkdir -p '${remote_bin_dir}' '${remote_work_dir}' '${remote_logs_dir}'
   " >/dev/null 2>&1
-
-  if [[ $? -ne 0 ]]; then
-    echo "    [REMOTO-ERRO] Falha ao criar diretórios em ${public_ip} (ssh). Continuando para próximo nó."
-    return
-  fi
 
   # Copia binários
   scp -o StrictHostKeyChecking=accept-new \
@@ -105,42 +101,31 @@ ensure_remote_slave() {
     "${local_orderingclient}" \
     "Bruno@${public_ip}:${remote_bin_dir}/" >/dev/null 2>&1
 
-  if [[ $? -ne 0 ]]; then
-    echo "    [REMOTO-ERRO] Falha ao copiar binários para ${public_ip}. Continuando para próximo nó."
-    return
-  fi
-
   # Copia start-slave.sh
   scp -o StrictHostKeyChecking=accept-new \
     "${local_start_slave_script}" \
     "Bruno@${public_ip}:${remote_work_dir}/start-slave.sh" >/dev/null 2>&1
 
-  if [[ $? -ne 0 ]]; then
-    echo "    [REMOTO-ERRO] Falha ao copiar start-slave.sh para ${public_ip}. Continuando para próximo nó."
-    return
-  fi
+  # ***NOVO*** Copia diretório scripts completo (inclui stubborn-scp.sh)
+  scp -r -o StrictHostKeyChecking=accept-new \
+    "${local_scripts_dir}" \
+    "Bruno@${public_ip}:${remote_work_dir}/" >/dev/null 2>&1
 
-  # Garante permissão de execução
+  # Permissões
   ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
     chmod +x '${remote_bin_dir}/discoverymaster' \
              '${remote_bin_dir}/discoveryslave' \
              '${remote_bin_dir}/orderingpeer' \
              '${remote_bin_dir}/orderingclient' \
-             '${remote_work_dir}/start-slave.sh'
+             '${remote_work_dir}/start-slave.sh' \
+             '${remote_work_dir}/scripts/'*.sh || true
   " >/dev/null 2>&1
 
-  if [[ $? -ne 0 ]]; then
-    echo "    [REMOTO-ERRO] Falha ao ajustar permissões em ${public_ip}. Continuando para próximo nó."
-    return
-  fi
-
-  echo "    [REMOTO] OK: binários e start-slave.sh garantidos em ${public_ip}."
+  echo "    [REMOTO] OK: binários + scripts garantidos em ${public_ip}."
 }
 
 # ----------------------------------------------------------------------
-# 1) Garante binários + start-slave.sh em TODOS os slaves descritos nos argumentos
-#    Formato dos args depois do shift 4:
-#    skip 0 master skip 1 1client node-0 172.20.3.2 10.10.1.1 master master node-1 172.20.4.1 10.10.1.2 slave peers ...
+# Distribui para todos os slaves
 # ----------------------------------------------------------------------
 echo "==== [start-remote-slaves] (REMOTO) Garantindo binários e script em todos os slaves (via args) ===="
 
@@ -152,14 +137,12 @@ while (( idx < total )); do
   key="${rest[$idx]}"
 
   if [[ "${key}" == "skip" ]]; then
-    # Pula: skip <index> <tag>
     ((idx+=3))
     continue
   fi
 
-  # Precisamos de 5 campos: instance_id public_ip private_ip role slave_tag
   if (( idx + 4 >= total )); then
-    echo "  [REMOTO-AVISO] Argumentos insuficientes para descrever instância a partir de '${key}'. Interrompendo parsing."
+    echo "  [REMOTO-AVISO] Argumentos insuficientes para instância a partir de '${key}'."
     break
   fi
 
@@ -170,8 +153,7 @@ while (( idx < total )); do
   slave_tag="${rest[$((idx+4))]}"
 
   echo "---------------------------------------------------------------------"
-  echo "  [REMOTO] Nó ${instance_id} (${public_ip} / ${private_ip})"
-  echo "           role=${role} tag=${slave_tag}"
+  echo "  [REMOTO] Nó ${instance_id} (${public_ip}) role=${role} tag=${slave_tag}"
   echo "---------------------------------------------------------------------"
 
   ensure_remote_slave "${instance_id}" "${public_ip}" "${private_ip}" "${role}" "${slave_tag}"
@@ -183,7 +165,7 @@ echo "==== [start-remote-slaves] Distribuição/garantia remota concluída. ====
 echo
 
 # ----------------------------------------------------------------------
-# 2) Agora de fato inicia os slaves com a TAG solicitada (peers, 1client, etc.)
+# Inicia os slaves da TAG desejada
 # ----------------------------------------------------------------------
 echo "==== [start-remote-slaves] Iniciando loop pelos nós (n = ${n}, tag='${tag}') ===="
 
@@ -198,10 +180,7 @@ while (( idx < total )); do
     continue
   fi
 
-  if (( idx + 4 >= total )); then
-    echo "  [LOOP-AVISO] Argumentos insuficientes para instância a partir de '${key}'. Parando."
-    break
-  fi
+  if (( idx + 4 >= total )); then break; fi
 
   instance_id="${rest[$idx]}"
   public_ip="${rest[$((idx+1))]}"
@@ -210,32 +189,22 @@ while (( idx < total )); do
   slave_tag="${rest[$((idx+4))]}"
 
   echo "---------------------------------------------------------------------"
-  echo "  [LOOP] instance_id=${instance_id}"
-  echo "         public_slave_ip=${public_ip}"
-  echo "         private_slave_ip=${private_ip}"
-  echo "         slave_role=${role}"
-  echo "         slave_tag=${slave_tag}"
-  echo "         tag alvo=${tag}, n restante=${n}"
+  echo "  [LOOP] instance_id=${instance_id} ip=${public_ip} role=${role} tag=${slave_tag}"
   echo "---------------------------------------------------------------------"
 
-  # Só iniciamos se for slave e a tag do nó bater com a tag alvo
   if [[ "${role}" != "slave" || "${slave_tag}" != "${tag}" ]]; then
-    echo "  [LOOP] role/tag não batem (role='${role}', tag='${slave_tag}'); ignorando esse nó."
     ((idx+=5))
     continue
   fi
 
   if (( started >= n )); then
-    echo "  [LOOP] Já atingimos n=${n} nós iniciados para tag='${tag}'; ignorando nós extras."
     ((idx+=5))
     continue
   fi
 
   log_file="${exp_data_dir}/ssh-${tag}-${public_ip}.log"
-  echo "  [DEPLOY] Vai iniciar slave em ${public_ip} (${instance_id}), tag=${tag}"
-  echo "  [DEPLOY] Log remoto será gravado em: ${log_file}"
+  echo "  [DEPLOY] Iniciando slave em ${public_ip}"
 
-  # Dispara o start-slave.sh no host remoto em background
   (
     ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
       cd '${remote_work_dir}' || exit 1
@@ -245,16 +214,13 @@ while (( idx < total )); do
   ) > "${log_file}" 2>&1 &
 
   started=$((started + 1))
-  echo "  [DEPLOY] n restante agora = $((n - started))"
-  echo "  [DEPLOY] SSH disparado para ${public_ip} em background."
-  echo "  [DEPLOY] Aguardando pequena pausa para não sobrecarregar o SSH."
   sleep 0.2
 
   ((idx+=5))
 done
 
 echo
-echo "==== [start-remote-slaves] Todos os SSHs disparados. Chamando 'wait' para aguardar término dos comandos locais. ===="
+echo "==== [start-remote-slaves] Todos os SSHs disparados. ===="
 wait || true
 echo "==== [start-remote-slaves] FIM ==========================================="
 echo "====================================================================="
