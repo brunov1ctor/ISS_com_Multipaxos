@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# Versão corrigida para uso no ISS/Emulab
-# - ignora "-i" inválido enviado automaticamente pelo ISS
-# - cria diretório de destino automaticamente
-# - executa scp corretamente com retry
+# stubborn-scp.sh - versão simplificada para o ISS/Emulab
+# Formato esperado de chamada:
+#   stubborn-scp.sh <tentativas> -i <origem_remota> <destino_local>
+# Exemplo real:
+#   stubborn-scp.sh 10 -i 172.20.3.2:iss/experiment-config/config-0000.yml config/config.yml
 #
 
 set -euo pipefail
@@ -12,30 +13,20 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
-if [[ $# -lt 3 ]]; then
-  log "Uso: $0 <tentativas> [opções scp...] <origem> <destino>"
+if [[ $# -lt 4 ]]; then
+  log "Uso esperado: $0 <tentativas> -i <origem_remota> <destino_local>"
   exit 1
 fi
 
 retries="$1"
 shift
 
-# O ISS manda algo tipo:
-#   stubborn-scp.sh 10 -i 172.20.3.2:iss/... config/config.yml
-# Esse "-i" sozinho quebra o scp → ignoramos
-if [[ "$#" -ge 1 && "$1" == "-i" ]]; then
-  shift
-fi
+# Agora esperamos: -i SRC DST
+dummy_flag="$1"   # normalmente "-i" (ignoramos)
+src="$2"
+dst="$3"
 
-if [[ "$#" -lt 2 ]]; then
-  log "Erro: argumentos insuficientes (origem/destino)"
-  exit 1
-fi
-
-src="${1}"
-dst="${2}"
-
-# Criar diretório de destino (ex.: config/)
+# Garante diretório de destino (ex.: config/)
 mkdir -p "$(dirname "$dst")"
 
 attempt=1
