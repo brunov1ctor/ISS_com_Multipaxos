@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 
-# Não usa -e pra não abortar o script inteiro se um ssh/scp falhar em um nó
+# Não usamos -e pra não matar o script se um ssh/scp falhar em um nó.
 set -uo pipefail
 
 exp_data_dir="$1"
 tag="$2"
 n="$3"
 master_ip="$4"
+shift 4  # o resto dos argumentos descrevem as instâncias (skip ..., node-0 ..., node-1 ...)
 
 echo "====================================================================="
 echo "=== [start-remote-slaves] INÍCIO ===================================="
@@ -14,6 +15,7 @@ echo "  exp_data_dir = ${exp_data_dir}"
 echo "  tag          = ${tag}"
 echo "  n            = ${n}"
 echo "  master_ip    = ${master_ip}"
+echo "  args rest    = $*"
 echo "====================================================================="
 echo
 
@@ -33,17 +35,6 @@ local_orderingclient="${local_bin_dir}/orderingclient"
 
 # Script start-slave que será copiado para os slaves
 local_start_slave_script="scripts/start-slave.sh"
-
-# Arquivo de descrição das instâncias (modo remote)
-instance_info_file="scripts/instance-info"
-
-if [[ ! -f "${instance_info_file}" ]]; then
-  echo "ERRO: arquivo ${instance_info_file} não encontrado!"
-  exit 1
-fi
-
-echo "Usando ${instance_info_file}: $(readlink -f "${instance_info_file}")"
-echo
 
 # ----------------------------------------------------------------------
 # Verificação dos binários locais
@@ -87,10 +78,13 @@ ensure_remote_slave() {
 
   echo "---------------------------------------------------------------------"
   echo "  [REMOTO] Garantindo binários e start-slave.sh em ${public_ip}"
-  echo "           remote_gopath   = ${remote_gopath}"
-  echo "           remote_bin_dir  = ${remote_bin_dir}"
-  echo "           remote_work_dir = ${remote_work_dir}"
-  echo "           remote_logs_dir = ${remote_logs_dir}"
+  echo "           instance_id    = ${instance_id}"
+  echo "           role           = ${role}"
+  echo "           tag            = ${slave_tag}"
+  echo "           remote_gopath  = ${remote_gopath}"
+  echo "           remote_bin_dir = ${remote_bin_dir}"
+  echo "           remote_work_dir= ${remote_work_dir}"
+  echo "           remote_logs_dir= ${remote_logs_dir}"
   echo "---------------------------------------------------------------------"
 
   # Cria diretórios remotos
@@ -144,14 +138,36 @@ ensure_remote_slave() {
 }
 
 # ----------------------------------------------------------------------
-# Garante binários + start-slave.sh em TODOS os slaves do instance-info
+# 1) Garante binários + start-slave.sh em TODOS os slaves descritos nos argumentos
+#    Formato dos args depois do shift 4:
+#    skip 0 master skip 1 1client node-0 172.20.3.2 10.10.1.1 master master node-1 172.20.4.1 10.10.1.2 slave peers ...
 # ----------------------------------------------------------------------
-echo "==== [start-remote-slaves] (REMOTO) Garantindo binários e script em todos os slaves (${instance_info_file}) ===="
+echo "==== [start-remote-slaves] (REMOTO) Garantindo binários e script em todos os slaves (via args) ===="
 
-while read -r instance_id public_ip private_ip role slave_tag; do
-  # ignora linha vazia ou comentário
-  [[ -z "${instance_id}" ]] && continue
-  [[ "${instance_id}" =~ ^# ]] && continue
+rest=("$@")
+idx=0
+total=${#rest[@]}
+
+while (( idx < total )); do
+  key="${rest[$idx]}"
+
+  if [[ "${key}" == "skip" ]]; then
+    # Pula: skip <index> <tag>
+    ((idx+=3))
+    continue
+  fi
+
+  # Precisamos de 5 campos: instance_id public_ip private_ip role slave_tag
+  if (( idx + 4 >= total )); then
+    echo "  [REMOTO-AVISO] Argumentos insuficientes para descrever instância a partir de '${key}'. Interrompendo parsing."
+    break
+  fi
+
+  instance_id="${rest[$idx]}"
+  public_ip="${rest[$((idx+1))]}"
+  private_ip="${rest[$((idx+2))]}"
+  role="${rest[$((idx+3))]}"
+  slave_tag="${rest[$((idx+4))]}"
 
   echo "---------------------------------------------------------------------"
   echo "  [REMOTO] Nó ${instance_id} (${public_ip} / ${private_ip})"
@@ -159,22 +175,39 @@ while read -r instance_id public_ip private_ip role slave_tag; do
   echo "---------------------------------------------------------------------"
 
   ensure_remote_slave "${instance_id}" "${public_ip}" "${private_ip}" "${role}" "${slave_tag}"
-done < "${instance_info_file}"
+
+  ((idx+=5))
+done
 
 echo "==== [start-remote-slaves] Distribuição/garantia remota concluída. ===="
 echo
 
 # ----------------------------------------------------------------------
-# Agora de fato inicia os slaves com a TAG solicitada (peers, 1client, etc.)
+# 2) Agora de fato inicia os slaves com a TAG solicitada (peers, 1client, etc.)
 # ----------------------------------------------------------------------
 echo "==== [start-remote-slaves] Iniciando loop pelos nós (n = ${n}, tag='${tag}') ===="
 
 started=0
+idx=0
 
-while read -r instance_id public_ip private_ip role slave_tag; do
-  # ignora linha vazia ou comentário
-  [[ -z "${instance_id}" ]] && continue
-  [[ "${instance_id}" =~ ^# ]] && continue
+while (( idx < total )); do
+  key="${rest[$idx]}"
+
+  if [[ "${key}" == "skip" ]]; then
+    ((idx+=3))
+    continue
+  fi
+
+  if (( idx + 4 >= total )); then
+    echo "  [LOOP-AVISO] Argumentos insuficientes para instância a partir de '${key}'. Parando."
+    break
+  fi
+
+  instance_id="${rest[$idx]}"
+  public_ip="${rest[$((idx+1))]}"
+  private_ip="${rest[$((idx+2))]}"
+  role="${rest[$((idx+3))]}"
+  slave_tag="${rest[$((idx+4))]}"
 
   echo "---------------------------------------------------------------------"
   echo "  [LOOP] instance_id=${instance_id}"
@@ -188,11 +221,13 @@ while read -r instance_id public_ip private_ip role slave_tag; do
   # Só iniciamos se for slave e a tag do nó bater com a tag alvo
   if [[ "${role}" != "slave" || "${slave_tag}" != "${tag}" ]]; then
     echo "  [LOOP] role/tag não batem (role='${role}', tag='${slave_tag}'); ignorando esse nó."
+    ((idx+=5))
     continue
   fi
 
   if (( started >= n )); then
     echo "  [LOOP] Já atingimos n=${n} nós iniciados para tag='${tag}'; ignorando nós extras."
+    ((idx+=5))
     continue
   fi
 
@@ -215,7 +250,8 @@ while read -r instance_id public_ip private_ip role slave_tag; do
   echo "  [DEPLOY] Aguardando pequena pausa para não sobrecarregar o SSH."
   sleep 0.2
 
-done < "${instance_info_file}"
+  ((idx+=5))
+done
 
 echo
 echo "==== [start-remote-slaves] Todos os SSHs disparados. Chamando 'wait' para aguardar término dos comandos locais. ===="
