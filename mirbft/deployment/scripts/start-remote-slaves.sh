@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+# Não usa -e pra não abortar o script inteiro se um ssh/scp falhar em um nó
+set -uo pipefail
 
 exp_data_dir="$1"
 tag="$2"
@@ -33,7 +34,7 @@ local_orderingclient="${local_bin_dir}/orderingclient"
 # Script start-slave que será copiado para os slaves
 local_start_slave_script="scripts/start-slave.sh"
 
-# Arquivo de descrição das instâncias (remoto)
+# Arquivo de descrição das instâncias (modo remote)
 instance_info_file="scripts/instance-info"
 
 if [[ ! -f "${instance_info_file}" ]]; then
@@ -89,14 +90,18 @@ ensure_remote_slave() {
   echo "           remote_gopath   = ${remote_gopath}"
   echo "           remote_bin_dir  = ${remote_bin_dir}"
   echo "           remote_work_dir = ${remote_work_dir}"
+  echo "           remote_logs_dir = ${remote_logs_dir}"
   echo "---------------------------------------------------------------------"
 
+  # Cria diretórios remotos
   ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
-    set -e
-    mkdir -p '${remote_bin_dir}'
-    mkdir -p '${remote_work_dir}'
-    mkdir -p '${remote_logs_dir}'
-  "
+    mkdir -p '${remote_bin_dir}' '${remote_work_dir}' '${remote_logs_dir}'
+  " >/dev/null 2>&1
+
+  if [[ $? -ne 0 ]]; then
+    echo "    [REMOTO-ERRO] Falha ao criar diretórios em ${public_ip} (ssh). Continuando para próximo nó."
+    return
+  fi
 
   # Copia binários
   scp -o StrictHostKeyChecking=accept-new \
@@ -104,12 +109,22 @@ ensure_remote_slave() {
     "${local_discoveryslave}" \
     "${local_orderingpeer}" \
     "${local_orderingclient}" \
-    "Bruno@${public_ip}:${remote_bin_dir}/" >/dev/null
+    "Bruno@${public_ip}:${remote_bin_dir}/" >/dev/null 2>&1
+
+  if [[ $? -ne 0 ]]; then
+    echo "    [REMOTO-ERRO] Falha ao copiar binários para ${public_ip}. Continuando para próximo nó."
+    return
+  fi
 
   # Copia start-slave.sh
   scp -o StrictHostKeyChecking=accept-new \
     "${local_start_slave_script}" \
-    "Bruno@${public_ip}:${remote_work_dir}/start-slave.sh" >/dev/null
+    "Bruno@${public_ip}:${remote_work_dir}/start-slave.sh" >/dev/null 2>&1
+
+  if [[ $? -ne 0 ]]; then
+    echo "    [REMOTO-ERRO] Falha ao copiar start-slave.sh para ${public_ip}. Continuando para próximo nó."
+    return
+  fi
 
   # Garante permissão de execução
   ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
@@ -118,7 +133,12 @@ ensure_remote_slave() {
              '${remote_bin_dir}/orderingpeer' \
              '${remote_bin_dir}/orderingclient' \
              '${remote_work_dir}/start-slave.sh'
-  "
+  " >/dev/null 2>&1
+
+  if [[ $? -ne 0 ]]; then
+    echo "    [REMOTO-ERRO] Falha ao ajustar permissões em ${public_ip}. Continuando para próximo nó."
+    return
+  fi
 
   echo "    [REMOTO] OK: binários e start-slave.sh garantidos em ${public_ip}."
 }
@@ -183,7 +203,7 @@ while read -r instance_id public_ip private_ip role slave_tag; do
   # Dispara o start-slave.sh no host remoto em background
   (
     ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
-      cd '${remote_work_dir}'
+      cd '${remote_work_dir}' || exit 1
       nohup ./start-slave.sh '${tag}' '${master_ip}' '${public_ip}' '${private_ip}' \
         > '${remote_logs_dir}/start-slave-${tag}.log' 2>&1 &
     "
