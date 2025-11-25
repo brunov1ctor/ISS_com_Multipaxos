@@ -31,7 +31,7 @@ retries="$1"
 shift
 
 # Aceita (e ignora) um '-i' legado
-if [[ "$1" == "-i" ]]; then
+if [[ "${1:-}" == "-i" ]]; then
   shift
 fi
 
@@ -58,7 +58,7 @@ if ! $is_src_remote && ! $is_dst_remote; then
   exit 1
 fi
 
-# Opções de SSH iguais ao restante do deploy (evita prompt de fingerprint)
+# Opções de SSH para NÃO pedir confirmação de host
 ssh_base_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
 
 copy_remote_to_local() {
@@ -68,7 +68,6 @@ copy_remote_to_local() {
   local host="${remote%%:*}"
   local remote_path="${remote#*:}"
 
-  # Garante diretório local
   mkdir -p "$(dirname "$local_path")"
 
   if ssh $ssh_base_opts "$host" "cat '$remote_path'" > "$local_path"; then
@@ -85,7 +84,7 @@ copy_local_to_remote() {
   local host="${remote%%:*}"
   local remote_path="${remote#*:}"
 
-  # Garante diretório remoto de destino
+  # Garante diretório remoto
   if ! ssh $ssh_base_opts "$host" "mkdir -p \"\$(dirname '$remote_path')\""; then
     return $?
   fi
