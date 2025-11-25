@@ -8,10 +8,14 @@
 #   ✔ Distribuição completa para todos os slaves
 #   ✔ Inclusão do diretório scripts/ (inclui stubborn-scp.sh)
 #   ✔ Permissões remotas corrigidas
+#   ✔ SSH/SCP sem prompt de "yes" (StrictHostKeyChecking=no)
 #
 # Não usamos -e para evitar abortar se um ssh falhar em um nó.
 #
 set -uo pipefail
+
+# Opções comuns de SSH/SCP para NÃO pedir confirmação de host
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
 
 exp_data_dir="$1"
 tag="$2"
@@ -139,12 +143,12 @@ ensure_remote_slave() {
   echo "---------------------------------------------------------------------"
 
   # Criar diretórios remotos
-  ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
+  ssh $SSH_OPTS "Bruno@${public_ip}" "
     mkdir -p '${remote_bin_dir}' '${remote_work_dir}' '${remote_logs_dir}'
   " >/dev/null 2>&1
 
   # Copiar binários
-  scp -o StrictHostKeyChecking=accept-new \
+  scp $SSH_OPTS \
     "${local_discoverymaster}" \
     "${local_discoveryslave}" \
     "${local_orderingpeer}" \
@@ -152,17 +156,17 @@ ensure_remote_slave() {
     "Bruno@${public_ip}:${remote_bin_dir}/" >/dev/null 2>&1
 
   # Copiar start-slave.sh
-  scp -o StrictHostKeyChecking=accept-new \
+  scp $SSH_OPTS \
     "${local_start_slave_script}" \
     "Bruno@${public_ip}:${remote_work_dir}/start-slave.sh" >/dev/null 2>&1
 
   # Copiar diretório scripts/
-  scp -r -o StrictHostKeyChecking=accept-new \
+  scp -r $SSH_OPTS \
     "${local_scripts_dir}" \
     "Bruno@${public_ip}:${remote_work_dir}/" >/dev/null 2>&1
 
   # Permissões
-  ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
+  ssh $SSH_OPTS "Bruno@${public_ip}" "
     chmod +x '${remote_bin_dir}/discoverymaster' \
              '${remote_bin_dir}/discoveryslave' \
              '${remote_bin_dir}/orderingpeer' \
@@ -247,7 +251,7 @@ while (( idx < total )); do
   echo "  [DEPLOY] Iniciando slave em ${public_ip}"
 
   (
-    ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
+    ssh $SSH_OPTS "Bruno@${public_ip}" "
       cd '${remote_work_dir}' || exit 1
       nohup ./start-slave.sh \
         '${tag}' '${master_ip}' '${public_ip}' '${private_ip}' \
