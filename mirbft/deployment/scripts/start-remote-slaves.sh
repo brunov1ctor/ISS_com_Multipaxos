@@ -6,7 +6,7 @@
 #   ✔ Compilação automática dos binários no node-0
 #   ✔ Verificação segura dos binários compilados
 #   ✔ Distribuição completa para todos os slaves
-#   ✔ Inclusão automática do diretório scripts/ (incluindo stubborn-scp.sh)
+#   ✔ Inclusão do diretório scripts/ (inclui stubborn-scp.sh)
 #   ✔ Permissões remotas corrigidas
 #
 # Não usamos -e para evitar abortar se um ssh falhar em um nó.
@@ -18,6 +18,8 @@ tag="$2"
 n="$3"
 master_ip="$4"
 shift 4
+
+orig_pwd="$(pwd)"
 
 echo "====================================================================="
 echo "=== [start-remote-slaves] INÍCIO ===================================="
@@ -37,7 +39,10 @@ remote_bin_dir="${remote_gopath}/bin"
 remote_work_dir="/users/Bruno/iss"
 remote_logs_dir="/users/Bruno/iss-logs"
 
+# Repo e diretório de deploy
 local_repo="/tmp/ISS_com_Multipaxos/mirbft"
+# orig_pwd deve ser /tmp/ISS_com_Multipaxos/mirbft/deployment
+
 local_bin_dir="/users/Bruno/go/bin"
 
 local_discoverymaster="${local_bin_dir}/discoverymaster"
@@ -45,6 +50,7 @@ local_discoveryslave="${local_bin_dir}/discoveryslave"
 local_orderingpeer="${local_bin_dir}/orderingpeer"
 local_orderingclient="${local_bin_dir}/orderingclient"
 
+# Estes são relativos ao diretório de deployment (orig_pwd)
 local_start_slave_script="scripts/start-slave.sh"
 local_scripts_dir="scripts"   # inclui stubborn-scp.sh
 
@@ -73,6 +79,12 @@ fi
 echo "  [LOCAL] Compilação concluída."
 echo
 
+# Volta para o diretório original de deployment
+cd "${orig_pwd}" || {
+  echo "  [LOCAL] ERRO: não foi possível voltar para ${orig_pwd}"
+  exit 1
+}
+
 # ----------------------------------------------------------------------
 # Verificação dos binários compilados
 # ----------------------------------------------------------------------
@@ -89,9 +101,10 @@ for bin in "${local_discoverymaster}" "${local_discoveryslave}" "${local_orderin
   fi
 done
 
-# Verificar start-slave.sh
+# Verificar start-slave.sh (agora relativo ao diretório de deployment)
 if [[ ! -f "${local_start_slave_script}" ]]; then
   echo "  [LOCAL] ERRO: script ${local_start_slave_script} não encontrado!"
+  echo "         (cwd atual: $(pwd))"
   exit 1
 fi
 
@@ -187,4 +200,70 @@ while (( idx < total )); do
     "${rest[$idx]}"       \
     "${rest[$((idx+1))]}" \
     "${rest[$((idx+2))]}" \
+    "${rest[$((idx+3))]}" \
+    "${rest[$((idx+4))]}"
+
+  ((idx+=5))
+done
+
+echo "==== [start-remote-slaves] Distribuição concluída. ===="
+echo
+
+# ----------------------------------------------------------------------
+# Disparar slaves da tag desejada
+# ----------------------------------------------------------------------
+echo "==== [start-remote-slaves] Iniciando slaves da TAG '${tag}' (n = ${n}) ===="
+
+started=0
+idx=0
+
+while (( idx < total )); do
+  key="${rest[$idx]}"
+
+  if [[ "${key}" == "skip" ]]; then
+    ((idx+=3))
+    continue
+  fi
+
+  if (( idx + 4 >= total )); then break; fi
+
+  instance_id="${rest[$idx]}"
+  public_ip="${rest[$((idx+1))]}"
+  private_ip="${rest[$((idx+2))]}"
+  role="${rest[$((idx+3))]}"
+  slave_tag="${rest[$((idx+4))]}"
+
+  if [[ "${role}" != "slave" || "${slave_tag}" != "${tag}" ]]; then
+    ((idx+=5))
+    continue
+  fi
+
+  if (( started >= n )); then
+    ((idx+=5))
+    continue
+  fi
+
+  log_file="${exp_data_dir}/ssh-${tag}-${public_ip}.log"
+  echo "  [DEPLOY] Iniciando slave em ${public_ip}"
+
+  (
+    ssh -o StrictHostKeyChecking=accept-new "Bruno@${public_ip}" "
+      cd '${remote_work_dir}' || exit 1
+      nohup ./start-slave.sh \
+        '${tag}' '${master_ip}' '${public_ip}' '${private_ip}' \
+        > '${remote_logs_dir}/start-slave-${tag}.log' 2>&1 &
+    "
+  ) > "${log_file}" 2>&1 &
+
+  started=$((started + 1))
+  sleep 0.2
+
+  ((idx+=5))
+done
+
+echo
+echo "==== [start-remote-slaves] Todos os slaves disparados. ===="
+wait || true
+echo "==== [start-remote-slaves] FIM ==========================================="
+echo "====================================================================="
 
