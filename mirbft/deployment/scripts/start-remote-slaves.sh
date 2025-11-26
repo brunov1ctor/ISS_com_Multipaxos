@@ -1,29 +1,23 @@
 #!/usr/bin/env bash
 #
-# start-remote-slaves.sh — versão corrigida e automatizada
+# start-remote-slaves.sh — versão genérica (sem usuário hard-coded)
 #
-# Agora com:
-#   ✔ Compilação automática dos binários no node-0
-#   ✔ Verificação segura dos binários compilados
-#   ✔ Distribuição completa para todos os slaves
-#   ✔ Inclusão do diretório scripts/ (inclui stubborn-scp.sh)
-#   ✔ Permissões remotas corrigidas
-#   ✔ SSH/SCP sem prompt de "yes" (StrictHostKeyChecking=no)
+# - Compila automaticamente os binários no nó local (node-0)
+# - Verifica os binários gerados
+# - Distribui binários + scripts/ para todos os slaves
+# - Dispara os slaves de uma TAG específica (peers, 1client, etc.)
 #
-# Não usamos -e para evitar abortar se um ssh falhar em um nó.
+# Assumindo:
+#   * Você está rodando a partir do diretório 'deployment'
+#   * 'scripts/global-vars.sh' define caminhos remotos (remote_work_dir, remote_gopath, ...)
 #
 set -uo pipefail
-
-# Opções comuns de SSH/SCP para NÃO pedir confirmação de host
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
 
 exp_data_dir="$1"
 tag="$2"
 n="$3"
 master_ip="$4"
 shift 4
-
-orig_pwd="$(pwd)"
 
 echo "====================================================================="
 echo "=== [start-remote-slaves] INÍCIO ===================================="
@@ -36,27 +30,49 @@ echo "====================================================================="
 echo
 
 # ----------------------------------------------------------------------
-# Caminhos locais e remotos
+# Diretórios base (local) e variáveis globais
 # ----------------------------------------------------------------------
-remote_gopath="/users/Bruno/go"
-remote_bin_dir="${remote_gopath}/bin"
-remote_work_dir="/users/Bruno/iss"
-remote_logs_dir="/users/Bruno/iss-logs"
+# BASE_DIR = diretório 'deployment'
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${BASE_DIR}"
 
-# Repo e diretório de deploy
-local_repo="/tmp/ISS_com_Multipaxos/mirbft"
-# orig_pwd deve ser /tmp/ISS_com_Multipaxos/mirbft/deployment
+# Carrega variáveis compartilhadas (ssh_options, remote_work_dir, remote_gopath, etc.)
+source scripts/global-vars.sh
 
-local_bin_dir="/users/Bruno/go/bin"
+# Raiz do repositório (um nível acima de deployment)
+local_repo="$(cd "${BASE_DIR}/.." && pwd)"
+
+# Caminhos locais de Go:
+#   - se GOBIN já estiver definido, usamos
+#   - senão, se GOPATH existir, usamos GOPATH/bin
+#   - senão, caímos no remote_gopath definido em global-vars.sh
+if [[ -n "${GOBIN:-}" ]]; then
+  local_bin_dir="${GOBIN%/}"
+elif [[ -n "${GOPATH:-}" ]]; then
+  local_bin_dir="${GOPATH%/}/bin"
+else
+  # Fallback: usa remote_gopath também como GOPATH local
+  GOPATH="${remote_gopath%/}"
+  export GOPATH
+  local_bin_dir="${GOPATH}/bin"
+fi
+
+export GOPATH="${GOPATH:-${remote_gopath%/}}"
+export GOBIN="${local_bin_dir}"
+export PATH="${GOBIN}:/usr/local/go/bin:${PATH}"
 
 local_discoverymaster="${local_bin_dir}/discoverymaster"
 local_discoveryslave="${local_bin_dir}/discoveryslave"
 local_orderingpeer="${local_bin_dir}/orderingpeer"
 local_orderingclient="${local_bin_dir}/orderingclient"
 
-# Estes são relativos ao diretório de deployment (orig_pwd)
-local_start_slave_script="scripts/start-slave.sh"
-local_scripts_dir="scripts"   # inclui stubborn-scp.sh
+# Estes são relativos ao diretório de deployment (BASE_DIR)
+local_start_slave_script="${BASE_DIR}/scripts/start-slave.sh"
+local_scripts_dir="${BASE_DIR}/scripts"
+
+# Caminhos remotos (derivados de global-vars.sh)
+remote_bin_dir="${remote_gopath%/}/bin"
+remote_logs_dir="${remote_work_dir%/}/logs"
 
 # ----------------------------------------------------------------------
 # Auto-Compilação dos binários
@@ -70,10 +86,6 @@ cd "${local_repo}" || {
   exit 1
 }
 
-export GOPATH=/users/Bruno/go
-export GOBIN=/users/Bruno/go/bin
-export PATH=$GOBIN:/usr/local/go/bin:$PATH
-
 echo "  Executando: go install ./cmd/..."
 if ! go install ./cmd/... ; then
   echo "  [LOCAL] ERRO: falha ao compilar binários!"
@@ -83,9 +95,9 @@ fi
 echo "  [LOCAL] Compilação concluída."
 echo
 
-# Volta para o diretório original de deployment
-cd "${orig_pwd}" || {
-  echo "  [LOCAL] ERRO: não foi possível voltar para ${orig_pwd}"
+# Volta para o diretório 'deployment'
+cd "${BASE_DIR}" || {
+  echo "  [LOCAL] ERRO: não foi possível voltar para ${BASE_DIR}"
   exit 1
 }
 
@@ -105,16 +117,15 @@ for bin in "${local_discoverymaster}" "${local_discoveryslave}" "${local_orderin
   fi
 done
 
-# Verificar start-slave.sh (agora relativo ao diretório de deployment)
+# Verificar start-slave.sh
 if [[ ! -f "${local_start_slave_script}" ]]; then
   echo "  [LOCAL] ERRO: script ${local_start_slave_script} não encontrado!"
-  echo "         (cwd atual: $(pwd))"
   exit 1
 fi
 
-# Verificar stubborn-scp.sh
+# Verificar diretório scripts/ (contém stubborn-scp.sh, analyze/, etc.)
 if [[ ! -f "${local_scripts_dir}/stubborn-scp.sh" ]]; then
-  echo "  [LOCAL] ERRO: scripts/stubborn-scp.sh não encontrado!"
+  echo "  [LOCAL] ERRO: ${local_scripts_dir}/stubborn-scp.sh não encontrado!"
   exit 1
 fi
 
@@ -143,43 +154,43 @@ ensure_remote_slave() {
   echo "---------------------------------------------------------------------"
 
   # Criar diretórios remotos
-  ssh $SSH_OPTS "Bruno@${public_ip}" "
+  ssh ${ssh_options} "${public_ip}" "
     mkdir -p '${remote_bin_dir}' '${remote_work_dir}' '${remote_logs_dir}'
   " >/dev/null 2>&1
 
   # Copiar binários
-  scp $SSH_OPTS \
+  scp ${ssh_options} \
     "${local_discoverymaster}" \
     "${local_discoveryslave}" \
     "${local_orderingpeer}" \
     "${local_orderingclient}" \
-    "Bruno@${public_ip}:${remote_bin_dir}/" >/dev/null 2>&1
+    "${public_ip}:${remote_bin_dir}/" >/dev/null 2>&1
 
   # Copiar start-slave.sh
-  scp $SSH_OPTS \
+  scp ${ssh_options} \
     "${local_start_slave_script}" \
-    "Bruno@${public_ip}:${remote_work_dir}/start-slave.sh" >/dev/null 2>&1
+    "${public_ip}:${remote_work_dir}/start-slave.sh" >/dev/null 2>&1
 
   # Copiar diretório scripts/
-  scp -r $SSH_OPTS \
+  scp -r ${ssh_options} \
     "${local_scripts_dir}" \
-    "Bruno@${public_ip}:${remote_work_dir}/" >/dev/null 2>&1
+    "${public_ip}:${remote_work_dir}/" >/dev/null 2>&1
 
   # Permissões
-  ssh $SSH_OPTS "Bruno@${public_ip}" "
+  ssh ${ssh_options} "${public_ip}" "
     chmod +x '${remote_bin_dir}/discoverymaster' \
              '${remote_bin_dir}/discoveryslave' \
              '${remote_bin_dir}/orderingpeer' \
              '${remote_bin_dir}/orderingclient' \
              '${remote_work_dir}/start-slave.sh' \
-             '${remote_work_dir}/scripts/'*.sh || true
+             '${remote_work_dir}/scripts/'*.sh 2>/dev/null || true
   " >/dev/null 2>&1
 
   echo "    [REMOTO] OK: ambiente garantido em ${public_ip}."
 }
 
 # ----------------------------------------------------------------------
-# Distribuição
+# Distribuição (garantir ambiente em todos os slaves)
 # ----------------------------------------------------------------------
 echo "==== [start-remote-slaves] (REMOTO) Garantindo binários e scripts ===="
 
@@ -191,6 +202,7 @@ while (( idx < total )); do
   key="${rest[$idx]}"
 
   if [[ "${key}" == "skip" ]]; then
+    # Formato: skip <algo> <algo> → pula 3 entradas
     ((idx+=3))
     continue
   fi
@@ -229,7 +241,9 @@ while (( idx < total )); do
     continue
   fi
 
-  if (( idx + 4 >= total )); then break; fi
+  if (( idx + 4 >= total )); then
+    break
+  fi
 
   instance_id="${rest[$idx]}"
   public_ip="${rest[$((idx+1))]}"
@@ -251,7 +265,7 @@ while (( idx < total )); do
   echo "  [DEPLOY] Iniciando slave em ${public_ip}"
 
   (
-    ssh $SSH_OPTS "Bruno@${public_ip}" "
+    ssh ${ssh_options} "${public_ip}" "
       cd '${remote_work_dir}' || exit 1
       nohup ./start-slave.sh \
         '${tag}' '${master_ip}' '${public_ip}' '${private_ip}' \
