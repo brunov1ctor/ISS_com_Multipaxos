@@ -1,72 +1,101 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# start-slave.sh
+#
+# Script executado em CADA slave (via start-remote-slaves.sh).
+# Responsabilidade:
+#   - Ajustar PATH (Go + scripts do ISS).
+#   - Garantir diretório de logs.
+#   - Subir o discoveryslave adequado (peers ou 1client) apontando para o master.
+#
+# Quem cuida de:
+#   - enviar master-commands.cmd,
+#   - disparar orderingpeer/orderingclient,
+#   - usar stubborn-scp.sh para buscar config,
+# é o MASTER (via discovery + master-commands).
+#
+# Argumentos:
+#   $1 = tag       (peers | 1client)
+#   $2 = master_ip (IP público do master, ex: 172.19.124.1)
+#   $3 = public_ip (IP público deste nó)
+#   $4 = private_ip (IP privado deste nó, ex: 10.10.1.X)
+#
 
-# Script de inicialização do slave (peer ou client) para o ISS no Emulab.
+set -euo pipefail
 
-TAG="$1"
-MASTER_IP="$2"
-PUBLIC_IP="$3"
-PRIVATE_IP="$4"
+if [[ $# -lt 4 ]]; then
+  echo "Uso: $0 <tag> <master_ip> <public_ip> <private_ip>" >&2
+  exit 1
+fi
 
-# Diretório base no nó remoto onde o ISS está sendo executado
-BASE_DIR="${BASE_DIR:-$HOME/iss}"
+tag="$1"
+master_ip="$2"
+public_ip="$3"
+private_ip="$4"
 
-# PATH para encontrar discovery e orderingpeer no nó remoto
-export GOPATH="${GOPATH:-$HOME/go}"
-export GOROOT="${GOROOT:-/usr/local/go}"
-export PATH="$GOPATH/bin:$GOROOT/bin:$BASE_DIR/scripts:$BASE_DIR/deployment/scripts:$PATH"
+# ----------------------------------------------------------------------
+# Caminhos fixos (iguais aos usados no restante do deploy)
+# ----------------------------------------------------------------------
+remote_gopath="/users/Bruno/go"
+remote_bin_dir="${remote_gopath}/bin"
+remote_work_dir="/users/Bruno/iss"
+remote_logs_dir="/users/Bruno/iss-logs"
 
-# Arquivo de log local (no nó remoto)
-LOG_FILE="$BASE_DIR/start-slave-$TAG.log"
-
-# Função de log com timestamp
+# ----------------------------------------------------------------------
+# Função de log simples (vai pra stderr, útil nos logs de SSH)
+# ----------------------------------------------------------------------
 log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start-slave] $*" >&2
 }
 
-# Garante que o diretório existe e redireciona stdout/stderr para o log
-mkdir -p "$BASE_DIR" 2>/dev/null
-exec >>"$LOG_FILE" 2>&1
+log "Iniciando start-slave com:"
+log "  tag       = ${tag}"
+log "  master_ip = ${master_ip}"
+log "  public_ip = ${public_ip}"
+log "  private_ip= ${private_ip}"
 
-log "==============================================="
-log "Iniciando start-slave.sh"
-log "TAG=$TAG MASTER_IP=$MASTER_IP PUBLIC_IP=$PUBLIC_IP PRIVATE_IP=$PRIVATE_IP"
-log "BASE_DIR=$BASE_DIR"
-log "PATH=$PATH"
+# ----------------------------------------------------------------------
+# Ajuste de PATH / ambiente
+# ----------------------------------------------------------------------
+export GOPATH="${remote_gopath}"
+export GOBIN="${remote_bin_dir}"
 
-# Arquivo de status (peers usa status-peers, resto usa status)
-if [ "$TAG" = "peers" ]; then
-  STATUS_FILE="$BASE_DIR/status-peers"
-else
-  STATUS_FILE="$BASE_DIR/status"
-fi
+# PATH:
+#   - Go binários (discoverymaster, discoveryslave, orderingpeer, orderingclient)
+#   - /usr/local/go/bin (caso o Go esteja aqui)
+#   - scripts do ISS (incluindo stubborn-scp.sh)
+#   - scripts de deployment, se precisarem ser invocados indiretamente
+export PATH="${GOBIN}:/usr/local/go/bin:${remote_work_dir}:${remote_work_dir}/scripts:${remote_work_dir}/deployment/scripts:${PATH}"
 
-log "STATUS_FILE=$STATUS_FILE"
+log "PATH configurado: ${PATH}"
 
-########################################
-# Inicializa o discoveryslave
-########################################
+# ----------------------------------------------------------------------
+# Garante diretório de logs no slave
+# ----------------------------------------------------------------------
+mkdir -p "${remote_logs_dir}"
 
-log "Diretório base: $BASE_DIR"
-cd "$BASE_DIR" || exit 1
+# ----------------------------------------------------------------------
+# Sobe o discoveryslave correto (peers ou 1client)
+# ----------------------------------------------------------------------
+case "${tag}" in
+  peers|1client)
+    log "Subindo discoveryslave para tag='${tag}' com master=${master_ip}:9999"
 
-log "Subindo discoveryslave..."
-CMD="discoveryslave $TAG ${MASTER_IP}:9999 $PUBLIC_IP $PRIVATE_IP"
-log "Comando: $CMD"
+    # Importante: rodar em background e manter log separado
+    # para não depender da sessão SSH que disparou o start-slave.sh.
+    nohup discoveryslave "${tag}" "${master_ip}:9999" "${public_ip}" "${private_ip}" \
+      > "${remote_logs_dir}/discoveryslave-${tag}.log" 2>&1 &
 
-$CMD &
-DISCOVERY_PID=$!
-log "discoveryslave iniciado com PID=$DISCOVERY_PID"
+    ds_pid=$!
+    log "discoveryslave iniciado com PID=${ds_pid}, log em ${remote_logs_dir}/discoveryslave-${tag}.log"
+    ;;
 
-# Espera alguns segundos para ver se o processo morreu ou continua vivo
-sleep 5
+  *)
+    log "ERRO: tag desconhecida '${tag}'. Esperado: 'peers' ou '1client'."
+    exit 1
+    ;;
+esac
 
-if kill -0 "$DISCOVERY_PID" 2>/dev/null; then
-  echo "1" > "$STATUS_FILE" 2>/dev/null || true
-  log "discoveryslave ainda rodando, marcando STATUS=1"
-else
-  echo "0" > "$STATUS_FILE" 2>/dev/null || true
-  log "discoveryslave não está rodando, STATUS=0"
-fi
-
-log "start-slave.sh finalizado"
+log "start-slave.sh concluído com sucesso para tag='${tag}'."
+exit 0
 
