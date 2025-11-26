@@ -8,11 +8,11 @@ PUBLIC_IP="$3"
 PRIVATE_IP="$4"
 
 # Diretório base no nó remoto onde o ISS está sendo executado
-BASE_DIR="/users/Bruno/iss"
+BASE_DIR="${BASE_DIR:-$HOME/iss}"
 
 # PATH para encontrar discovery e orderingpeer no nó remoto
-export GOPATH="/users/Bruno/go"
-export GOROOT="/usr/local/go"
+export GOPATH="${GOPATH:-$HOME/go}"
+export GOROOT="${GOROOT:-/usr/local/go}"
 export PATH="$GOPATH/bin:$GOROOT/bin:$BASE_DIR/scripts:$BASE_DIR/deployment/scripts:$PATH"
 
 # Arquivo de log local (no nó remoto)

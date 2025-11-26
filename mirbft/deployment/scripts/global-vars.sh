@@ -52,7 +52,7 @@ local_result_fetching_log=result-fetching.log
 # REMOTO (Emulab)
 ###############################################################################
 
-remote_work_dir="/users/Bruno/iss"
+remote_work_dir="${remote_home}/iss"
 
 remote_instance_tag_file="$remote_work_dir/instance-tag"
 remote_status_file="$remote_work_dir/status"
@@ -69,16 +69,16 @@ remote_instance_detail_file="$remote_work_dir/instance-detail.json"
 remote_user_script_body="$remote_work_dir/user-script-body.sh"
 remote_user_script_uploaded="$remote_work_dir/user-script-uploaded"
 remote_master_command_file="$remote_work_dir/master-commands.cmd"
-remote_exp_dir="$remote_work_dir/current-deployment-data"
+remote_exp_dir="${remote_work_dir}/current-deployment-data"
 
-remote_analysis_processes=8
+remote_analysis_processes=0
 
 ###############################################################################
 # GOPATH / CÓDIGO REMOTO
 ###############################################################################
 
-remote_gopath="/users/Bruno/go"
-remote_code_dir="$remote_gopath/src/github.com/hyperledger-labs/mirbft"
+remote_gopath="${remote_home}/go"
+remote_code_dir="/tmp/ISS_com_Multipaxos/mirbft"
 
 remote_config_dir="$remote_work_dir/experiment-config"
 remote_tls_directory="$remote_code_dir/tls-data"
