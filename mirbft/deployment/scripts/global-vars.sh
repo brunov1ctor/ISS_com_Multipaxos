@@ -81,11 +81,8 @@ remote_analysis_processes=0
 
 remote_gopath="${remote_home}/go"
 
-# ATENÇÃO:
 # No Emulab, o código "oficial" fica em /tmp/ISS_com_Multipaxos/mirbft no master,
-# mas nós não queremos que o deploy dê rm -rf nesse diretório.
-# Se algum dia precisarmos copiar código para slaves, podemos usar outro path,
-# mas por enquanto só distribuímos BINÁRIOS.
+# mas NÃO queremos que o deploy dê rm -rf nesse diretório.
 remote_code_dir="/tmp/ISS_com_Multipaxos/mirbft"
 
 remote_config_dir="$remote_work_dir/experiment-config"
