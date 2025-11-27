@@ -15,8 +15,7 @@ analysis_query_params="-q queries/ethereum.sql -q queries/aggregates.sql -q quer
 ###############################################################################
 # SSH
 ###############################################################################
-# Aqui NÃO usamos -i, pois o Emulab já gerencia as chaves internas automaticamente.
-# Isso permite que o SSH use a chave privada local criada pelo Emulab (node-0).
+# Em Emulab não precisamos passar -i, usamos as chaves padrão do usuário Bruno.
 ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
 
 trap_exit_command='{ jobs; if [ -n "$(jobs -p)" ]; then kill $(jobs -p); fi; sleep 0.5; } > /dev/null 2>&1'
@@ -51,10 +50,10 @@ local_result_fetching_log=result-fetching.log
 ###############################################################################
 # REMOTO (Emulab)
 ###############################################################################
-# Diretório "home" remoto do usuário Bruno em TODOS os nós
+
+# home remoto do usuário (vale para master e slaves)
 remote_home="/users/Bruno"
 
-# Diretório raiz do ISS em cada máquina remota
 remote_work_dir="${remote_home}/iss"
 
 remote_instance_tag_file="$remote_work_dir/instance-tag"
@@ -65,7 +64,7 @@ remote_main_log="$remote_work_dir/main_log.log"
 remote_master_log="$remote_work_dir/master-log.log"
 remote_slave_log="$remote_work_dir/slave-log.log"
 
-# Arquivo de chave privada usado remotamente (não precisa existir localmente)
+# Arquivo de chave privada usado remotamente (não precisamos de -i)
 remote_private_key_file=""
 
 remote_instance_detail_file="$remote_work_dir/instance-detail.json"
@@ -82,9 +81,11 @@ remote_analysis_processes=0
 
 remote_gopath="${remote_home}/go"
 
-# Caminho onde o código foi clonado no master (node-0).
-# Nos slaves você está usando apenas os binários + scripts, mas manter isso
-# aqui não atrapalha (serve para limpeza remota se necessário).
+# ATENÇÃO:
+# No Emulab, o código "oficial" fica em /tmp/ISS_com_Multipaxos/mirbft no master,
+# mas nós não queremos que o deploy dê rm -rf nesse diretório.
+# Se algum dia precisarmos copiar código para slaves, podemos usar outro path,
+# mas por enquanto só distribuímos BINÁRIOS.
 remote_code_dir="/tmp/ISS_com_Multipaxos/mirbft"
 
 remote_config_dir="$remote_work_dir/experiment-config"
@@ -94,20 +95,17 @@ remote_log_archives="experiment-output-*.tar.gz"
 downloaded_code_dir="github.com/hyperledger-labs/mirbft/"
 downloaded_gopath="remote-gopath"
 
+# IMPORTANTE: NÃO incluir mais $remote_code_dir aqui,
+# para não apagar o repositório em /tmp/ISS_com_Multipaxos/mirbft no master.
 remote_delete_files="$remote_work_dir/experiment-output-*.tar.gz \
-$remote_work_dir/experiment-output \
-$remote_master_log \
-$remote_slave_log \
-$remote_status_file \
-$remote_ready_file \
-$remote_instance_tag_file \
-$remote_master_command_file \
-$remote_code_dir \
-$remote_config_dir \
-$remote_exp_dir"
+  $remote_work_dir/experiment-output \
+  $remote_master_log $remote_slave_log \
+  $remote_status_file $remote_ready_file \
+  $remote_instance_tag_file $remote_master_command_file \
+  $remote_config_dir $remote_exp_dir"
 
 ###############################################################################
-# OLDMIR (compatibilidade)
+# OLDMIR (compatibilidade - não usado no Emulab, mas mantido)
 ###############################################################################
 
 oldmir_git_repository=git@github.ibm.com:fabric-security-research/sbft.git
