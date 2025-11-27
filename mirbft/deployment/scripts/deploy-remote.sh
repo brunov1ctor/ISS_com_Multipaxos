@@ -2,23 +2,15 @@
 #
 # scripts/deploy-remote.sh
 #
-# Este script é chamado pelo deploy.sh (no diretório deployment/)
-# quando o tipo de deployment é "remote".
-#
-# Ele assume que *já* foram feitos:
-#   - source scripts/global-vars.sh
-#   - source scripts/initialize-deployment.sh
-#
-# Ou seja, as variáveis a seguir já existem:
-#   - exp_data_dir
-#   - deployment_file
-#   - instance_info_file
-#   - exp_id_offset
-#   - ssh_options
-#   - remote_work_dir, remote_exp_dir, remote_status_file, remote_ready_file
-#   - remote_master_command_file, remote_delete_files, remote_config_dir
-#   - local_master_command_file, local_result_fetching_log
-#   - master_port
+# Chamado por deploy.sh quando o tipo de deploy é "remote".
+# Supõe que scripts/global-vars.sh e scripts/initialize-deployment.sh
+# já foram usados e definiram variáveis como:
+#   exp_data_dir, deployment_file, ssh_options,
+#   remote_work_dir, remote_exp_dir, remote_status_file,
+#   remote_ready_file, remote_master_command_file,
+#   remote_delete_files, remote_config_dir,
+#   local_master_command_template_file, local_master_command_file,
+#   local_result_fetching_log, master_port, instance_info_file (ou default).
 #
 
 set -euo pipefail
@@ -29,17 +21,20 @@ echo "Killing everything that is alive and pruning state on the remote machines 
 # 1) Descobrir IPs das máquinas a partir de scripts/instance-info
 ###############################################################################
 
-# Formato esperado de cada linha em $instance_info_file:
-# node-0  172.19.124.1  10.10.1.1  master master
-# node-1  172.19.124.2  10.10.1.2  slave  peers
-# ...
+# Garante um default para o arquivo de instance-info se variável não estiver setada.
+instance_info_file="${instance_info_file:-scripts/instance-info}"
 
 if [ ! -f "$instance_info_file" ]; then
   echo "ERROR: instance_info_file '$instance_info_file' não existe."
   exit 1
 fi
 
-# IP público do master (primeira linha com função 'master')
+# Esperado em cada linha:
+# node-0  172.19.124.1  10.10.1.1  master master
+# node-1  172.19.124.2  10.10.1.2  slave  peers
+# ...
+
+# IP público do master (primeira linha com role 'master')
 master_ip=$(
   awk '
     NF >= 4 && $4 == "master" {
@@ -62,8 +57,6 @@ all_ips=$(awk 'NF >= 2 { print $2 }' "$instance_info_file")
 ###############################################################################
 
 for ip in $all_ips; do
-  # Mesma linha que aparece nos seus logs antigos:
-  # scripts/deploy-remote.sh: line 95:  Killed ssh $ssh_options ...
   ssh $ssh_options "Bruno@$ip" \
     "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}') 2>/dev/null || true" \
     || true
@@ -99,7 +92,7 @@ echo " Reset machine state."
 echo
 
 ###############################################################################
-# 4) Garantir diretórios no MASTER e copiar master-commands + configs
+# 4) Garantir diretórios no MASTER e preparar master-commands.cmd
 ###############################################################################
 
 echo "Ensuring remote directories on master ($master_ip)."
@@ -110,21 +103,28 @@ ssh $ssh_options "Bruno@$master_ip" "
 
 echo "Copying master commands and configs to master."
 
-# Arquivo master-commands.cmd local fica em $exp_data_dir/$local_master_command_file
+# Caminhos locais dos arquivos de comandos do master dentro do exp_data_dir
 local_master_cmd_path="$exp_data_dir/$local_master_command_file"
+local_master_cmd_template="$exp_data_dir/$local_master_command_template_file"
 
+# Se ainda não existe master-commands.cmd, tenta copiar do template
 if [ ! -f "$local_master_cmd_path" ]; then
-  echo "ERROR: arquivo de comandos do master '$local_master_cmd_path' não encontrado."
-  exit 1
+  if [ -f "$local_master_cmd_template" ]; then
+    echo "No pre-generated master command script, copying template."
+    cp "$local_master_cmd_template" "$local_master_cmd_path"
+    echo "Master command script written to $local_master_cmd_path."
+  else
+    echo "ERROR: nem '$local_master_cmd_path' nem '$local_master_cmd_template' existem."
+    exit 1
+  fi
 fi
 
-# Usa o stubborn-scp.sh que criamos/modificamos
+# Usa o stubborn-scp.sh para enviar master-commands.cmd ao master
 scripts/stubborn-scp.sh 10 \
   "$local_master_cmd_path" \
   "Bruno@$master_ip:$remote_master_command_file"
 
 # Copiar diretório config/ (gerado pela generate-config.sh) para o master
-# Usamos tar+ssh para copiar a árvore inteira.
 if [ -d "$exp_data_dir/config" ]; then
   tar -C "$exp_data_dir/config" -cf - . \
     | ssh $ssh_options "Bruno@$master_ip" "mkdir -p '$remote_config_dir' && tar -C '$remote_config_dir' -xf -"
@@ -144,6 +144,7 @@ fi
 # Exemplo de linhas relevantes no deployment.dpl:
 #   deploy 1 1client
 #   deploy 4 peers
+
 num_clients=$(
   awk '
     $1 == "deploy" && $3 == "1client" {
@@ -153,9 +154,7 @@ num_clients=$(
   ' "$deployment_file"
 )
 
-if [ -z "$num_clients" ]; then
-  num_clients=1
-fi
+[ -z "$num_clients" ] && num_clients=1
 
 num_peers=$(
   awk '
@@ -166,18 +165,15 @@ num_peers=$(
   ' "$deployment_file"
 )
 
-if [ -z "$num_peers" ]; then
-  num_peers=4
-fi
+[ -z "$num_peers" ] && num_peers=4
 
 peer_tag="peers"
 client_tag="1client"
 
 ###############################################################################
-# 6) Função de result fetching (roda em background)
+# 6) Result fetching (em background, como no ISS original)
 ###############################################################################
 
-# result-fetching.log fica em $exp_data_dir/$local_result_fetching_log
 local_result_fetch_log="$exp_data_dir/$local_result_fetching_log"
 
 (
@@ -193,15 +189,12 @@ local_result_fetch_log="$exp_data_dir/$local_result_fetching_log"
     sleep 5
   done
 
-  # Quando master-ready aparecer, copiamos experiment-output-*.tar.gz de volta
-  # (se scripts/start-master.sh estiver empacotando resultados como no ISS original).
-  # Mesmo que não exista, não queremos quebrar o script.
+  # Quando master-ready aparecer, tentamos puxar algum tar de experiment-output
   scripts/stubborn-scp.sh 3 \
     "Bruno@$master_ip:$remote_work_dir/experiment-output-0000.tar.gz" \
     "$exp_data_dir/experiment-output-0000.tar.gz" \
     || true
 
-  # Tenta descompactar, se o tar existir
   if [ -f "$exp_data_dir/experiment-output-0000.tar.gz" ]; then
     mkdir -p "$exp_data_dir/experiment-output"
     tar -C "$exp_data_dir/experiment-output" -xzf "$exp_data_dir/experiment-output-0000.tar.gz" || true
@@ -213,7 +206,7 @@ local_result_fetch_log="$exp_data_dir/$local_result_fetching_log"
 # 7) Disparar slaves (1client e peers)
 ###############################################################################
 
-# Precisamos passar todos os campos do instance-info para start-remote-slaves.sh:
+# Passamos todos os registros do instance-info para start-remote-slaves.sh
 #   instance_id public_ip private_ip role tag
 instance_args=$(awk 'NF >= 5 { print $1, $2, $3, $4, $5 }' "$instance_info_file")
 
