@@ -15,6 +15,18 @@
 
 set -euo pipefail
 
+###############################################################################
+# Garante permissões de execução nos scripts auxiliares locais
+###############################################################################
+if [ -f "scripts/stubborn-scp.sh" ] && [ ! -x "scripts/stubborn-scp.sh" ]; then
+  chmod +x "scripts/stubborn-scp.sh" || echo "WARN: não consegui dar chmod em scripts/stubborn-scp.sh" >&2
+fi
+
+# Opcional: também garantir execução do start-remote-slaves.sh
+if [ -f "scripts/start-remote-slaves.sh" ] && [ ! -x "scripts/start-remote-slaves.sh" ]; then
+  chmod +x "scripts/start-remote-slaves.sh" || echo "WARN: não consegui dar chmod em scripts/start-remote-slaves.sh" >&2
+fi
+
 echo "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
 ###############################################################################
