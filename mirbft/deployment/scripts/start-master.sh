@@ -93,7 +93,7 @@ ssh ${ssh_opts} "Bruno@${master_ip}" "
 " >/dev/null 2>&1
 
 # Copia master-commands.cmd
-bash scripts/stubborn-scp.sh 10 \
+scripts/stubborn-scp.sh 10 \
   "${local_master_cmd}" \
   "${master_ip}:${remote_master_cmd}"
 
