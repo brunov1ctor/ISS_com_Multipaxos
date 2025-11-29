@@ -2,23 +2,18 @@
 #
 # start-slave.sh
 #
-# Script executado em CADA slave (via start-remote-slaves.sh).
-# Responsabilidade:
-#   - Ajustar PATH (Go + scripts do ISS).
-#   - Garantir diretório de logs.
-#   - Subir o discoveryslave adequado (peers ou 1client) apontando para o master.
+# Uso:
+#   ./start-slave.sh <tag> <master_ip> <public_ip> <private_ip>
 #
-# Quem cuida de:
-#   - enviar master-commands.cmd,
-#   - disparar orderingpeer/orderingclient,
-#   - usar stubborn-scp.sh para buscar config,
-# é o MASTER (via discovery + master-commands).
+# Exemplo (como chamado pelo start-remote-slaves.sh):
+#   ./start-slave.sh peers   172.19.143.1  172.19.143.2  10.10.1.2
+#   ./start-slave.sh 1client 172.19.143.1  172.19.143.7  10.10.1.7
 #
-# Argumentos:
-#   $1 = tag       (peers | 1client)
-#   $2 = master_ip (IP público do master, ex: 172.19.124.1)
-#   $3 = public_ip (IP público deste nó)
-#   $4 = private_ip (IP privado deste nó, ex: 10.10.1.X)
+# Ele apenas inicia o discoveryslave apontando para o discoverymaster
+# do master. O master, por meio de master-commands.cmd, usa comandos
+# "exec-start" para mandar os slaves rodarem orderingpeer/orderingclient
+# e gerarem os diretórios experiment-output/..., além de empacotar e
+# enviar os resultados de volta para o master.
 #
 
 set -euo pipefail
@@ -28,74 +23,58 @@ if [[ $# -lt 4 ]]; then
   exit 1
 fi
 
-tag="$1"
-master_ip="$2"
-public_ip="$3"
-private_ip="$4"
+TAG="$1"         # peers | 1client | outro tag definido em master-commands
+MASTER_IP="$2"   # IP público do master (ex: 172.19.143.1)
+PUBLIC_IP="$3"   # IP público deste node (ex: 172.19.143.2)
+PRIVATE_IP="$4"  # IP da rede de experimento (ex: 10.10.1.2)
 
-# ----------------------------------------------------------------------
-# Caminhos fixos (iguais aos usados no restante do deploy)
-# ----------------------------------------------------------------------
-remote_gopath="/users/Bruno/go"
-remote_bin_dir="${remote_gopath}/bin"
-remote_work_dir="/users/Bruno/iss"
-remote_logs_dir="/users/Bruno/iss-logs"
+###############################################################################
+# Diretórios e ambiente
+###############################################################################
 
-# ----------------------------------------------------------------------
-# Função de log simples (vai pra stderr, útil nos logs de SSH)
-# ----------------------------------------------------------------------
-log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start-slave] $*" >&2
-}
+# HOME no Emulab normalmente é /users/<usuario>, mas usamos $HOME se existir.
+REMOTE_HOME="${HOME:-/users/Bruno}"
 
-log "Iniciando start-slave com:"
-log "  tag       = ${tag}"
-log "  master_ip = ${master_ip}"
-log "  public_ip = ${public_ip}"
-log "  private_ip= ${private_ip}"
+REMOTE_WORK_DIR="${REMOTE_HOME}/iss"
+REMOTE_LOGS_DIR="${REMOTE_HOME}/iss-logs"
+REMOTE_GOPATH="${REMOTE_HOME}/go"
+REMOTE_GOBIN="${REMOTE_GOPATH}/bin"
 
-# ----------------------------------------------------------------------
-# Ajuste de PATH / ambiente
-# ----------------------------------------------------------------------
-export GOPATH="${remote_gopath}"
-export GOBIN="${remote_bin_dir}"
+# Porta do discoverymaster (vem do global-vars.sh, mas fixamos aqui também)
+MASTER_PORT="${MASTER_PORT:-9999}"
 
-# PATH:
-#   - Go binários (discoverymaster, discoveryslave, orderingpeer, orderingclient)
-#   - /usr/local/go/bin (caso o Go esteja aqui)
-#   - scripts do ISS (incluindo stubborn-scp.sh)
-#   - scripts de deployment, se precisarem ser invocados indiretamente
-export PATH="${GOBIN}:/usr/local/go/bin:${remote_work_dir}:${remote_work_dir}/scripts:${remote_work_dir}/deployment/scripts:${PATH}"
+mkdir -p "${REMOTE_WORK_DIR}" "${REMOTE_LOGS_DIR}"
 
-log "PATH configurado: ${PATH}"
+export GOPATH="${REMOTE_GOPATH}"
+export GOBIN="${REMOTE_GOBIN}"
+export PATH="${REMOTE_GOBIN}:/usr/local/go/bin:${PATH}"
 
-# ----------------------------------------------------------------------
-# Garante diretório de logs no slave
-# ----------------------------------------------------------------------
-mkdir -p "${remote_logs_dir}"
+cd "${REMOTE_WORK_DIR}"
 
-# ----------------------------------------------------------------------
-# Sobe o discoveryslave correto (peers ou 1client)
-# ----------------------------------------------------------------------
-case "${tag}" in
-  peers|1client)
-    log "Subindo discoveryslave para tag='${tag}' com master=${master_ip}:9999"
+LOG_FILE="${REMOTE_LOGS_DIR}/start-slave-${TAG}.log"
 
-    # Importante: rodar em background e manter log separado
-    # para não depender da sessão SSH que disparou o start-slave.sh.
-    nohup discoveryslave "${tag}" "${master_ip}:9999" "${public_ip}" "${private_ip}" \
-      > "${remote_logs_dir}/discoveryslave-${tag}.log" 2>&1 &
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] start-slave.sh: iniciando discoveryslave" >> "${LOG_FILE}"
+echo "  TAG        = ${TAG}"        >> "${LOG_FILE}"
+echo "  MASTER_IP  = ${MASTER_IP}"  >> "${LOG_FILE}"
+echo "  PUBLIC_IP  = ${PUBLIC_IP}"  >> "${LOG_FILE}"
+echo "  PRIVATE_IP = ${PRIVATE_IP}" >> "${LOG_FILE}"
+echo "  MASTER_PORT= ${MASTER_PORT}" >> "${LOG_FILE}"
 
-    ds_pid=$!
-    log "discoveryslave iniciado com PID=${ds_pid}, log em ${remote_logs_dir}/discoveryslave-${tag}.log"
-    ;;
+# Garante que não haja discoveryslave antigo rodando com o mesmo TAG
+# (se já tiver sido limpo antes, o killall só vai falhar inofensivamente).
+killall -9 discoveryslave 2>/dev/null || true
 
-  *)
-    log "ERRO: tag desconhecida '${tag}'. Esperado: 'peers' ou '1client'."
-    exit 1
-    ;;
-esac
+# Inicia o discoveryslave em background. É ele que conversa com o discoverymaster
+# e recebe comandos "exec-start" que vão criar:
+#   experiment-output/<exp_id>/slave-XXX/peer.trc
+#   experiment-output/<exp_id>/slave-XXX/prof
+# e depois empacotar/enviar esses arquivos para o master.
+nohup "${REMOTE_GOBIN}/discoveryslave" \
+  "${TAG}" \
+  "${MASTER_IP}:${MASTER_PORT}" \
+  "${PUBLIC_IP}" \
+  "${PRIVATE_IP}" \
+  >> "${LOG_FILE}" 2>&1 &
 
-log "start-slave.sh concluído com sucesso para tag='${tag}'."
-exit 0
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] start-slave.sh: discoveryslave iniciado em background." >> "${LOG_FILE}"
 

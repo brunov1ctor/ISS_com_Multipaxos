@@ -15,6 +15,11 @@
 
 set -euo pipefail
 
+# Garante que o stubborn-scp.sh seja executável
+if [ ! -x scripts/stubborn-scp.sh ]; then
+  chmod +x scripts/stubborn-scp.sh || true
+fi
+
 echo "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
 ###############################################################################
@@ -82,6 +87,9 @@ for ip in $all_ips; do
 
     echo RUNNING > '$remote_status_file'
 
+    # Remove marca antiga de master pronto, se existir
+    rm -f '$remote_ready_file'
+
     # Mata sessões sshd antigas (notty), se existirem
     kill -9 \$(ps -ef | grep 'sshd: notty' | awk '{print \$2}') 2>/dev/null || true
   " || true
@@ -119,11 +127,6 @@ if [ ! -f "$local_master_cmd_path" ]; then
   fi
 fi
 
-# Garante permissão de execução para stubborn-scp.sh ANTES de usar
-if [ -f "scripts/stubborn-scp.sh" ] && [ ! -x "scripts/stubborn-scp.sh" ]; then
-  chmod +x "scripts/stubborn-scp.sh" || true
-fi
-
 # Usa o stubborn-scp.sh para enviar master-commands.cmd ao master
 scripts/stubborn-scp.sh 10 \
   "$local_master_cmd_path" \
@@ -138,17 +141,87 @@ else
 fi
 
 ###############################################################################
-# 5) Descobrir quantos peers e clientes a partir do deployment.dpl
+# 5) Iniciar discoverymaster automaticamente no MASTER
 ###############################################################################
+# Aqui é o ponto crucial: fazemos o master ler master-commands.cmd e
+# coordenar as execuções nos slaves. Quando terminar, cria master-ready.
+
+echo "Starting discoverymaster on master ($master_ip)."
+
+ssh $ssh_options "Bruno@$master_ip" "
+  cd '$remote_work_dir' || exit 1
+
+  # Garante que o discoverymaster exista no GOPATH remoto
+  if [ ! -x '$remote_gopath/bin/discoverymaster' ]; then
+    echo 'ERROR: discoverymaster não encontrado em $remote_gopath/bin/discoverymaster' >&2
+    exit 1
+  fi
+
+  # Sobe discoverymaster em background, e quando terminar marca master-ready
+  nohup '$remote_gopath/bin/discoverymaster' \
+    master \
+    0.0.0.0:$master_port \
+    'master-commands.cmd' \
+    > '$remote_master_log' 2>&1 &
+
+" || true
+
+# Observação:
+# Se você quiser que o master só seja marcado como pronto quando o
+# discoverymaster terminar, uma alternativa (mais bloqueante) seria:
+#
+# ssh ... "(
+#   cd '$remote_work_dir' || exit 1
+#   '$remote_gopath/bin/discoverymaster' master 0.0.0.0:$master_port master-commands.cmd
+#   echo DONE > '$remote_ready_file'
+# ) > '$remote_master_log' 2>&1 &"
+#
+# Aqui mantemos a marcação via master-ready a cargo do pipeline original
+# (caso exista user-script-master), para ser o mínimo invasivo possível.
+
+###############################################################################
+# 6) Result fetching (em background, como no ISS original)
+###############################################################################
+
+local_result_fetch_log="$exp_data_dir/$local_result_fetching_log"
+
+(
+  echo "Waiting for master server." > "$local_result_fetch_log"
+
+  # Espera até que o arquivo remote_ready_file exista no MASTER.
+  # Se nunca for criado, este loop continua tentando, mas não interrompe o deploy.
+  while true; do
+    if ssh $ssh_options "Bruno@$master_ip" "[ -f '$remote_ready_file' ]"; then
+      break
+    fi
+    echo "cat: $remote_ready_file: No such file or directory" >> "$local_result_fetch_log"
+    echo "Master not ready. Retrying in 5 seconds." >> "$local_result_fetch_log"
+    sleep 5
+  done
+
+  # Quando master-ready aparecer, tentamos puxar o tar de experiment-output
+  scripts/stubborn-scp.sh 3 \
+    "Bruno@$master_ip:$remote_work_dir/experiment-output-0000.tar.gz" \
+    "$exp_data_dir/experiment-output-0000.tar.gz" \
+    || true
+
+  if [ -f "$exp_data_dir/experiment-output-0000.tar.gz" ]; then
+    mkdir -p "$exp_data_dir/experiment-output"
+    tar -C "$exp_data_dir/experiment-output" -xzf "$exp_data_dir/experiment-output-0000.tar.gz" || true
+  fi
+
+) &
+
+###############################################################################
+# 7) Disparar slaves (1client e peers)
+###############################################################################
+
+# Descobrimos quantos peers e clientes a partir do deployment.dpl
 
 if [ ! -f "$deployment_file" ]; then
   echo "ERROR: deployment_file '$deployment_file' não encontrado."
   exit 1
 fi
-
-# Exemplo de linhas relevantes no deployment.dpl:
-#   deploy 1 1client
-#   deploy 4 peers
 
 num_clients=$(
   awk '
@@ -174,42 +247,6 @@ num_peers=$(
 
 peer_tag="peers"
 client_tag="1client"
-
-###############################################################################
-# 6) Result fetching (em background, como no ISS original)
-###############################################################################
-
-local_result_fetch_log="$exp_data_dir/$local_result_fetching_log"
-
-(
-  echo "Waiting for master server." > "$local_result_fetch_log"
-
-  # Espera até que o arquivo remote_ready_file exista no MASTER
-  while true; do
-    if ssh $ssh_options "Bruno@$master_ip" "[ -f '$remote_ready_file' ]"; then
-      break
-    fi
-    echo "cat: $remote_ready_file: No such file or directory" >> "$local_result_fetch_log"
-    echo "Master not ready. Retrying in 5 seconds." >> "$local_result_fetch_log"
-    sleep 5
-  done
-
-  # Quando master-ready aparecer, tentamos puxar algum tar de experiment-output
-  scripts/stubborn-scp.sh 3 \
-    "Bruno@$master_ip:$remote_work_dir/experiment-output-0000.tar.gz" \
-    "$exp_data_dir/experiment-output-0000.tar.gz" \
-    || true
-
-  if [ -f "$exp_data_dir/experiment-output-0000.tar.gz" ]; then
-    mkdir -p "$exp_data_dir/experiment-output"
-    tar -C "$exp_data_dir/experiment-output" -xzf "$exp_data_dir/experiment-output-0000.tar.gz" || true
-  fi
-
-) &
-
-###############################################################################
-# 7) Disparar slaves (1client e peers)
-###############################################################################
 
 # Passamos todos os registros do instance-info para start-remote-slaves.sh
 #   instance_id public_ip private_ip role tag
