@@ -161,30 +161,37 @@ deployment_file="$exp_data_dir/$dpl_filename"
 echo "Using deployment file: $deployment_file"
 
 # -----------------------------------------------------------------------------
-# 5) deploy_schedule (apenas para local/cloud)
+# 5) master-commands / deploy_schedule
 # -----------------------------------------------------------------------------
 deploy_schedule=""
 
-if [ "$depl_type" = "local" ] || [ "$depl_type" = "cloud" ]; then
-  # Para manter compatibilidade com o comportamento original
-  : "${local_master_command_template_file:=master-commands-template.cmd}"
+# Para manter compatibilidade com o comportamento original
+: "${local_master_command_template_file:=master-commands-template.cmd}"
 
-  if [ -x "scripts/generate-master-commands.py" ]; then
-    echo "initialize-deployment.sh: generating master commands (local/cloud)."
-    deploy_schedule=$(
-      python3 scripts/generate-master-commands.py \
-        "$depl_type" \
-        "$deployment_file" \
-        "$exp_data_dir/$local_master_command_template_file" \
-        "$exp_data_dir"
-    )
-    if [ $? -ne 0 ] || [ -z "$deploy_schedule" ]; then
-      >&2 echo "initialize-deployment.sh: failed processing deployment file: $deployment_file"
-      return 2
-    fi
+# Geramos sempre o master-commands-template.cmd, inclusive para 'remote'.
+# O generate-master-commands.py recebe:
+#   1) tipo de deploy: local | cloud | remote
+#   2) arquivo .dpl:   $deployment_file
+#   3) outFile:        $exp_data_dir/$local_master_command_template_file
+#   4) exp_data_dir:   $exp_data_dir
+if [ -x "scripts/generate-master-commands.py" ]; then
+  echo "initialize-deployment.sh: generating master commands ($depl_type)."
+  deploy_schedule=$(
+    python3 scripts/generate-master-commands.py \
+      "$depl_type" \
+      "$deployment_file" \
+      "$exp_data_dir/$local_master_command_template_file" \
+      "$exp_data_dir"
+  )
+  if [ $? -ne 0 ]; then
+    >&2 echo "initialize-deployment.sh: failed processing deployment file: $deployment_file"
+    return 2
   fi
-else
-  # remote: deploy_schedule não é usado
+fi
+
+# No caso 'remote', o deploy_schedule em si não é usado,
+# só o arquivo master-commands-template.cmd que acabamos de gerar.
+if [ "$depl_type" = "remote" ]; then
   deploy_schedule=""
 fi
 
