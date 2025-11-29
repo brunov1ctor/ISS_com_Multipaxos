@@ -83,8 +83,24 @@ fi
 deployment_file="$exp_data_dir/$dpl_filename"
 echo "Using deployment file: $deployment_file"
 
+# Para deploy REMOTO, não usamos deploy_schedule nem o generate-master-commands.
+# O fluxo remoto trabalha com scripts/instance-info diretamente.
+if [ "$depl_type" = "remote" ]; then
+  if [ ! -f "$deployment_file" ]; then
+    >&2 echo "remote-deploy.sh: deployment file not found: $deployment_file"
+    # Como este script é 'sourced', usamos return se possível, senão exit.
+    return 2 2>/dev/null || exit 2
+  fi
+
+  # Não precisamos de deploy_schedule no modo remote.
+  deploy_schedule=""
+  # Finaliza o initialize-deployment.sh aqui para deployments remotos.
+  return 0 2>/dev/null || exit 0
+fi
+
+# Para LOCAL e CLOUD, mantemos o comportamento original e geramos o deploy_schedule.
 # generate-master-commands.py expects:
-#   1) deployment type (local|remote|cloud)
+#   1) deployment type (local|cloud|remote)
 #   2) deployment file (.dpl)
 #   3) output master command template file
 #   4) experiment data directory
