@@ -83,37 +83,24 @@ fi
 deployment_file="$exp_data_dir/$dpl_filename"
 echo "Using deployment file: $deployment_file"
 
-# Para deploy REMOTO, não usamos deploy_schedule nem o generate-master-commands.
-# O fluxo remoto trabalha com scripts/instance-info diretamente.
-if [ "$depl_type" = "remote" ]; then
-  if [ ! -f "$deployment_file" ]; then
-    >&2 echo "remote-deploy.sh: deployment file not found: $deployment_file"
-    # Como este script é 'sourced', usamos return se possível, senão exit.
-    return 2 2>/dev/null || exit 2
-  fi
+echo "initialize-deployment.sh: debug info:"
+echo "  depl_type          = ${depl_type:-<unset>}"
+echo "  exp_data_dir       = ${exp_data_dir:-<unset>}"
+echo "  new_experiment     = ${new_experiment:-<unset>}"
+echo "  exp_id_offset      = ${exp_id_offset:-<unset>}"
+echo "  deployment_file    = ${deployment_file:-<unset>}"
+echo "  instance_info_file = ${instance_info_file:-<unset>}"
 
-  # Não precisamos de deploy_schedule no modo remote.
-  deploy_schedule=""
-  # Finaliza o initialize-deployment.sh aqui para deployments remotos.
-  return 0 2>/dev/null || exit 0
-fi
+# IMPORTANTE:
+# Para o fluxo atual, NÃO vamos chamar generate-master-commands.py.
+# No modo remoto, o ISS usa scripts/instance-info para descobrir os IPs,
+# e o deploy_schedule não é usado. Para evitar o erro e ficar mais fácil
+# debugar, apenas definimos deploy_schedule como vazio.
+deploy_schedule=""
 
-# Para LOCAL e CLOUD, mantemos o comportamento original e geramos o deploy_schedule.
-# generate-master-commands.py expects:
-#   1) deployment type (local|cloud|remote)
-#   2) deployment file (.dpl)
-#   3) output master command template file
-#   4) experiment data directory
-deploy_schedule=$(
-  python3 scripts/generate-master-commands.py \
-    "$depl_type" \
-    "$deployment_file" \
-    "$exp_data_dir/$local_master_command_template_file" \
-    "$exp_data_dir"
-)
+echo "initialize-deployment.sh: skipping generate-master-commands.py (deploy_schedule não será usado para 'remote')."
 
-if [ $? -ne 0 ] || [ -z "$deploy_schedule" ]; then
-  >&2 echo "remote-deploy.sh: failed processing deployment file: $deployment_file"
-  exit 2
-fi
+# Como este script é 'sourced' por deploy.sh,
+# usamos 'return' se possível, senão 'exit' (caso alguém rode standalone).
+return 0 2>/dev/null || exit 0
 
