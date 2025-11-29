@@ -62,7 +62,7 @@ throughputCap=131072000     # The system will always be proposing requests at a 
                             # Used to prevent view changes when too many batches accumulate in a bucket.
 
 # System composition
-orderers="Dummy"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
+orderers="Pbft"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
 checkpointers="Signing"
 
 # Parameters chosen for experiments
