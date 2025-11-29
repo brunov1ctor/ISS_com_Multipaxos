@@ -32,8 +32,10 @@ remote_work_dir="${remote_work_dir:-/users/$USER/iss}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
 remote_raw_results_dir="${remote_raw_results_dir:-${remote_exp_dir}/raw-results}"
 remote_master_cmd="${remote_work_dir}/master-commands.cmd"
+
+# Estes dois já existem em scripts/global-vars.sh, mas deixamos default explícito:
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
-remote_master_ready_file="${remote_master_ready_file:-${remote_work_dir}/master-ready}"
+remote_ready_file="${remote_ready_file:-${remote_work_dir}/master-ready}"
 
 # Opções SSH mais "amigáveis" para deploy automático
 ssh_opts="-o StrictHostKeyChecking=accept-new"
@@ -141,7 +143,7 @@ ssh ${ssh_opts} "Bruno@${master_ip}" "
   export PATH=\"${remote_work_dir}/scripts:${remote_work_dir}/deployment/scripts:\$PATH\"
 
   # Marca que o master está pronto
-  echo 'READY' > '${remote_master_ready_file}'
+  echo 'READY' > '${remote_ready_file}
 
   # Inicia o discoverymaster + orderingclient em background,
   # gravando logs em current-deployment-data/master.log
@@ -153,34 +155,6 @@ ssh ${ssh_opts} "Bruno@${master_ip}" "
 
 " >/dev/null 2>&1
 
-echo "Master discovery + orderingclient disparados."
 echo
-
-# ----------------------------------------------------------------------
-# Inicia analyze-continuously.sh (processador de resultados)
-# ----------------------------------------------------------------------
-echo "Starting continuous analysis on master."
-
-ssh ${ssh_opts} "Bruno@${master_ip}" "
-  export GOPATH='/users/Bruno/go'
-  export GOBIN='/users/Bruno/go/bin'
-  export PATH=\"\$GOBIN:/usr/local/go/bin:\$PATH\"
-
-  cd '${remote_work_dir}' || exit 1
-
-  # Garante que o script de análise contínua existe
-  if [ ! -x '${remote_work_dir}/scripts/analyze/analyze-continuously.sh' ]; then
-    echo 'ERRO: ${remote_work_dir}/scripts/analyze/analyze-continuously.sh não encontrado ou não executável.' >&2
-    exit 1
-  fi
-
-  nohup '${remote_work_dir}/scripts/analyze/analyze-continuously.sh' \\
-    '${remote_raw_results_dir}' \\
-    '${remote_exp_dir}' \\
-    > '${remote_exp_dir}/continuous-analysis.log' 2>&1 &
-" >/dev/null 2>&1
-
-echo "Continuous analysis started."
-echo
+echo "Master server started on ${master_ip}."
 echo "start-master.sh finished."
-
