@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# scripts/fetch-results.sh (VERSÃO SIMPLIFICADA PARA EMULAB)
+# scripts/fetch-results.sh (VERSÃO EMULAB / MULTIPAXOS)
 #
 # Uso:
 #   scripts/fetch-results.sh <master_ip> <exp_dir>
@@ -9,19 +9,18 @@
 #   scripts/fetch-results.sh 172.20.150.1 deployment-data/remote-0000
 #
 # O que faz:
-#   - NÃO espera mais por master-ready nem por status DONE/ANALYZED.
-#   - Apenas baixa:
-#       * raw-results (tar.gz) do master
-#       * scripts/, queries/ e master-log
-#   - Depois você roda a análise localmente:
-#       scripts/analyze/extract-successful.sh ...
-#       scripts/analyze/summarize.sh ...
+#   1) TENTA baixar os .tar.gz do master (padrão ISS)
+#   2) SE NÃO HOUVER .tar.gz, faz FALLBACK:
+#        - lê scripts/instance-info
+#        - para cada linha com "slave", faz rsync de:
+#            Bruno@<ip_ctrl>:/users/Bruno/iss/experiment-output
+#          para:
+#            <exp_dir>/experiment-output
+#   3) No final mostra o que veio e imprime próximos passos
 #
-# Motivo:
-#   No setup atual, ninguém cria $remote_ready_file nem atualiza
-#   $remote_status_file para DONE/ANALYZED, então o script original
-#   ficava preso em loops infinitos. Esta versão assume que você
-#   só roda fetch-results.sh DEPOIS que o experimento terminou no master.
+# Depois disso:
+#   - você roda analyze.sh em cada experimento (0000..0003)
+#   - depois summarize.sh para gerar o CSV de métricas.
 
 set -euo pipefail
 
@@ -47,44 +46,95 @@ echo "  remote_exp_dir    = $remote_exp_dir"
 echo "  remote_log_archs  = $remote_log_archives"
 echo
 
-# 1) Cria diretório de resultados crus
 mkdir -p "$raw_results"
 
-echo "[fetch-results] Baixando arquivos de log (raw-results) do master..."
+############################################
+# 1) TENTATIVA PADRÃO: .tar.gz no MASTER  #
+############################################
+echo "[fetch-results] Tentando baixar arquivos de log (raw-results) do master..."
 echo "  rsync: $master_ip:$remote_exp_dir/raw-results/$remote_log_archives -> $raw_results"
+
+set +e
 rsync --progress -rtz -e "ssh $ssh_options" \
   "$master_ip:$remote_exp_dir/raw-results/$remote_log_archives" \
-  "$raw_results" || echo "[fetch-results] Aviso: nenhum $remote_log_archives encontrado (talvez experimento não tenha gerado logs ainda?)."
+  "$raw_results"
+rsync_rc=$?
+set -e
+
+if [ $rsync_rc -ne 0 ]; then
+  echo "[fetch-results] Aviso: não foi possível baixar $remote_log_archives do master (rc=$rsync_rc)."
+fi
 
 echo
-echo "[fetch-results] Listando raw-results em $raw_results:"
-ls -lh "$raw_results" || echo "[fetch-results] (sem arquivos em $raw_results)"
+echo "[fetch-results] Conteúdo de $raw_results:"
+ls -lh "$raw_results" 2>/dev/null || echo "(vazio)"
 echo
 
-# 2) Baixa scripts, queries e master-log do master
-echo "[fetch-results] Baixando scripts/, queries/ e master-log do master..."
+num_archives=$(ls -1 "$raw_results"/experiment-output-*-slave-*.tar.gz 2>/dev/null | wc -l || echo 0)
 
-rsync --progress -rtz -e "ssh $ssh_options" \
-  "$master_ip:scripts" \
-  "$exp_dir/" || echo "[fetch-results] Aviso: não foi possível baixar scripts/"
+if [ "$num_archives" -gt 0 ]; then
+  echo "[fetch-results] Encontrados $num_archives arquivos .tar.gz no master. (fluxo padrão ISS)"
+  echo "=== [fetch-results] FIM (modo .tar.gz/master) ==="
+  echo
+  exit 0
+fi
 
-rsync --progress -rtz -e "ssh $ssh_options" \
-  "$master_ip:queries" \
-  "$exp_dir/" || echo "[fetch-results] Aviso: não foi possível baixar queries/"
+##########################################################
+# 2) FALLBACK: BUSCAR LOGS DIRETO NOS SLAVES (Emulab)    #
+##########################################################
+echo "[fetch-results] Nenhum experiment-output-*.tar.gz encontrado no master."
+echo "[fetch-results] Usando FALLBACK: rsync de experiment-output/ diretamente dos slaves."
+echo
 
-rsync --progress -rtz -e "ssh $ssh_options" \
-  "$master_ip:$remote_master_log" \
-  "$exp_dir/$local_master_log" || echo "[fetch-results] Aviso: não foi possível baixar master-log."
+instance_info="scripts/instance-info"
+if [ ! -f "$instance_info" ]; then
+  echo "[fetch-results] ERRO: $instance_info não encontrado. Não sei de onde puxar os slaves."
+  exit 1
+fi
+
+# Vamos jogar tudo em <exp_dir>/experiment-output
+mkdir -p "$exp_dir/experiment-output"
+
+echo "[fetch-results] Lendo slaves de $instance_info..."
+while read -r host ctrl_ip exp_ip role tag; do
+  # pula linhas vazias ou comentários
+  [ -z "${host:-}" ] && continue
+  [[ "$host" =~ ^# ]] && continue
+
+  if [ "$role" != "slave" ]; then
+    continue
+  fi
+
+  echo "  [fallback] Slave: host=$host ctrl_ip=$ctrl_ip role=$role tag=$tag"
+  echo "    rsync Bruno@${ctrl_ip}:/users/Bruno/iss/experiment-output -> ${exp_dir}/"
+  set +e
+  rsync --progress -rtz -e "ssh $ssh_options" \
+    "Bruno@${ctrl_ip}:/users/Bruno/iss/experiment-output" \
+    "$exp_dir/"
+  rc_slave=$?
+  set -e
+
+  if [ $rc_slave -ne 0 ]; then
+    echo "    [fallback] Aviso: falha ao rsync de $host (rc=$rc_slave)."
+  else
+    echo "    [fallback] OK: logs copiados de $host."
+  fi
+  echo
+done < "$instance_info"
 
 echo
-echo "=== [fetch-results] FIM (download concluído) ==="
+echo "[fetch-results] Resultado local em $exp_dir/experiment-output:"
+ls -R "$exp_dir/experiment-output" 2>/dev/null || echo "(não há experiment-output/ local)"
+echo
+
+echo "=== [fetch-results] FIM (modo fallback/slaves) ==="
 echo
 echo "Próximos passos sugeridos (no node-0):"
-echo "  1) Extrair/analisar resultados:"
-echo "       scripts/analyze/extract-successful.sh \\"
-echo "         $exp_dir \\"
-echo "         analyze \\"
-echo "         $analysis_query_params -d"
+echo "  1) Analisar cada experimento:"
+echo "       for e in 0000 0001 0002 0003; do"
+echo "         scripts/analyze/analyze.sh \\"
+echo "           $exp_dir/experiment-output/\$e"
+echo "       done"
 echo
 echo "  2) Gerar resumo CSV final:"
 echo "       scripts/analyze/summarize.sh \\"
