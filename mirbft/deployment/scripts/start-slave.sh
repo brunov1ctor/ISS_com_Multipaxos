@@ -43,27 +43,54 @@ REMOTE_GOBIN="${REMOTE_GOPATH}/bin"
 # Porta do discoverymaster (vem do global-vars.sh, mas fixamos aqui também)
 MASTER_PORT="${MASTER_PORT:-9999}"
 
-mkdir -p "${REMOTE_WORK_DIR}" "${REMOTE_LOGS_DIR}"
+# Garante diretórios base
+mkdir -p "${REMOTE_WORK_DIR}" \
+         "${REMOTE_LOGS_DIR}" \
+         "${REMOTE_WORK_DIR}/config" \
+         "${REMOTE_WORK_DIR}/experiment-output"
 
 export GOPATH="${REMOTE_GOPATH}"
 export GOBIN="${REMOTE_GOBIN}"
-export PATH="${REMOTE_GOBIN}:/usr/local/go/bin:${PATH}"
+
+# IMPORTANTE:
+# inclui também os diretórios de scripts no PATH para que
+# "stubborn-scp.sh" (e outros) sejam encontrados pelos comandos exec-start
+export PATH="${REMOTE_GOBIN}:/usr/local/go/bin:${REMOTE_WORK_DIR}/scripts:${REMOTE_WORK_DIR}/deployment/scripts:${PATH}"
 
 cd "${REMOTE_WORK_DIR}"
 
 LOG_FILE="${REMOTE_LOGS_DIR}/start-slave-${TAG}.log"
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] start-slave.sh: iniciando discoveryslave" >> "${LOG_FILE}"
-echo "  TAG        = ${TAG}"        >> "${LOG_FILE}"
-echo "  MASTER_IP  = ${MASTER_IP}"  >> "${LOG_FILE}"
-echo "  PUBLIC_IP  = ${PUBLIC_IP}"  >> "${LOG_FILE}"
-echo "  PRIVATE_IP = ${PRIVATE_IP}" >> "${LOG_FILE}"
-echo "  MASTER_PORT= ${MASTER_PORT}" >> "${LOG_FILE}"
+mkdir -p "$(dirname "${LOG_FILE}")"
 
-# Garante que não haja discoveryslave antigo rodando com o mesmo TAG
-# (se já tiver sido limpo antes, o killall só vai falhar inofensivamente).
-killall -9 discoveryslave 2>/dev/null || true
+{
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] start-slave.sh: iniciado."
+  echo "  TAG        = ${TAG}"
+  echo "  MASTER_IP  = ${MASTER_IP}"
+  echo "  PUBLIC_IP  = ${PUBLIC_IP}"
+  echo "  PRIVATE_IP = ${PRIVATE_IP}"
+  echo "  REMOTE_HOME      = ${REMOTE_HOME}"
+  echo "  REMOTE_WORK_DIR  = ${REMOTE_WORK_DIR}"
+  echo "  REMOTE_LOGS_DIR  = ${REMOTE_LOGS_DIR}"
+  echo "  REMOTE_GOPATH    = ${REMOTE_GOPATH}"
+  echo "  REMOTE_GOBIN     = ${REMOTE_GOBIN}"
+  echo "  MASTER_PORT      = ${MASTER_PORT}"
+  echo "  PATH             = ${PATH}"
+  echo "  Verificando diretórios importantes..."
+  ls -ld "${REMOTE_WORK_DIR}" || echo "  (faltando REMOTE_WORK_DIR?)"
+  ls -ld "${REMOTE_WORK_DIR}/config" || echo "  (faltando config?)"
+  ls -ld "${REMOTE_WORK_DIR}/experiment-output" || echo "  (faltando experiment-output?)"
+} >> "${LOG_FILE}" 2>&1
 
+# Para debugging: mostra se o discoveryslave existe
+if [[ ! -x "${REMOTE_GOBIN}/discoveryslave" ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] start-slave.sh: ERRO - discoveryslave não encontrado em ${REMOTE_GOBIN}" >> "${LOG_FILE}"
+  exit 1
+fi
+
+###############################################################################
+# Inicia o discoveryslave
+###############################################################################
 # Inicia o discoveryslave em background. É ele que conversa com o discoverymaster
 # e recebe comandos "exec-start" que vão criar:
 #   experiment-output/<exp_id>/slave-XXX/peer.trc
