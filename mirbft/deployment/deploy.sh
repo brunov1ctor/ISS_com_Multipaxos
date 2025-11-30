@@ -1,39 +1,47 @@
 #!/bin/bash
 
-# Carrega variáveis globais
+# deploy.sh
+# --------------------------------------------------------------------
+# Script principal de deployment (local, cloud, remote).
+# Para REMOTE:
+#   ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
+#
+# Este script agora:
+#   1) Inicializa o experimento (initialize-deployment.sh)
+#   2) Faz o deploy (local/cloud/remote)
+#   3) SE for remote:
+#        - busca resultados do master/slaves (fetch-results.sh)
+#        - roda analyze.sh em cada experimento
+#   4) Gera o result-summary.csv com summarize.sh
+# --------------------------------------------------------------------
+
 source scripts/global-vars.sh
 
-# Garante que todos os filhos desse script morram ao sair
+# Kill all children of this script when exiting
 trap "$trap_exit_command" EXIT
 
-# Flag opcional: -i / --init-only  (só inicializa, não roda experimento)
-if [ "$1" = "-i" ] || [ "$1" = "--init-only" ]; then
+# The '-i' or '--init-only' flag makes the script exit after locally initializing the deployment, without running it.
+if [ "${1-}" = "-i" ] || [ "${1-}" = "--init-only" ]; then
   init_only=true
   shift
 else
   init_only=false
 fi
 
-# -----------------------------------------------------------------------------
-# Inicializa o deployment (define: depl_type, exp_data_dir, new_experiment,
-# exp_id_offset, deployment_file, deploy_schedule, instance_info_file, etc.)
-# -----------------------------------------------------------------------------
-# IMPORTANTE: aqui apenas "source", NÃO capturar stdout. O initialize-deployment.sh
-# usa os argumentos remanescentes ($@) do deploy.sh:
-#   ./deploy.sh <depl_type> [instance-info] <existing|new> <config-generator>
-# Ex.: ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
-# -----------------------------------------------------------------------------
+# Initializes the deployment.
+# This sets, among others:
+#   depl_type, exp_data_dir, deployment_file,
+#   instance_info_file, csv_filename, result_summary_file, exp_id_digits, ...
 source scripts/initialize-deployment.sh "$@"
 
-# Se for só para inicializar, saímos aqui.
 if $init_only; then
-  echo "Init only. Experiment directory: $exp_data_dir"
+  echo "Done. Experiment data directory: $exp_data_dir"
   exit 0
 fi
 
-# -----------------------------------------------------------------------------
-# Inicia o deployment conforme o tipo
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------
+# 1) Executa o deploy conforme o tipo
+# --------------------------------------------------------------------
 if [ "$depl_type" = "local" ]; then
   source scripts/deploy-local.sh
 elif [ "$depl_type" = "cloud" ]; then
@@ -44,9 +52,79 @@ else
   >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
 fi
 
-# -----------------------------------------------------------------------------
-# Geração do resumo final (CSV + result-summary)
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------
+# 2) Para REMOTE: buscar resultados e rodar análise automaticamente
+# --------------------------------------------------------------------
+if [ "$depl_type" = "remote" ]; then
+  echo "============================================================"
+  echo "Fetching and analyzing remote experiment results..."
+  echo "  exp_data_dir       = $exp_data_dir"
+  echo "  csv_filename       = $csv_filename"
+  echo "  result_summary_file= $result_summary_file"
+  echo "============================================================"
+
+  # Garante um valor default para instance_info_file, se não tiver sido setado
+  if [ -z "${instance_info_file:-}" ]; then
+    instance_info_file="scripts/instance-info"
+  fi
+
+  # Descobre o IP do master a partir do instance-info:
+  # Formato esperado das linhas:
+  #   node-0  <ctrl_ip>  <exp_ip>  master  master
+  master_ip=""
+  if [ -f "$instance_info_file" ]; then
+    master_ip=$(awk 'NF>=5 && $4=="master"{print $2; exit}' "$instance_info_file")
+  fi
+
+  if [ -z "$master_ip" ]; then
+    echo "WARNING: could not determine master IP from $instance_info_file; skipping automatic fetch/analyze." >&2
+  else
+    echo "  Using master IP: $master_ip"
+
+    # 2.1) Busca logs do master/slaves (inclui fallback pros slaves)
+    echo "  [step] Fetching raw logs from master/slaves..."
+    scripts/fetch-results.sh "$master_ip" "$exp_data_dir" | tee "$exp_data_dir/$local_result_fetching_log"
+
+    # 2.2) Descobre quantos experimentos existem pelo deployment.csv
+    if [ -f "$exp_data_dir/$csv_filename" ]; then
+      num_exps=$(($(wc -l < "$exp_data_dir/$csv_filename") - 1))
+    else
+      num_exps=0
+    fi
+
+    echo "  [info] Number of experiments detected: $num_exps"
+
+    # 2.3) Roda analyze.sh em cada experimento 0000..(num_exps-1)
+    if [ "$num_exps" -gt 0 ]; then
+      echo "  [step] Running analyze.sh for each experiment..."
+
+      exp_id=0
+      while [ "$exp_id" -lt "$num_exps" ]; do
+        printf -v exp_suffix "%0${exp_id_digits}d" "$exp_id"
+        exp_dir="$exp_data_dir/experiment-output/$exp_suffix"
+
+        if [ -d "$exp_dir" ]; then
+          echo "    [analyze] $exp_dir"
+          scripts/analyze/analyze.sh "$exp_dir" || \
+            echo "    [warn] analyze.sh failed for $exp_dir" >&2
+        else
+          echo "    [warn] experiment directory not found: $exp_dir" >&2
+        fi
+
+        exp_id=$((exp_id+1))
+      done
+    else
+      echo "  [warn] No experiments detected in $exp_data_dir/$csv_filename (no analysis performed)." >&2
+    fi
+  fi
+
+  echo "Finished fetching and analyzing remote results."
+  echo "============================================================"
+fi
+
+# --------------------------------------------------------------------
+# 3) Gera result-summary.csv (parâmetros + métricas, se existirem)
+# --------------------------------------------------------------------
 echo "Generating result summary."
 scripts/analyze/summarize.sh \
   "$exp_data_dir/$csv_filename" \
