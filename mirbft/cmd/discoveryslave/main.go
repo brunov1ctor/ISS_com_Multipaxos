@@ -38,70 +38,88 @@ func main() {
 	// Set up a GRPC connection.
 	conn, err := grpc.Dial(masterAddr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Could not create gRPC connection to master.")
+		logger.Fatal().Str("masterAddr", masterAddr).Msg("Could not connect to master server.")
 	}
-	defer func() {
-		if err := conn.Close(); err != nil {
-			logger.Error().Err(err).Msg("Error closing gRPC connection.")
-		}
-	}()
+	defer conn.Close()
 
-	// Instantiate a discovery client.
-	discoveryClient := pb.NewDiscoveryServiceClient(conn)
+	// Register slave at the master by sending first SlaveStatus with ID = -1
+	logger.Info().
+		Str("slaveTag", slaveTag).
+		Str("masterAddr", masterAddr).
+		Str("publicIP", ownPublicIP).
+		Str("privateIP", ownPrivateIP).
+		Msg("Submitting initial slave status (registration).")
 
-	// Register this slave instance with the master.
-	logger.Info().Msg("Submitting slave registration request.")
+	discoveryClient := pb.NewDiscoveryClient(conn)
 
-	regResp, err := discoveryClient.RegisterSlave(context.Background(),
-		&pb.SlaveRegistration{
-			SlaveTag:     slaveTag,
-			OwnPublicIp:  ownPublicIP,
-			OwnPrivateIp: ownPrivateIP,
-		})
+	// First call: register anonymous slave (SlaveId = -1)
+	initStatus := &pb.SlaveStatus{
+		CmdId:   -1,
+		SlaveId: -1,
+		Status:  0,
+		Message: "initial registration",
+		Tag:     slaveTag,
+	}
+
+	initResp, err := discoveryClient.NextCommand(context.Background(), initStatus)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to register slave at master.")
+		logger.Fatal().Err(err).Msg("Failed to register slave at master (NextCommand).")
 	}
 
-	// Confirm validity of response.
-	if regResp.OwnId < 0 {
-		logger.Fatal().Int32("slaveID", regResp.OwnId).Msg("Slave got invalid ID from the master.")
+	initCmd, ok := initResp.Cmd.(*pb.MasterCommand_InitSlave)
+	if !ok {
+		logger.Fatal().Msg("First command from master is not InitSlave; cannot determine slave ID.")
 	}
 
-	// Create map of wildcard replacements local to this slave.
-	wildcards := make(map[string]string)
-	wildcards[discovery.WildcardSlaveID] = slaveIDString(regResp.OwnId)
-	wildcards[discovery.WildcardPublicIP] = ownPublicIP
-	wildcards[discovery.WildcardPrivateIP] = ownPrivateIP
+	ownID := initCmd.InitSlave.SlaveId
 
 	logger.Info().
-		Int32("ownID", regResp.OwnId).
+		Int32("ownID", ownID).
 		Str("publicIP", ownPublicIP).
 		Str("privateIP", ownPrivateIP).
 		Msg("Slave successfully registered at master.")
 
-	// Enter command execution loop: Ask master server for next command, execute it, ask for the next command, etc...
-	var cmdID int32
+	// Create map of wildcard replacements local to this slave.
+	wildcards := make(map[string]string)
+	wildcards[discovery.WildcardSlaveID] = slaveIDString(ownID)
+	wildcards[discovery.WildcardPublicIP] = ownPublicIP
+	wildcards[discovery.WildcardPrivateIP] = ownPrivateIP
+
+	// Enter command execution loop: ask master for next command, execute it, etc.
+	var cmdID int32 = initResp.CmdId
 	var execCmd *exec.Cmd
 	var execOutFile *os.File
-	var cmdOutFile *os.File
 	var exitStatus int32
 	var exitMessage string
 
+cmdLoop:
 	for {
 		log := logger.With().
 			Str("tag", slaveTag).
-			Int32("ownID", regResp.OwnId).
-			Int32("cmdId", cmdID).
+			Int32("ownID", ownID).
+			Int32("lastCmdId", cmdID).
 			Logger()
 
-		// Ask master for next command.
-		log.Info().Msg("Asking master for next command.")
+		// Ask master for next command, reporting the status of the previous one.
+		log.Info().
+			Int32("status", exitStatus).
+			Str("message", exitMessage).
+			Msg("Asking master for next command.")
+
 		nextCmd, err := discoveryClient.NextCommand(context.Background(),
-			&pb.CommandRequest{
-				CmdId: cmdID,
+			&pb.SlaveStatus{
+				CmdId:   cmdID,
+				SlaveId: ownID,
+				Status:  exitStatus,
+				Message: exitMessage,
+				Tag:     slaveTag,
 			})
 		if err != nil {
-			logger.Fatal().Err(err).Msg("Failed to get next command from the master.")
+			logger.Error().
+				Err(err).
+				Msg("Failed to get next command from the master.")
+			time.Sleep(time.Second)
+			continue
 		} else {
 			logger.Info().Int32("cmdId", nextCmd.CmdId).Msg("Received command.")
 		}
@@ -111,6 +129,16 @@ func main() {
 
 		// Execute command, depending on type.
 		switch cmd := nextCmd.Cmd.(type) {
+
+		// Initialize slave - already handled on first call, but keep for completeness.
+		case *pb.MasterCommand_InitSlave:
+			logger.Info().
+				Int32("newSlaveID", cmd.InitSlave.SlaveId).
+				Msg("Received another InitSlave command.")
+			ownID = cmd.InitSlave.SlaveId
+			wildcards[discovery.WildcardSlaveID] = slaveIDString(ownID)
+			exitMessage = "OK (InitSlave)"
+			exitStatus = 0
 
 		// Start a program in the background as a separate process.
 		case *pb.MasterCommand_ExecStart:
@@ -128,12 +156,11 @@ func main() {
 				// E.g., discovery.WildcardSlaveID (__id__ at the time of writing this comment)
 				// is replaced by own slave ID.
 				cmd.ExecStart.OutputFileName = replaceWildcards(cmd.ExecStart.OutputFileName, wildcards)
-
 				for i, arg := range cmd.ExecStart.Args {
 					cmd.ExecStart.Args[i] = replaceWildcards(arg, wildcards)
 				}
 
-				logger.Info().
+				logger.Debug().
 					Str("resolvedOutFile", cmd.ExecStart.OutputFileName).
 					Str("resolvedArgs", fmt.Sprint(cmd.ExecStart.Args)).
 					Msg("ExecStart after wildcard replacement")
@@ -141,19 +168,19 @@ func main() {
 				// Create Command to execute
 				execCmd = exec.Command(cmd.ExecStart.Name, cmd.ExecStart.Args...)
 
-				// Ensure the output directory for ExecStart exists (robust against missing experiment-output/*/slave-__id__).
+				// Ensure output directory exists (robust in case experiment-output/<id>/slave-__id__ was not created yet)
 				outDir := filepath.Dir(cmd.ExecStart.OutputFileName)
-				if err = os.MkdirAll(outDir, 0755); err != nil {
+				if err := os.MkdirAll(outDir, 0755); err != nil {
 					logger.Error().
 						Err(err).
 						Str("outDir", outDir).
-						Str("outFileName", cmd.ExecStart.OutputFileName).
 						Msg("Could not create directory for ExecStart output file")
+				} else {
+					logger.Debug().
+						Str("outDir", outDir).
+						Str("outFileName", cmd.ExecStart.OutputFileName).
+						Msg("ExecStart output directory ensured")
 				}
-				logger.Info().
-					Str("outDir", outDir).
-					Str("outFileName", cmd.ExecStart.OutputFileName).
-					Msg("ExecStart output directory ensured")
 
 				// Open output file (will be closed when executing the ExecWait command)
 				if execOutFile, err = os.Create(cmd.ExecStart.OutputFileName); err != nil {
@@ -183,123 +210,100 @@ func main() {
 
 			logger.Info().Str("cmdType", "ExecWait").Msg("Received command.")
 			if execCmd == nil {
-				exitMessage = "No command running."
+				exitMessage = "No program to wait for."
 				exitStatus = 1
 			} else {
 
-				status := execCmd.ProcessState
+				// Send a INT signal to the process after the timeout.
+				// If that doesn not stop the process, we send the KILL signal after another another timeout.
+				timerInt := time.AfterFunc(time.Millisecond*time.Duration(cmd.ExecWait.Timeout), func() {
+					_ = execCmd.Process.Signal(syscall.SIGINT)
+				})
 
-				if !status.Exited() {
-					// Wait for started program to terminate.
+				timerKill := time.AfterFunc(time.Millisecond*2*time.Duration(cmd.ExecWait.Timeout), func() {
+					_ = execCmd.Process.Signal(syscall.SIGKILL)
+				})
 
-					var waitStatus syscall.WaitStatus
-
-					if _, err := execCmd.Process.Wait(); err != nil {
-						logger.Error().Err(err).Msg("Error waiting for process.")
-						exitMessage = "Error waiting for process."
-						exitStatus = 2
-					} else {
-						if st := execCmd.ProcessState.Sys(); st != nil {
-							waitStatus, _ = st.(syscall.WaitStatus)
-							exitStatus = int32(waitStatus.ExitStatus())
-							exitMessage = "Program exited normally."
-						} else {
-							exitMessage = "Program status unknown."
-							exitStatus = 3
-						}
-					}
+				// Wait for started program to terminate.
+				if err := execCmd.Wait(); err != nil {
+					logger.Error().Err(err).Msg("Error waiting for process.")
+					exitMessage = "Error waiting for program: " + err.Error()
+					exitStatus = 2
 				} else {
-					exitMessage = "Program not running."
-					exitStatus = int32(status.ExitCode())
+					exitMessage = "Program exited normally."
+					exitStatus = 0
 				}
 
-				if exitStatus == 0 && err != nil {
-					exitMessage = "Error waiting for program: " + err.Error()
-					exitStatus = 4
-				} else if exitStatus == 0 {
+				timerInt.Stop()
+				timerKill.Stop()
+
+				if execOutFile != nil {
 					if err := execOutFile.Close(); err != nil {
 						logger.Error().Err(err).Msg("Could not close output file.")
 						exitMessage = "Could not close output file."
-						exitStatus = 5
+						exitStatus = 3
+					}
+				}
+
+				// Clear execCmd so that next ExecStart is accepted
+				execCmd = nil
+			}
+
+		// Send signal to program running in the background.
+		case *pb.MasterCommand_ExecSignal:
+			exitStatus = 0
+			logger.Info().Str("cmdType", "ExecSignal").Msg("Received command.")
+			if execCmd == nil {
+				exitMessage = "No program to signal."
+				exitStatus = 1
+			} else {
+				// Translate Signum enum to syscall.Signal
+				var sig syscall.Signal
+				switch cmd.ExecSignal.Signum {
+				case pb.ExecSignal_SIGINT:
+					sig = syscall.SIGINT
+				case pb.ExecSignal_SIGKILL:
+					sig = syscall.SIGKILL
+				case pb.ExecSignal_SIGTERM:
+					sig = syscall.SIGTERM
+				default:
+					exitMessage = "Unknown signal."
+					exitStatus = 1
+				}
+
+				if exitStatus == 0 {
+					if err := execCmd.Process.Signal(sig); err != nil {
+						exitMessage = "Error sending signal to program: " + err.Error()
+						exitStatus = 2
 					} else {
 						exitMessage = "OK"
 					}
 				}
 			}
 
-		// Send signal to program running in the background.
-		case *pb.MasterCommand_Signal:
+		// Do nothing (keep-alive / sync)
+		case *pb.MasterCommand_Noop:
+			logger.Info().Str("cmdType", "Noop").Msg("Received Noop command.")
+			exitMessage = "OK (Noop)"
 			exitStatus = 0
-			logger.Info().Str("cmdType", "Signal").Msg("Received command.")
-			if execCmd == nil {
-				exitMessage = "No command running."
-				exitStatus = 1
-			} else {
-				// Send signal to program.
-				sig, err := parseSignal(cmd.Signal.SignalName)
-				if err != nil {
-					exitMessage = "Unknown signal: " + cmd.Signal.SignalName
-					exitStatus = 1
-				}
 
-				if err := execCmd.Process.Signal(sig); err != nil {
-					exitMessage = "Error sending signal to program: " + err.Error()
-					exitStatus = 2
-				} else {
-					exitMessage = "OK"
-				}
-			}
-
-		// Transfer a local file to the master.
-		case *pb.MasterCommand_Sendfile:
+		// Stop slave loop.
+		case *pb.MasterCommand_Stop:
+			logger.Info().Str("cmdType", "Stop").Msg("Received Stop command.")
+			exitMessage = "Stop"
 			exitStatus = 0
-			logger.Info().Str("cmdType", "Sendfile").Msg("Received command.")
-
-			// Replace wildcards in file name.
-			cmd.Sendfile.SrcName = replaceWildcards(cmd.Sendfile.SrcName, wildcards)
-
-			// Attempt to open file for reading.
-			if cmdOutFile, err = os.Open(cmd.Sendfile.SrcName); err != nil {
-				logger.Error().Err(err).Str("outFileName", cmd.Sendfile.SrcName).Msg("Could not open file for reading")
-				exitMessage = "Could not open file for reading: " + err.Error()
-				exitStatus = 1
-			} else {
-
-				// Create log entry including file name and target ID.
-				targetIDs := make([]string, len(cmd.Sendfile.TargetIds))
-				for i, id := range cmd.Sendfile.TargetIds {
-					targetIDs[i] = strconv.FormatInt(int64(id), 10)
-				}
-				logger.Info().
-					Str("srcFile", cmd.Sendfile.SrcName).
-					Str("targetIDs", strings.Join(targetIDs, ",")).
-					Msg("Sending file to master server.")
-
-				// Perform the file transfer.
-				_, err := discoveryClient.StreamSlaveFile(context.Background(),
-					&pb.FileStream{
-						SrcId:     regResp.OwnId,
-						TargetIds: cmd.Sendfile.TargetIds,
-						Name:      cmd.Sendfile.StringName,
-						Contents:  cmdOutFile,
-					})
-				if err != nil {
-					logger.Error().Err(err).Msg("Could not send file to master.")
-					exitMessage = "Could not send file: " + err.Error()
-					exitStatus = 2
-				} else {
-					exitMessage = "OK"
-				}
-			}
+			break cmdLoop
 
 		default:
-			logger.Error().
-				Str("cmdType", fmt.Sprintf("%T", cmd)).
-				Msg("Received unknown command type.")
+			logger.Warn().Msg("Received unknown command.")
 			exitStatus = 1
 			exitMessage = fmt.Sprint("Unknown command:", cmd)
 		}
 	}
+
+	logger.Info().
+		Int32("ownID", ownID).
+		Msg("Slave loop terminated, exiting.")
 }
 
 func replaceWildcards(data string, mapping map[string]string) string {
@@ -315,21 +319,5 @@ func replaceWildcards(data string, mapping map[string]string) string {
 func slaveIDString(id int32) string {
 	format := "%0" + strconv.Itoa(numIDDigits) + "d"
 	return fmt.Sprintf(format, id)
-}
-
-// parseSignal is helper to translate signal names (e.g. "SIGTERM") to syscall.Signal.
-func parseSignal(sigName string) (syscall.Signal, error) {
-	switch sigName {
-	case "SIGTERM":
-		return syscall.SIGTERM, nil
-	case "SIGINT":
-		return syscall.SIGINT, nil
-	case "SIGKILL":
-		return syscall.SIGKILL, nil
-	case "SIGQUIT":
-		return syscall.SIGQUIT, nil
-	default:
-		return 0, fmt.Errorf("unknown signal %s", sigName)
-	}
 }
 
