@@ -1,16 +1,15 @@
 package main
 
 import (
-	"fmt"
+	"bufio"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 	logger "github.com/rs/zerolog/log"
 
-	"github.com/hyperledger-labs/mirbft/checkpoint"
-	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/crypto"
 	"github.com/hyperledger-labs/mirbft/discovery"
 	"github.com/hyperledger-labs/mirbft/manager"
@@ -22,6 +21,8 @@ import (
 	"github.com/hyperledger-labs/mirbft/request"
 	"github.com/hyperledger-labs/mirbft/statetransfer"
 	"github.com/hyperledger-labs/mirbft/tracing"
+
+	"google.golang.org/grpc"
 )
 
 func extractPort(addr string) string {
