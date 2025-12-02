@@ -1,31 +1,27 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"sync"
-	"syscall"
+    "fmt"
+    "os"
+    "sync"
+    "time"
 
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
+    "github.com/rs/zerolog"
+    logger "github.com/rs/zerolog/log"
 
-	"github.com/hyperledger-labs/mirbft/cmd/orderingpeer/config"
-	"github.com/hyperledger-labs/mirbft/cmd/orderingpeer/discovery"
-	"github.com/hyperledger-labs/mirbft/cmd/orderingpeer/membership"
-	"github.com/hyperledger-labs/mirbft/cmd/orderingpeer/profiling"
-	"github.com/hyperledger-labs/mirbft/cmd/orderingpeer/request"
-	"github.com/hyperledger-labs/mirbft/cmd/orderingpeer/statetransfer"
-
-	"github.com/hyperledger-labs/mirbft/crypto"
-	"github.com/hyperledger-labs/mirbft/logger"
-	"github.com/hyperledger-labs/mirbft/mirlog"
-	"github.com/hyperledger-labs/mirbft/modules/checkpoint"
-	"github.com/hyperledger-labs/mirbft/modules/manager"
-	"github.com/hyperledger-labs/mirbft/modules/messenger"
-	"github.com/hyperledger-labs/mirbft/modules/orderer"
-	"github.com/hyperledger-labs/mirbft/tracing"
+    "github.com/hyperledger-labs/mirbft/checkpoint"
+    "github.com/hyperledger-labs/mirbft/config"
+    "github.com/hyperledger-labs/mirbft/crypto"
+    "github.com/hyperledger-labs/mirbft/discovery"
+    "github.com/hyperledger-labs/mirbft/manager"
+    mirlog "github.com/hyperledger-labs/mirbft/log"
+    "github.com/hyperledger-labs/mirbft/membership"
+    "github.com/hyperledger-labs/mirbft/messenger"
+    "github.com/hyperledger-labs/mirbft/orderer"
+    "github.com/hyperledger-labs/mirbft/profiling"
+    "github.com/hyperledger-labs/mirbft/request"
+    "github.com/hyperledger-labs/mirbft/statetransfer"
+    "github.com/hyperledger-labs/mirbft/tracing"
 )
 
 // profilingEnabled is a global variable indicating whether profiling is enabled.
