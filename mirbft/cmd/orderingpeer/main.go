@@ -228,6 +228,8 @@ func setOrderer(ordererType string) (ord orderer.Orderer) {
 		ord = &orderer.HotStuffOrderer{}
 	case "Raft":
 		ord = &orderer.RaftOrderer{}
+	case "MultiPaxos"
+		ord = &orderer.MultiPaxosOrderer{}
 	default:
 		logger.Fatal().Msg("Unsupported orderer type")
 	}
