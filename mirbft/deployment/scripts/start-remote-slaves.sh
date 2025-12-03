@@ -1,183 +1,143 @@
 #!/usr/bin/env bash
 #
-# start-remote-slaves.sh — versão genérica (sem usuário hard-coded)
+# start-remote-slaves.sh
 #
-# - Compila automaticamente os binários no nó local (node-0)
-# - Verifica os binários gerados
-# - Distribui binários + scripts/ para todos os slaves
-# - Dispara os slaves de uma TAG específica (peers, 1client, etc.)
+# Script para iniciar slaves em instâncias remotas usando o discovery master.
 #
-# Assumindo:
-#   * Você está rodando a partir do diretório 'deployment'
-#   * 'scripts/global-vars.sh' define caminhos remotos (remote_work_dir, remote_gopath, ...)
+# Uso:
+#   ./scripts/start-remote-slaves.sh <exp_data_dir> <tag> <n> <master_ip> <args...>
 #
-set -uo pipefail
+# Onde:
+#   <exp_data_dir>  diretório base dos dados do experimento (ex.: deployment-data/remote-0000)
+#   <tag>           tag dos slaves a serem iniciados (ex.: peers, 1client, etc.)
+#   <n>             número de slaves a iniciar
+#   <master_ip>     IP do master (onde está discoverymaster)
+#   <args...>       pares (instance_id ctrl_ip role tag) lidos de scripts/instance-info
+#
+set -euo pipefail
 
+# ----------------------------------------------------------------------
+# Parâmetros
+# ----------------------------------------------------------------------
 exp_data_dir="$1"
 tag="$2"
 n="$3"
 master_ip="$4"
 shift 4
 
-echo "====================================================================="
-echo "=== [start-remote-slaves] INÍCIO ===================================="
-echo "  exp_data_dir = ${exp_data_dir}"
-echo "  tag          = ${tag}"
-echo "  n            = ${n}"
-echo "  master_ip    = ${master_ip}"
-echo "  args rest    = $*"
-echo "====================================================================="
-echo
+# Diretório local de configuração gerado pelo generate-config.sh
+# (deployment-data/remote-0000/experiment-config)
+local_config_dir="${exp_data_dir}/experiment-config"
 
 # ----------------------------------------------------------------------
-# Diretórios base (local) e variáveis globais
+# Importa variáveis globais
 # ----------------------------------------------------------------------
-# BASE_DIR = diretório 'deployment'
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${BASE_DIR}"
-
-# Carrega variáveis compartilhadas (ssh_options, remote_work_dir, remote_gopath, etc.)
-source scripts/global-vars.sh
-
-# Raiz do repositório (um nível acima de deployment)
-local_repo="$(cd "${BASE_DIR}/.." && pwd)"
-
-# Caminhos locais de Go:
-#   - se GOBIN já estiver definido, usamos
-#   - senão, se GOPATH existir, usamos GOPATH/bin
-#   - senão, caímos no remote_gopath definido em global-vars.sh
-if [[ -n "${GOBIN:-}" ]]; then
-  local_bin_dir="${GOBIN%/}"
-elif [[ -n "${GOPATH:-}" ]]; then
-  local_bin_dir="${GOPATH%/}/bin"
-else
-  # Fallback: usa remote_gopath também como GOPATH local
-  GOPATH="${remote_gopath%/}"
-  export GOPATH
-  local_bin_dir="${GOPATH}/bin"
-fi
-
-export GOPATH="${GOPATH:-${remote_gopath%/}}"
-export GOBIN="${local_bin_dir}"
-export PATH="${GOBIN}:/usr/local/go/bin:${PATH}"
-
-local_discoverymaster="${local_bin_dir}/discoverymaster"
-local_discoveryslave="${local_bin_dir}/discoveryslave"
-local_orderingpeer="${local_bin_dir}/orderingpeer"
-local_orderingclient="${local_bin_dir}/orderingclient"
-
-# Estes são relativos ao diretório de deployment (BASE_DIR)
-local_start_slave_script="${BASE_DIR}/scripts/start-slave.sh"
-local_scripts_dir="${BASE_DIR}/scripts"
-
-# Caminhos remotos (derivados de global-vars.sh)
-remote_bin_dir="${remote_gopath%/}/bin"
-remote_logs_dir="${remote_work_dir%/}/logs"
+# (remote_work_dir, remote_bin_dir, remote_status_file, etc.)
+source "$(dirname "$0")/global-vars.sh"
 
 # ----------------------------------------------------------------------
-# Auto-Compilação dos binários
+# Funções auxiliares
 # ----------------------------------------------------------------------
-echo
-echo "==== [start-remote-slaves] (LOCAL) Compilando binários ====="
-echo "  Repositório: ${local_repo}"
 
-cd "${local_repo}" || {
-  echo "  [LOCAL] ERRO: diretório ${local_repo} não encontrado!"
+usage() {
+  echo "Uso: $0 <exp_data_dir> <tag> <n> <master_ip> <instance_id ctrl_ip role tag>..."
   exit 1
 }
 
-echo "  Executando: go install ./cmd/..."
-if ! go install ./cmd/... ; then
-  echo "  [LOCAL] ERRO: falha ao compilar binários!"
+if [[ -z "${exp_data_dir:-}" || -z "${tag:-}" || -z "${n:-}" || -z "${master_ip:-}" ]]; then
+  usage
+fi
+
+# Espera por argumentos com múltiplos de 4: instance_id, ctrl_ip, role, tag
+if (( "$#" % 4 != 0 )); then
+  echo "ERRO: número de argumentos inválido; esperado múltiplos de 4 (instance_id, ctrl_ip, role, tag)." >&2
   exit 1
 fi
 
-echo "  [LOCAL] Compilação concluída."
-echo
+# Opções de SSH/SCP
+ssh_options="-o BatchMode=yes -o StrictHostKeyChecking=no"
+scp_options="${ssh_options}"
 
-# Volta para o diretório 'deployment'
-cd "${BASE_DIR}" || {
-  echo "  [LOCAL] ERRO: não foi possível voltar para ${BASE_DIR}"
-  exit 1
-}
-
-# ----------------------------------------------------------------------
-# Verificação dos binários compilados
-# ----------------------------------------------------------------------
-echo "==== [start-remote-slaves] (LOCAL) Verificando binários em ${local_bin_dir} ===="
-echo "  remote_gopath = ${remote_gopath}"
-echo "  local_bin_dir = ${local_bin_dir}"
-
-for bin in "${local_discoverymaster}" "${local_discoveryslave}" "${local_orderingpeer}" "${local_orderingclient}"; do
-  if [[ ! -x "${bin}" ]]; then
-    echo "  [LOCAL] ERRO: binário não encontrado após compilação: ${bin}"
-    exit 1
-  else
-    echo "  [LOCAL] OK: ${bin}"
-  fi
-done
-
-# Verificar start-slave.sh
-if [[ ! -f "${local_start_slave_script}" ]]; then
-  echo "  [LOCAL] ERRO: script ${local_start_slave_script} não encontrado!"
-  exit 1
-fi
-
-# Verificar diretório scripts/ (contém stubborn-scp.sh, analyze/, etc.)
-if [[ ! -f "${local_scripts_dir}/stubborn-scp.sh" ]]; then
-  echo "  [LOCAL] ERRO: ${local_scripts_dir}/stubborn-scp.sh não encontrado!"
-  exit 1
-fi
-
-echo "==== [start-remote-slaves] Binários + scripts verificados. ===="
-echo
+# Diretórios locais (no node-0)
+local_bin_dir="${GOPATH}/bin"
+local_scripts_dir="$(cd "$(dirname "$0")/.." && pwd)/scripts"
 
 # ----------------------------------------------------------------------
-# Função para preparar cada slave
+# Garante ambiente em um slave remoto
+#   Parâmetros:
+#     $1 = instance_id
+#     $2 = ctrl_ip
+#     $3 = role      (master | slave)
+#     $4 = tag       (peers, 1client, etc.)
 # ----------------------------------------------------------------------
 ensure_remote_slave() {
   local instance_id="$1"
-  local public_ip="$2"
-  local private_ip="$3"
-  local role="$4"
-  local slave_tag="$5"
+  local ctrl_ip="$2"
+  local role="$3"
+  local node_tag="$4"
 
-  if [[ "${role}" != "slave" ]]; then
-    echo "    [REMOTO] role='${role}' (não é slave); ignorando."
-    return
+  # Só nos interessam os slaves com a tag desejada
+  if [[ "${role}" != "slave" || "${node_tag}" != "${tag}" ]]; then
+    return 0
   fi
+
+  local public_ip="${ctrl_ip}"
 
   echo "---------------------------------------------------------------------"
   echo "  [REMOTO] Garantindo ambiente em ${public_ip}"
   echo "           instance_id = ${instance_id}"
-  echo "           tag         = ${slave_tag}"
+  echo "           tag         = ${node_tag}"
   echo "---------------------------------------------------------------------"
 
-  # Criar diretórios remotos
-  ssh ${ssh_options} "${public_ip}" "
-    mkdir -p '${remote_bin_dir}' '${remote_work_dir}' '${remote_logs_dir}'
+  # 1) Garante diretórios base no remoto
+  ssh ${ssh_options} "Bruno@${public_ip}" "
+    mkdir -p '${remote_work_dir}' \
+             '${remote_bin_dir}' \
+             '${remote_exp_dir}'
+    mkdir -p \"\$(dirname '${remote_status_file}')\"
+    echo RUNNING > '${remote_status_file}'
   " >/dev/null 2>&1
 
-  # Copiar binários
-  scp ${ssh_options} \
-    "${local_discoverymaster}" \
-    "${local_discoveryslave}" \
-    "${local_orderingpeer}" \
-    "${local_orderingclient}" \
-    "${public_ip}:${remote_bin_dir}/" >/dev/null 2>&1
+  # 2) Copiar start-slave.sh
+  local start_slave_script="${local_scripts_dir}/start-slave.sh"
+  scp ${scp_options} \
+    "${start_slave_script}" \
+    "Bruno@${public_ip}:${remote_work_dir}/start-slave.sh" >/dev/null 2>&1
 
-  # Copiar start-slave.sh
-  scp ${ssh_options} \
-    "${local_start_slave_script}" \
-    "${public_ip}:${remote_work_dir}/start-slave.sh" >/dev/null 2>&1
-
-  # Copiar diretório scripts/
-  scp -r ${ssh_options} \
+  # 3) Copiar diretório scripts/
+  scp -r ${scp_options} \
     "${local_scripts_dir}" \
-    "${public_ip}:${remote_work_dir}/" >/dev/null 2>&1
+    "Bruno@${public_ip}:${remote_work_dir}/" >/dev/null 2>&1
 
-  # Permissões
-  ssh ${ssh_options} "${public_ip}" "
+  # 4) Copiar binários (discoverymaster, discoveryslave, orderingpeer, orderingclient)
+  #    (assume que go install ./cmd/... já foi executado e local_bin_dir está atualizado)
+  scp ${scp_options} \
+    "${local_bin_dir}/discoverymaster" \
+    "${local_bin_dir}/discoveryslave" \
+    "${local_bin_dir}/orderingpeer" \
+    "${local_bin_dir}/orderingclient" \
+    "Bruno@${public_ip}:${remote_bin_dir}/" >/dev/null 2>&1
+
+  # 5) Copiar configuração do experimento para o diretório 'config/' no slave
+  #    Isso é essencial para que o comando:
+  #      orderingpeer config/config.yml ...
+  #    (no master-commands.cmd) funcione em TODOS os slaves.
+  if [[ -d "${local_config_dir}" ]]; then
+    echo "    [REMOTO] Copiando configs (experiment-config -> config) para ${public_ip}..."
+    ssh ${ssh_options} "Bruno@${public_ip}" "
+      mkdir -p '${remote_work_dir}/config'
+    " >/dev/null 2>&1
+
+    # Copia todos os arquivos de configuração (incluindo config.yml) para /users/Bruno/iss/config/
+    scp ${scp_options} \
+      "${local_config_dir}/"* \
+      "Bruno@${public_ip}:${remote_work_dir}/config/" >/dev/null 2>&1
+  else
+    echo "    [REMOTO] AVISO: diretório de configs '${local_config_dir}' não encontrado; 'config/config.yml' não será criado no slave."
+  fi
+
+  # 6) Ajusta permissões
+  ssh ${ssh_options} "Bruno@${public_ip}" "
     chmod +x '${remote_bin_dir}/discoverymaster' \
              '${remote_bin_dir}/discoveryslave' \
              '${remote_bin_dir}/orderingpeer' \
@@ -190,98 +150,72 @@ ensure_remote_slave() {
 }
 
 # ----------------------------------------------------------------------
-# Distribuição (garantir ambiente em todos os slaves)
+# Iniciar slaves da tag desejada
 # ----------------------------------------------------------------------
-echo "==== [start-remote-slaves] (REMOTO) Garantindo binários e scripts ===="
+start_slaves() {
+  echo "==== [start-remote-slaves] INICIANDO SLAVES (tag='${tag}', n=${n}) ===="
 
-rest=("$@")
-idx=0
-total=${#rest[@]}
+  # Garante ambiente em todos os slaves primeiro
+  echo "==== [start-remote-slaves] (REMOTO) Garantindo binários e scripts ===="
+  local total_args="$#"
+  local i=1
 
-while (( idx < total )); do
-  key="${rest[$idx]}"
+  while (( i <= total_args )); do
+    local instance_id="${!i}"; ((i++))
+    local ctrl_ip="${!i}";      ((i++))
+    local role="${!i}";         ((i++))
+    local node_tag="${!i}";     ((i++))
 
-  if [[ "${key}" == "skip" ]]; then
-    # Formato: skip <algo> <algo> → pula 3 entradas
-    ((idx+=3))
-    continue
-  fi
+    ensure_remote_slave "${instance_id}" "${ctrl_ip}" "${role}" "${node_tag}"
+  done
 
-  if (( idx + 4 >= total )); then
-    echo "  [REMOTO-AVISO] Argumentos insuficientes."
-    break
-  fi
+  echo "==== [start-remote-slaves] Distribuição concluída. ===="
 
-  ensure_remote_slave \
-    "${rest[$idx]}"       \
-    "${rest[$((idx+1))]}" \
-    "${rest[$((idx+2))]}" \
-    "${rest[$((idx+3))]}" \
-    "${rest[$((idx+4))]}"
+  # Agora de fato dispara os slaves da tag desejada
+  echo
+  echo "==== [start-remote-slaves] Iniciando slaves da TAG '${tag}' (n = ${n}) ===="
 
-  ((idx+=5))
-done
+  i=1
+  local started=0
 
-echo "==== [start-remote-slaves] Distribuição concluída. ===="
-echo
+  while (( i <= total_args )); do
+    local instance_id="${!i}"; ((i++))
+    local ctrl_ip="${!i}";      ((i++))
+    local role="${!i}";         ((i++))
+    local node_tag="${!i}";     ((i++))
+
+    if [[ "${role}" == "slave" && "${node_tag}" == "${tag}" ]]; then
+      local public_ip="${ctrl_ip}"
+      echo "  [DEPLOY] Iniciando slave em ${public_ip}"
+      ssh ${ssh_options} "Bruno@${public_ip}" "
+        cd '${remote_work_dir}'
+        nohup ./start-slave.sh '${master_ip}' '${exp_data_dir}' '${tag}' '${instance_id}' \
+          > '${remote_work_dir}/start-slave-${instance_id}.log' 2>&1 &
+      " >/dev/null 2>&1
+      ((started++))
+      if (( started == n )); then
+        break
+      fi
+    fi
+  done
+
+  echo
+  echo "==== [start-remote-slaves] Todos os slaves disparados. ===="
+  echo "==== [start-remote-slaves] FIM ==========================================="
+}
 
 # ----------------------------------------------------------------------
-# Disparar slaves da tag desejada
+# MAIN
 # ----------------------------------------------------------------------
-echo "==== [start-remote-slaves] Iniciando slaves da TAG '${tag}' (n = ${n}) ===="
-
-started=0
-idx=0
-
-while (( idx < total )); do
-  key="${rest[$idx]}"
-
-  if [[ "${key}" == "skip" ]]; then
-    ((idx+=3))
-    continue
-  fi
-
-  if (( idx + 4 >= total )); then
-    break
-  fi
-
-  instance_id="${rest[$idx]}"
-  public_ip="${rest[$((idx+1))]}"
-  private_ip="${rest[$((idx+2))]}"
-  role="${rest[$((idx+3))]}"
-  slave_tag="${rest[$((idx+4))]}"
-
-  if [[ "${role}" != "slave" || "${slave_tag}" != "${tag}" ]]; then
-    ((idx+=5))
-    continue
-  fi
-
-  if (( started >= n )); then
-    ((idx+=5))
-    continue
-  fi
-
-  log_file="${exp_data_dir}/ssh-${tag}-${public_ip}.log"
-  echo "  [DEPLOY] Iniciando slave em ${public_ip}"
-
-  (
-    ssh ${ssh_options} "${public_ip}" "
-      cd '${remote_work_dir}' || exit 1
-      nohup ./start-slave.sh \
-        '${tag}' '${master_ip}' '${public_ip}' '${private_ip}' \
-        > '${remote_logs_dir}/start-slave-${tag}.log' 2>&1 &
-    "
-  ) > "${log_file}" 2>&1 &
-
-  started=$((started + 1))
-  sleep 0.2
-
-  ((idx+=5))
-done
-
-echo
-echo "==== [start-remote-slaves] Todos os slaves disparados. ===="
-wait || true
-echo "==== [start-remote-slaves] FIM ==========================================="
 echo "====================================================================="
+echo "=== [start-remote-slaves] INÍCIO ===================================="
+echo "  exp_data_dir = ${exp_data_dir}"
+echo "  tag          = ${tag}"
+echo "  n            = ${n}"
+echo "  master_ip    = ${master_ip}"
+echo "  args rest    = $*"
+echo "====================================================================="
+echo
+
+start_slaves "$@"
 
