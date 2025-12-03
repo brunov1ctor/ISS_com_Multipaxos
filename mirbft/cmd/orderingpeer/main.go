@@ -2,11 +2,13 @@ package main
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 	logger "github.com/rs/zerolog/log"
+
 	"github.com/hyperledger-labs/mirbft/checkpoint"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/crypto"
@@ -23,17 +25,22 @@ import (
 
 // Flag indicating whether profiling is enabled.
 // Used to decide whether the tracer should shut down the process on the INT signal or not.
-// TODO: This is ugly and dirty. Implement graceful shutdown!
 var profilingEnabled = false
 
 func main() {
+	// Sanidade básica de argumentos
+	if len(os.Args) < 5 {
+		logger.Fatal().
+			Str("argv", strings.Join(os.Args, " ")).
+			Msg("usage: orderingpeer <configFile> <discoveryAddr> <ownPublicIP> <ownPrivateIP> [traceFile] [profilePrefix]")
+	}
 
-	// Get command line arguments
 	configFileName := os.Args[1]
 	discoveryServAddr := os.Args[2]
 	ownPublicIP := os.Args[3]
 	ownPrivateIP := os.Args[4]
 
+	// Carrega config antes de configurar logger
 	config.LoadFile(configFileName)
 
 	// Configure logger
@@ -42,13 +49,18 @@ func main() {
 	logger.Logger = logger.Output(zerolog.ConsoleWriter{
 		Out:        os.Stdout,
 		NoColor:    true,
-		TimeFormat: "15:04:05.000"})
-	//zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMs
-	//logger.Logger = logger.Output(zerolog.ConsoleWriter{
-	//	Out:        os.Stdout,
-	//	NoColor:    true,
-	//	TimeFormat: "15:04:05.000",
-	//})
+		TimeFormat: "15:04:05.000",
+	})
+
+	wd, _ := os.Getwd()
+	logger.Info().
+		Str("argv", strings.Join(os.Args, " ")).
+		Str("cwd", wd).
+		Str("configFile", configFileName).
+		Str("discoveryAddr", discoveryServAddr).
+		Str("ownPublicIP", ownPublicIP).
+		Str("ownPrivateIP", ownPrivateIP).
+		Msg("orderingpeer starting")
 
 	// Initialize packages that need the configuration to be loaded for initialization
 	membership.Init()
@@ -89,14 +101,28 @@ func main() {
 	//            (as the presence of profiling influences setting up of tracing).
 	if len(os.Args) > 6 {
 		profilingEnabled = true // UGLY DIRTY CODE!
-		logger.Info().Msg("Profiling enabled.")
+		logger.Info().
+			Str("profilePrefix", os.Args[6]).
+			Msg("Profiling enabled via CLI argument.")
 		setUpProfiling(os.Args[6])
 	}
 
 	// Set up tracing if necessary
 	if len(os.Args) > 5 {
+		logger.Info().
+			Str("traceFile", os.Args[5]).
+			Msg("Tracing enabled via CLI argument.")
 		setUpTracing(os.Args[5], ownID)
+	} else {
+		logger.Warn().
+			Msg("No traceFile argument provided; throughput/latency metrics will NOT be available.")
 	}
+
+	logger.Info().
+		Str("ordererType", config.Config.Orderer).
+		Str("managerType", config.Config.Manager).
+		Str("checkpointerType", config.Config.Checkpointer).
+		Msg("Component types from configuration.")
 
 	// Declare variables for component modules.
 	var mngr manager.Manager
@@ -112,14 +138,9 @@ func main() {
 
 	// Initialize modules.
 	// No outgoing messages must be produced even after initialization,
-	// but the modules must be raady to process incoming messages.
+	// but the modules must be ready to process incoming messages.
 	ord.Init(mngr)
 	chkp.Init(mngr)
-
-	//// Make adjustments if this peer simulates a faulty one
-	//if membership.OwnID < int32(config.Config.Failures) {
-	//	config.Config.ViewChangeTimeout = 100
-	//}
 
 	// Register message and entry handlers
 	messenger.CheckpointMsgHandler = chkp.HandleMessage
@@ -129,14 +150,10 @@ func main() {
 	statetransfer.OrdererEntryHandler = ord.HandleEntry
 
 	// Create wait group for all the modules that will run as separate goroutines.
-	// (Currently the graceful termination is not implemented, so waiting on wg will take forever and the process
-	// needs to be killed.)
 	wg := sync.WaitGroup{}
 	wg.Add(5) // messenger, checkpointer, orderer, manager, responder
 
 	// Start the messaging subsystem.
-	// Connect needs to come after starting the messenger which launches the gRPC server everybody connects to.
-	// Otherwise we deadlock, everybody connecting to gRPC servers that are not (and never will be) running.
 	go messenger.Start(&wg)
 	messenger.Connect()
 	logger.Info().Msg("Connected to all peers.")
@@ -145,7 +162,7 @@ func main() {
 	discovery.SyncPeer(discoveryServAddr, ownID)
 	logger.Info().Msg("All peers finished connecting. Starting ISS.")
 
-	// If we are simulating a crashed node, exit immediately.
+	// Simulação de falha (mantida do código original, se estiver ativada)
 	if config.Config.LeaderPolicy == "SimulatedRandomFailures" {
 		crash := true
 		for _, l := range manager.NewLeaderPolicy(config.Config.LeaderPolicy).GetLeaders(0) {
@@ -160,50 +177,52 @@ func main() {
 	}
 
 	// Start all modules.
-	// The order of the calls must not matter, as they are all concurrent. If it does, it's a bug.
-	// By now all the modules must be initialized and ready to process messages.
-	// After starting, the modules will produce messages on their own.
 	go rsp.Start(&wg)
 	go chkp.Start(&wg)
 	go mngr.Start(&wg)
 	go ord.Start(&wg)
 
+	logger.Info().Msg("All modules started. Waiting for termination (SIGINT or process exit).")
+
 	// Wait for all modules to finish.
 	wg.Wait()
+
+	logger.Info().Msg("orderingpeer terminated cleanly.")
 }
 
 // Enables and starts the profiler of used resources.
 func setUpProfiling(outFilePrefix string) {
-	logger.Info().Msg("Setting up profiling.")
+	logger.Info().
+		Str("outFilePrefix", outFilePrefix).
+		Msg("Setting up profiling.")
 
 	profiling.StartProfiler("cpu", outFilePrefix+".cpu", 1)
 	profiling.StartProfiler("block", outFilePrefix+".block", 1)
 	profiling.StartProfiler("mutex", outFilePrefix+".mutex", 1)
 
 	// Stop profiler on INT signal
-	// TODO: Once graceful termination is implemented, use defer StopProfiler()
 	profiling.StopOnSignal(os.Interrupt, true)
 }
 
 // Sets up tracing of events.
 func setUpTracing(outFileName string, ownID int32) {
+	logger.Info().
+		Str("traceFile", outFileName).
+		Int32("ownID", ownID).
+		Msg("Setting up tracing.")
 
 	// Initialize tracing with output file name given at command line
 	tracing.MainTrace.Start(outFileName, ownID)
 
 	// TODO: Move the CPU tracing to a more appropriate place
-	//       For now, it is here, as it depends on tracing being enabled.
 	profiling.StartCPUTracing(tracing.MainTrace, 500*time.Millisecond)
 
 	// Stop tracing on INT signal.
-	// TODO: Once graceful termination is implemented, use defer
-	// The second parameter determines whether to shut down the process after stopping the tracing.
-	// If profiling is on, the profiler will do the job.
-	// TODO: ATTENTION! Implement some synchronization here, otherwise the profiler might exit the process before
-	//                  the tracer is done flushing its buffers.
 	tracing.MainTrace.StopOnSignal(os.Interrupt, !profilingEnabled)
 
-	logger.Info().Str("traceFile", outFileName).Msg("Started tracing.")
+	logger.Info().
+		Str("traceFile", outFileName).
+		Msg("Tracing started.")
 }
 
 func setManager(managerType string) (mngr manager.Manager) {
@@ -213,7 +232,7 @@ func setManager(managerType string) (mngr manager.Manager) {
 	case "Mir":
 		mngr = manager.NewMirManager()
 	default:
-		logger.Fatal().Msg("Unsupported manager type")
+		logger.Fatal().Str("managerType", managerType).Msg("Unsupported manager type")
 	}
 	return mngr
 }
@@ -230,8 +249,10 @@ func setOrderer(ordererType string) (ord orderer.Orderer) {
 		ord = &orderer.RaftOrderer{}
 	case "MultiPaxos":
 		ord = &orderer.MultiPaxosOrderer{}
+	case "MultiPaxosMulticast":
+		ord = &orderer.MultiPaxosMulticastOrderer{}
 	default:
-		logger.Fatal().Msg("Unsupported orderer type")
+		logger.Fatal().Str("ordererType", ordererType).Msg("Unsupported orderer type")
 	}
 	return ord
 }
@@ -243,7 +264,8 @@ func setCheckpointer(managerType string) (chkp checkpoint.Checkpointer) {
 	case "Signing":
 		chkp = checkpoint.NewSigningCheckpointer()
 	default:
-		logger.Fatal().Msg("Unsupported manager type")
+		logger.Fatal().Str("checkpointerType", managerType).Msg("Unsupported checkpointer type")
 	}
 	return chkp
 }
+
