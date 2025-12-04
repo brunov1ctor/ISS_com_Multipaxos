@@ -214,11 +214,12 @@ while [ "${i}" -lt "${total}" ]; do
 
   log_info "  [DEPLOY] Iniciando slave em ${ctrl_ip} (instance_id=${instance_id}, tag=${itag})"
 
-  # IMPORTANTE: sem redirecionar para /dev/null, para ver o erro do start-slave.sh
+  # Chamada CORRETA para start-slave.sh:
+  #   ./start-slave.sh <tag> <master_ip> <public_ip> <private_ip>
   ssh -o StrictHostKeyChecking=accept-new "${remote_user}@${ctrl_ip}" "
     cd '${remote_work_dir}' &&
     chmod +x ./start-slave.sh &&
-    ./start-slave.sh '${exp_data_dir}' '${instance_id}' '${master_ip}'
+    ./start-slave.sh '${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}'
   " || {
     log_error "  [DEPLOY] ERRO ao disparar slave em ${ctrl_ip} (instance_id=${instance_id})."
     continue
