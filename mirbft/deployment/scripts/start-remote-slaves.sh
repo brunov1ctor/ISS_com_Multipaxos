@@ -120,13 +120,17 @@ ensure_remote_slave() {
   log_info "           tag         = ${tag}"
   log_info "---------------------------------------------------------------------"
 
-  # Usa mkdir -p em TODOS, inclusive status, e ignora erro de "já existe"
+  # NÃO mexe mais em 'status' se for arquivo; só usa se já for diretório.
   ssh -o StrictHostKeyChecking=accept-new "${remote_user}@${ctrl_ip}" "
-    mkdir -p '${remote_work_dir}' '${remote_exp_dir}' '${remote_work_dir}/status' || true
-    echo RUNNING > '${remote_work_dir}/status/${instance_id}.status'
+    mkdir -p '${remote_work_dir}' '${remote_exp_dir}' || exit 1
+
+    if [ -d '${remote_work_dir}/status' ]; then
+      echo RUNNING > '${remote_work_dir}/status/${instance_id}.status'
+    fi
+
     rm -f '${remote_work_dir}/master.ready'
   " || {
-    log_error "  [REMOTO] ERRO ao criar diretórios / marcar status em ${ctrl_ip} (instance_id=${instance_id})."
+    log_error "  [REMOTO] ERRO ao preparar diretórios / status em ${ctrl_ip} (instance_id=${instance_id})."
     return 1
   }
 
@@ -210,11 +214,12 @@ while [ "${i}" -lt "${total}" ]; do
 
   log_info "  [DEPLOY] Iniciando slave em ${ctrl_ip} (instance_id=${instance_id}, tag=${itag})"
 
+  # IMPORTANTE: sem redirecionar para /dev/null, para ver o erro do start-slave.sh
   ssh -o StrictHostKeyChecking=accept-new "${remote_user}@${ctrl_ip}" "
     cd '${remote_work_dir}' &&
     chmod +x ./start-slave.sh &&
     ./start-slave.sh '${exp_data_dir}' '${instance_id}' '${master_ip}'
-  " >/dev/null 2>&1 || {
+  " || {
     log_error "  [DEPLOY] ERRO ao disparar slave em ${ctrl_ip} (instance_id=${instance_id})."
     continue
   }
