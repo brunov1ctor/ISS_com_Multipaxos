@@ -14,18 +14,6 @@
 #
 #   Ou seja, a partir de $5 os argumentos vêm em grupos de 5:
 #     instance_id ctrl_ip data_ip role tag
-#
-# Exemplo de chamada (o que aparece no deploy):
-#   tag          = 1client
-#   n            = 1
-#   master_ip    = 172.20.4.4
-#   args rest    = node-0 172.20.4.4 10.10.1.1 master master \
-#                  node-1 172.20.4.5 10.10.1.2 slave  peers  \
-#                  node-2 172.20.4.6 10.10.1.3 slave  peers  \
-#                  node-3 172.20.4.7 10.10.1.4 slave  peers  \
-#                  node-4 172.20.3.5 10.10.1.5 slave  peers  \
-#                  node-5 172.20.4.8 10.10.1.6 slave  peers  \
-#                  node-6 172.20.4.9 10.10.1.7 slave  1client
 #------------------------------------------------------------------------------
 
 set -euo pipefail
@@ -65,16 +53,24 @@ deployment_dir="$( cd "${this_dir}/.." && pwd )"
 # Diretório do repositório (um nível acima de deployment)
 repo_dir="$( cd "${deployment_dir}/.." && pwd )"
 
-# Carrega variáveis globais (remotas/local)
+# Tenta carregar variáveis globais, se existirem
 if [ -f "${deployment_dir}/scripts/global-vars.sh" ]; then
   # shellcheck source=/dev/null
   . "${deployment_dir}/scripts/global-vars.sh"
-else
-  log_warn "global-vars.sh não encontrado; usando defaults básicos."
-  remote_user="${remote_user:-Bruno}"
-  remote_gopath="${remote_gopath:-/users/${remote_user}/go}"
-  remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
-  remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
+fi
+
+# Aplica defaults SE não vierem de global-vars.sh
+if [ -z "${remote_user-}" ]; then
+  remote_user="Bruno"
+fi
+if [ -z "${remote_gopath-}" ]; then
+  remote_gopath="/users/${remote_user}/go"
+fi
+if [ -z "${remote_work_dir-}" ]; then
+  remote_work_dir="/users/${remote_user}/iss"
+fi
+if [ -z "${remote_exp_dir-}" ]; then
+  remote_exp_dir="${remote_work_dir}/current-deployment-data"
 fi
 
 remote_bin_dir="${remote_gopath}/bin"
@@ -87,6 +83,7 @@ log_info "==== [start-remote-slaves] Diretórios detectados ====="
 log_info "  this_dir       = ${this_dir}"
 log_info "  deployment_dir = ${deployment_dir}"
 log_info "  repo_dir       = ${repo_dir}"
+log_info "  remote_user    = ${remote_user}"
 log_info "  remote_gopath  = ${remote_gopath}"
 log_info "  remote_bin_dir = ${remote_bin_dir}"
 log_info "  remote_work_dir= ${remote_work_dir}"
@@ -94,7 +91,6 @@ log_info "  remote_exp_dir = ${remote_exp_dir}"
 echo
 
 #-------------------- APENAS verifica binários locais -------------------------
-# (Não chamamos mais 'go install' aqui, para não depender do PATH da máquina.)
 
 log_info "==== [start-remote-slaves] (LOCAL) Verificando binários em \$GOPATH/bin ===="
 local_bin_dir="${GOPATH:-${remote_gopath}}/bin"
