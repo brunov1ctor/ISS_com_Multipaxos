@@ -120,34 +120,38 @@ ensure_remote_slave() {
   log_info "           tag         = ${tag}"
   log_info "---------------------------------------------------------------------"
 
+  # Usa mkdir -p em TODOS, inclusive status, e ignora erro de "já existe"
   ssh -o StrictHostKeyChecking=accept-new "${remote_user}@${ctrl_ip}" "
-    mkdir -p '${remote_work_dir}' '${remote_exp_dir}' '${remote_work_dir}/status' &&
-    echo RUNNING > '${remote_work_dir}/status/${instance_id}.status' &&
+    mkdir -p '${remote_work_dir}' '${remote_exp_dir}' '${remote_work_dir}/status' || true
+    echo RUNNING > '${remote_work_dir}/status/${instance_id}.status'
     rm -f '${remote_work_dir}/master.ready'
   " || {
-    log_error "  [REMOTO] ERRO ao criar diretórios em ${ctrl_ip} (instance_id=${instance_id})."
+    log_error "  [REMOTO] ERRO ao criar diretórios / marcar status em ${ctrl_ip} (instance_id=${instance_id})."
     return 1
   }
 
+  # Copia binários (se falhar, apenas avisa; muitos ambientes já têm os binários)
   scp -o StrictHostKeyChecking=accept-new \
-    \"${local_bin_dir}/discoverymaster\" \
-    \"${local_bin_dir}/discoveryslave\" \
-    \"${local_bin_dir}/orderingpeer\" \
-    \"${local_bin_dir}/orderingclient\" \
-    \"${remote_user}@${ctrl_ip}:${remote_bin_dir}/\" >/dev/null 2>&1 || {
-      log_warn \"  [REMOTO] Aviso: não foi possível copiar binários para ${ctrl_ip}; assumindo que já existem.\"
+    "${local_bin_dir}/discoverymaster" \
+    "${local_bin_dir}/discoveryslave" \
+    "${local_bin_dir}/orderingpeer" \
+    "${local_bin_dir}/orderingclient" \
+    "${remote_user}@${ctrl_ip}:${remote_bin_dir}/" >/dev/null 2>&1 || {
+      log_warn "  [REMOTO] Aviso: não foi possível copiar binários para ${ctrl_ip}; assumindo que já existem."
   }
 
+  # Copia start-slave.sh
   scp -o StrictHostKeyChecking=accept-new \
-    \"${local_start_slave_script}\" \
-    \"${remote_user}@${ctrl_ip}:${remote_work_dir}/\" >/dev/null 2>&1 || {
-      log_warn \"  [REMOTO] Aviso: não foi possível copiar start-slave.sh para ${ctrl_ip}; assumindo que já existe.\"
+    "${local_start_slave_script}" \
+    "${remote_user}@${ctrl_ip}:${remote_work_dir}/" >/dev/null 2>&1 || {
+      log_warn "  [REMOTO] Aviso: não foi possível copiar start-slave.sh para ${ctrl_ip}; assumindo que já existe."
   }
 
+  # Copia scripts/ (útil para analyze-continuously, etc.)
   scp -r -o StrictHostKeyChecking=accept-new \
-    \"${local_scripts_dir}\" \
-    \"${remote_user}@${ctrl_ip}:${remote_work_dir}/\" >/dev/null 2>&1 || {
-      log_warn \"  [REMOTO] Aviso: não foi possível copiar diretório scripts/ para ${ctrl_ip}; assumindo que já existe.\"
+    "${local_scripts_dir}" \
+    "${remote_user}@${ctrl_ip}:${remote_work_dir}/" >/dev/null 2>&1 || {
+      log_warn "  [REMOTO] Aviso: não foi possível copiar diretório scripts/ para ${ctrl_ip}; assumindo que já existe."
   }
 
   log_info "    [REMOTO] OK: ambiente garantido em ${ctrl_ip}."
