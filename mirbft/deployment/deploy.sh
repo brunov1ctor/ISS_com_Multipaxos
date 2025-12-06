@@ -13,6 +13,9 @@ fi
 # Carrega variáveis globais compartilhadas pelos scripts de deployment.
 source scripts/global-vars.sh
 
+# Garante que trap_exit_command exista mesmo se não vier do ambiente
+trap_exit_command="${trap_exit_command:-:}"
+
 # Kill all children of this script when exiting
 trap "$trap_exit_command" EXIT
 
