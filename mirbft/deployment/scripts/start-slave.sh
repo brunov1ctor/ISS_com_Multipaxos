@@ -1,84 +1,63 @@
 #!/bin/bash
-#
-# scripts/start-slave.sh
-#
-# Este script é chamado pelo start-remote-slaves.sh via SSH,
-# já NO PRÓPRIO SLAVE (node-1..node-6 no Emulab).
-# Ele:
-#   - garante PATH, diretórios base e status;
-#   - TENTA esperar o master ficar READY (master-ready no master),
-#     mas NÃO TRAVA eternamente se o arquivo não aparecer;
-#   - dispara o discoveryslave em background.
-#
-# Uso:
-#   ./start-slave.sh <tag> <master_ip> <public_ip> <private_ip>
-
-set -euo pipefail
 
 source scripts/global-vars.sh
 
-tag="$1"
-master_ip="$2"
-public_ip="$3"
-private_ip="$4"
+# Kill all children of this script when exiting
+trap "$trap_exit_command" EXIT
 
-echo "[start-slave][INFO ] hostname=$(hostname) tag=$tag master_ip=$master_ip public_ip=$public_ip private_ip=$private_ip"
+tag=$1
+master_ip=$2
+public_ip=$3
+private_ip=$4
 
-# Garante PATH corretinho no slave (bin do Go + bin local do repo)
-export PATH="$remote_gopath/bin:$remote_work_dir/bin:$PATH"
+init_command="
+  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
 
-# Arquivo de status remoto (opcional, mas já deixamos como RUNNING)
-mkdir -p "$(dirname "$remote_status_file")"
-echo "RUNNING" > "$remote_status_file"
+  cd $remote_work_dir &&
+  rsync --progress -rptz -e \"ssh $ssh_options\" root@$master_ip:$remote_tls_directory . &&
+  cd tls-data &&
+  ./generate.sh $public_ip $private_ip &&
 
-# Garante diretório de trabalho e raiz de experiment-output
-mkdir -p "$remote_work_dir"
-cd "$remote_work_dir"
-mkdir -p "$remote_work_dir/experiment-output"
+  cd $remote_work_dir &&
+  rsync --progress -rptz -e \"ssh $ssh_options\" root@$master_ip:$remote_gopath/bin/* $remote_gopath/bin/ &&
+  mkdir -p config &&
 
-###############################################################################
-# Tentativa de esperar o master-ready, mas com TIMEOUT para não travar
-###############################################################################
+  stubborn-scp.sh 5 $ssh_options $master_ip:$remote_code_dir/oldmir/oldmir-start.sh $remote_work_dir/bin &&
+  chmod u+x $remote_work_dir/bin/oldmir-start.sh"
 
-echo "[start-slave][INFO ] Verificando READY do master em $master_ip ($remote_ready_file)..."
+slave_command="
+  ulimit -Sn $open_files_limit &&
+  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
+  discoveryslave $tag $master_ip:$master_port $public_ip $private_ip"
 
-max_loops=6  # 6 * machine_status_poll_period (tipicamente 5s) = ~30s
-loop=0
-master_ready=false
+echo "Setting up slave: $public_ip ($private_ip)"
 
-while [ $loop -lt $max_loops ]; do
-  if ssh $ssh_options -q -o "ConnectTimeout=10" "Bruno@${master_ip}" "test -f '$remote_ready_file'"; then
-    echo "[start-slave][INFO ] Master READY detectado após $((loop * machine_status_poll_period)) segundos."
-    master_ready=true
-    break
-  fi
-
-  echo "[start-slave][INFO ] Master ainda não está READY. Aguardando $machine_status_poll_period segundos... (tentativa $((loop+1))/$max_loops)"
-  sleep "$machine_status_poll_period"
-  loop=$((loop+1))
+# Periodically check slave status and wait until it is running.
+slave_status=$(scripts/remote-machine-status.sh $public_ip)
+echo "Slave status ($public_ip): $slave_status"
+while ! [[ "$slave_status" = "RUNNING" ]]; do
+  # Sleep a bit and obtain new status.
+  sleep $machine_status_poll_period
+  slave_status=$(scripts/remote-machine-status.sh $public_ip)
+  echo "Slave status: $slave_status"
 done
 
-if [ "$master_ready" = false ]; then
-  echo "[start-slave][WARN ] master-ready NÃO foi detectado após $((max_loops * machine_status_poll_period)) segundos."
-  echo "[start-slave][WARN ] Prosseguindo mesmo assim e iniciando discoveryslave."
-fi
+# Wait until master server is ready.
+# This needs to happen before initialization of the slave, as the master needs to prepare files (e.g. code binaries)
+# That the slave downloads during initialization.
+echo "Waiting for master server."
+while ! ssh $ssh_options -q -o "ConnectTimeout=10" "root@$master_ip" "cat $remote_ready_file > /dev/null"; do
+  sleep $machine_status_poll_period
+  echo "Master not ready. Retrying in $machine_status_poll_period seconds."
+done
 
-###############################################################################
-# Iniciar discoveryslave
-###############################################################################
+# Initialize slave.
+# Retrying introduced because sometimes, when many instances of this script are run in parallel,
+# The ssh command fails with "connection reset by peer" or similar error.
+while ! ssh $ssh_options root@$public_ip "$init_command"; do
+  sleep 1
+  echo "Retrying to initialize slave."
+done
 
-echo "[start-slave][INFO ] Iniciando discoveryslave..."
-
-slave_cmd="
-  ulimit -Sn $open_files_limit &&
-  cd '$remote_work_dir' &&
-  discoveryslave '$tag' '$master_ip:$master_port' '$public_ip' '$private_ip'
-"
-
-echo "[start-slave][INFO ] Comando: $slave_cmd"
-
-# Roda em background no próprio slave, logando em um arquivo
-nohup bash -c "$slave_cmd" > \"$remote_work_dir/slave-$tag.log\" 2>&1 &
-
-echo "[start-slave][INFO ] discoveryslave para tag=$tag disparado em background."
-
+echo "Master ready. Starting slave process."
+ssh $ssh_options root@$public_ip "$slave_command"
