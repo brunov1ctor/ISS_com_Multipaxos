@@ -8,8 +8,6 @@
 #   ./start-remote-slaves.sh <exp_data_dir> <tag> <num> <master_ip> <instance_info_file>
 #
 
-set -e
-
 source scripts/global-vars.sh
 
 if [ $# -lt 5 ]; then
@@ -22,6 +20,9 @@ tag="$2"
 num="$3"
 master_ip="$4"
 instance_info_file="$5"
+
+# Usuário remoto genérico: por padrão o mesmo que está rodando o deploy,
+# mas pode ser sobrescrito com REMOTE_SSH_USER no ambiente.
 remote_user="${REMOTE_SSH_USER:-$USER}"
 
 log_info()  { echo "[start-remote-slaves][INFO ] $*"; }
@@ -44,25 +45,20 @@ log_info
 
 log_info "==== [start-remote-slaves] Distribuindo scripts/binários aos slaves ===="
 
-started=0
-
 while read -r instance_id ctrl_ip data_ip role itag; do
   if [ "$role" != "slave" ]; then
     continue
   fi
 
-  if [ "$itag" != "$tag" ] && [ "$itag" != "peers" ] && [ "$itag" != "1client" ]; then
-    # Tag não bate nem é relevante, ignora.
-    continue
-  fi
-
+  # Esses slaves podem ser reutilizados para diferentes tags, então sempre
+  # garantimos ambiente neles.
   log_info "---------------------------------------------------------------------"
   log_info "  [REMOTO] Garantindo ambiente em $ctrl_ip"
   log_info "           instance_id = $instance_id"
   log_info "           tag         = $itag"
   log_info "---------------------------------------------------------------------"
 
-  # Garante diretórios
+  # Garante diretórios básicos
   ssh $ssh_options "${remote_user}@$ctrl_ip" "
     mkdir -p '$remote_work_dir' '$remote_exp_dir' '$remote_gopath/bin' '$remote_work_dir/scripts'
   " || {
@@ -70,18 +66,25 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     continue
   }
 
-  # Copia scripts necessários
+  # Copia o start-slave.sh para o diretório base de trabalho
   scp $ssh_options \
     scripts/start-slave.sh \
+    "${remote_user}@$ctrl_ip:$remote_work_dir/" || {
+      log_error "  [REMOTO] ERRO ao copiar start-slave.sh para $ctrl_ip."
+      continue
+    }
+
+  # Copia scripts auxiliares para subdiretório scripts/
+  scp $ssh_options \
     scripts/global-vars.sh \
     scripts/remote-machine-status.sh \
     scripts/stubborn-scp.sh \
     "${remote_user}@$ctrl_ip:$remote_work_dir/scripts/" || {
-      log_error "  [REMOTO] ERRO ao copiar scripts para $ctrl_ip."
+      log_error "  [REMOTO] ERRO ao copiar scripts auxiliares para $ctrl_ip."
       continue
     }
 
-  # Copia binários (se quiser garantir binários idênticos em todos)
+  # Copia binários do GOPATH remoto (assumindo que já foram buildados lá)
   scp $ssh_options \
     "$remote_gopath/bin/discoverymaster" \
     "$remote_gopath/bin/discoveryslave" \
@@ -119,8 +122,7 @@ while read -r instance_id ctrl_ip data_ip role itag; do
 
   # Chamada correta para start-slave.sh:
   #   ./start-slave.sh <tag> <master_ip> <public_ip> <private_ip>
-  # Rodamos em background no slave via nohup, para o SSH não ficar preso.
-  ssh -o StrictHostKeyChecking=accept-new "${remote_user}@${ctrl_ip}" "
+  ssh $ssh_options "${remote_user}@${ctrl_ip}" "
     cd '${remote_work_dir}' &&
     chmod +x ./start-slave.sh &&
     nohup ./start-slave.sh '${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}' \
