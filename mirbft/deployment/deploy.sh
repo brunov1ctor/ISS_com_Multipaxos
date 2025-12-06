@@ -13,10 +13,6 @@ fi
 # Carrega variáveis globais compartilhadas pelos scripts de deployment.
 source scripts/global-vars.sh
 
-# Garante que trap_exit_command tenha um valor default mesmo se não
-# tiver sido definido em global-vars.sh (evita "unbound variable").
-: "${trap_exit_command:=:}"
-
 # Kill all children of this script when exiting
 trap "$trap_exit_command" EXIT
 
@@ -30,9 +26,10 @@ else
 fi
 
 # Initializes the deployment.
-# Esta parte do script é separada, porque é reutilizada por outros
-# tipos de deployment.
-# Ela consome múltiplos parâmetros de linha de comando e define:
+# This part of the script is separated, because it is reused by other
+# kinds of deployments.
+# It consumes multiple command line parameters and sets the following
+# variables:
 # - configuration_generator_script
 # - depl_type
 # - exp_data_dir
@@ -42,6 +39,8 @@ fi
 # - deploy_schedule
 # - instance_info_file
 # - cancel_instances
+# Some of them are used only internally some of them are used by this
+# including script.
 source scripts/initialize-deployment.sh
 
 # Exit if only initialization is required.
@@ -51,7 +50,30 @@ if $init_only; then
   exit 0
 fi
 
-# Start the deployment
+# --------------------------------------------------------------------
+# Executa o gerador de configuração, se informado
+# --------------------------------------------------------------------
+if [ -n "$configuration_generator_script" ]; then
+  echo "Using experiment data directory: $exp_data_dir"
+  "$configuration_generator_script" "$exp_data_dir" "$exp_id_offset"
+fi
+
+# --------------------------------------------------------------------
+# Gera o arquivo de comandos para o master (master-commands-template)
+# e preenche, gerando master-commands.cmd, além de determinar o
+# deploy_schedule, caso seja cloud.
+# --------------------------------------------------------------------
+if [ "$depl_type" = "remote" ] || [ "$depl_type" = "cloud" ] || [ "$depl_type" = "local" ]; then
+  echo "Using deployment file: $deployment_file"
+  source scripts/generate-master-commands-wrapper.sh
+else
+  >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
+  exit 1
+fi
+
+# --------------------------------------------------------------------
+# Inicia o deployment propriamente dito (local / cloud / remote).
+# --------------------------------------------------------------------
 if [ "$depl_type" = "local" ]; then
   source scripts/deploy-local.sh
 elif [ "$depl_type" = "cloud" ]; then
@@ -59,9 +81,13 @@ elif [ "$depl_type" = "cloud" ]; then
 elif [ "$depl_type" = "remote" ]; then
   source scripts/deploy-remote.sh
 else
-  >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
+  >&2 echo "$0: unknown deployment type after init: $depl_type (allowed values: local, cloud, remote)"
+  exit 1
 fi
 
+# --------------------------------------------------------------------
+# Gera o resumo de resultados (CSV + summary)
+# --------------------------------------------------------------------
 echo "Generating result summary."
 scripts/analyze/summarize.sh \
   "$exp_data_dir/$csv_filename" \

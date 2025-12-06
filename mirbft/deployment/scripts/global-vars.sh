@@ -1,118 +1,38 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
+# scripts/global-vars.sh
 #
-# Variáveis globais para os scripts de deployment/execução remota.
-# Este arquivo é "sourceado" por praticamente todos os scripts do diretório.
-#
+# Variables shared across deployment scripts (local / cloud / remote).
 
-set -o nounset
-set -o pipefail
+# --------------------------------------------------------------------
+# SSH options and key
+# --------------------------------------------------------------------
+remote_user="${remote_user:-Bruno}"
+remote_private_key_file="${remote_private_key_file:-$HOME/.ssh/id_rsa}"
+ssh_options="-i $remote_private_key_file -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
-# Diretório base deste script.
-this_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-deployment_dir="$( cd "${this_dir}/.." && pwd )"
-repo_dir="$( cd "${deployment_dir}/.." && pwd )"
+# --------------------------------------------------------------------
+# Remote environment defaults
+# --------------------------------------------------------------------
+remote_gopath="${remote_gopath:-/users/Bruno/go}"
+remote_bin_dir="${remote_bin_dir:-$remote_gopath/bin}"
+remote_work_dir="${remote_work_dir:-/users/Bruno/iss}"
+remote_exp_dir="${remote_exp_dir:-$remote_work_dir/current-deployment-data}"
 
-# ---------------------------------------------------------------------------
-# Configuração de logging
-# ---------------------------------------------------------------------------
+# File on remote machines marking status
+remote_status_file="${remote_status_file:-$remote_work_dir/status}"
 
-log_ts() {
-  date +"%Y-%m-%d %H:%M:%S"
-}
+# Files/directories to delete when resetting remote machines
+remote_delete_files="${remote_delete_files:-$remote_work_dir/experiment-output $remote_work_dir/current-deployment-data $remote_work_dir/status $remote_work_dir/master-ready}"
 
-log_info() {
-  echo "[INFO  ][$(log_ts)] $*"
-}
+# --------------------------------------------------------------------
+# Local files
+# --------------------------------------------------------------------
+local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
+result_summary_file="${result_summary_file:-result-summary.csv}"
 
-log_warn() {
-  echo "[WARN  ][$(log_ts)] $*" >&2
-}
-
-log_error() {
-  echo "[ERROR ][$(log_ts)] $*" >&2
-}
-
-# ---------------------------------------------------------------------------
-# Configuração SSH padrão
-# ---------------------------------------------------------------------------
-
-# Opções SSH “robustas” usadas em todos os scripts remotos.
-# - sem interação
-# - ignora verificação de host key (importante em ambientes de teste como Emulab)
-# - não grava known_hosts (evita conflito de chaves entre re-execuções)
-ssh_options="-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-
-# Opções de SCP (usa as mesmas opções de SSH).
-scp_opts="-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-
-# ---------------------------------------------------------------------------
-# Parâmetros globais do experimento
-# (a maioria vem de variáveis de ambiente ou de defaults razoáveis)
-# ---------------------------------------------------------------------------
-
-# Porta do master (ordering/discovery)
-master_port="${MASTER_PORT:-9999}"
-
-# Tempo padrão de espera (ms) em várias operações
-default_wait_ms="${DEFAULT_WAIT_MS:-2000}"
-
-# ---------------------------------------------------------------------------
-# Caminhos *remotos*
-#
-# IMPORTANTE:
-#  - NÃO deixe usuário fixo (tipo /users/bruno).
-#  - Usamos, por padrão:
-#       remote_user  = DEPL_REMOTE_USER ou $USER
-#       remote_home  = DEPL_REMOTE_HOME ou $HOME ou /users/$remote_user
-# ---------------------------------------------------------------------------
-
-# Usuário remoto (pode ser sobrescrito na linha de comando ou via env)
-remote_user="${DEPL_REMOTE_USER:-$USER}"
-
-# Diretório home remoto:
-if [[ -n "${DEPL_REMOTE_HOME:-}" ]]; then
-  remote_home="${DEPL_REMOTE_HOME}"
-elif [[ -n "${HOME:-}" ]]; then
-  remote_home="${HOME}"
-else
-  # Fallback razoável para ambientes tipo Emulab.
-  remote_home="/users/${remote_user}"
-fi
-
-remote_work_dir="${remote_home}/iss"
-remote_status_file="${remote_work_dir}/status"
-remote_gopath="${remote_home}/go"
-remote_bin_dir="${remote_gopath}/bin"
-remote_exp_dir="${remote_work_dir}/current-deployment-data"
-remote_main_log="${remote_work_dir}/main.log"
-remote_ready_file="${remote_work_dir}/master-ready"
-remote_tls_directory="${remote_work_dir}/tls-data"
-
-# Arquivo usado por alguns scripts para registrar o mapeamento de instâncias
-remote_instance_info_file="${remote_exp_dir}/instance-info"
-remote_instance_detail_file="${remote_exp_dir}/instance-detail"
-
-# ---------------------------------------------------------------------------
-# Funções auxiliares
-# ---------------------------------------------------------------------------
-
-# Espera em milissegundos (wrapper de sleep)
-wait_ms() {
-  local ms="$1"
-  python3 - <<EOF
-import time
-time.sleep(${ms} / 1000.0)
-EOF
-}
-
-# Pequeno helper para converter "ms" em "s" inteiro quando necessário.
-ms_to_s() {
-  local ms="$1"
-  python3 - <<EOF
-import math
-ms = ${ms}
-print(int(math.ceil(ms / 1000.0)))
-EOF
-}
+# --------------------------------------------------------------------
+# Exit trap: kill all child processes of this script
+# --------------------------------------------------------------------
+trap_exit_command='{ jobs; for pid in $(jobs -p); do kill -9 "$pid" 2>/dev/null || true; done; }'
 

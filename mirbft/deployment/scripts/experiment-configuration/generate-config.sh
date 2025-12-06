@@ -30,6 +30,16 @@
 # tor05 dal13
 #
 
+# --------------------------------------------------------------------
+# Defaults to avoid 'unbound variable' when running with 'set -u'
+: "${dpl_filename:=deployment.dpl}"
+: "${csv_filename:=deployment.csv}"
+: "${exp_id_digits:=4}"
+# Some header-only variables that might be referenced later
+: "${clients8:=}"
+: "${duration:=30}"
+# --------------------------------------------------------------------
+
 # Deployment setup
 # NOTE: this section is not meaningful for the local deployment, but the scripts try to read those parameters so it has to be here.
 machineType="cloud-machine-templates/small-machine"
@@ -250,8 +260,6 @@ throughputsNoAuthSingleMultiPaxos[128]=""
 # 65566 + 8192 = 73728
 # 81920 + 8192 = 90112
 
-source scripts/global-vars.sh
-
 batchTimeout() {
     if [ $leaderPolicy = "Single" ]; then
         value=$((1000 / batchrate)) # Don't multiply by numPeers, as only one peer proposes.
@@ -354,9 +362,9 @@ generate() {
       fi
     fi
 
-    $(dplLines)
-    $(config)
-    $(csvLine)
+    dplLines
+    config
+    csvLine
 }
 
 function deployMachines() {
@@ -499,7 +507,7 @@ function generateCombinations() {
                                                   fi
                                                   for thr in $throughputs; do
                                                     if ! skip; then
-                                                      $(generate)
+                                                      generate
                                                       (( exp_id += 1 ))
                                                     fi
                                                   done
@@ -540,7 +548,7 @@ function generateCombinations() {
                                                 fi
                                                 for thr in $throughputs; do
                                                   if ! skip; then
-                                                    $(generate)
+                                                    generate
                                                     (( exp_id += 1 ))
                                                   fi
                                                 done
@@ -571,26 +579,16 @@ function generateCombinations() {
   done
 }
 
-# --------------------------------------------------------------------
-# Defaults para nomes de arquivos de saída
-# (evita "dpl_filename: unbound variable" e "csv_filename: unbound variable"
-#  quando o script é chamado sem esses nomes exportados).
-# --------------------------------------------------------------------
-: "${dpl_filename:=deployment.dpl}"
-: "${csv_filename:=deployment.csv}"
-
 # Obtain target directory and output file names
 if [ -n "$1" ]; then
   exp_data_dir=$1
   shift
 else
   exp_data_dir="generated-experiment-config"
-  mkdir -p "$exp_data_dir"
+  mkdir -p $exp_data_dir
 fi
-
 deployment_file="$exp_data_dir/$dpl_filename"
 csv_file="$exp_data_dir/$csv_filename"
-
 
 
 # Obtain the ID of the first experiment to generate, if any was given.
@@ -627,14 +625,11 @@ fi
   echo "# bucketsPerLeader: $bucketsPerLeader"
   echo "# batchsizes:       $batchsizes"
   echo "# auths:            $auths"
-  echo "# clients1:         $clients1"
+  echo "# clients8:         $clients8"
   echo "# clients16:        $clients16"
-  echo "# clients32:        $clients32"
-  echo "# durations:        $durations"
+  echo "# duration:         $duration"
   echo "# peerTag:          $peerTag"
   echo ""
-
-
 
   clientsStarted=0
   if [ -n "$clients1" ]; then

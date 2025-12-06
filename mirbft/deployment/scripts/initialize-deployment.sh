@@ -1,232 +1,200 @@
 #!/bin/bash
-# initialize-deployment.sh
-# --------------------------------------------------------------------
-# Script comum de inicialização para todos os tipos de deploy.
-# Deve ser SEMPRE usado via:  source scripts/initialize-deployment.sh "$@"
-# NUNCA chamado diretamente (./scripts/initialize-deployment.sh).
+
+# scripts/initialize-deployment.sh
 #
-# Consome os parâmetros vindos do deploy.sh:
-#   ./deploy.sh <depl_type> [instance-info] <existing|new> <config-generator.sh> [exp_id_offset]
-#
-# Onde:
-#   depl_type       : local | cloud | remote
-#   instance-info   : (apenas para remote) caminho do scripts/instance-info
-#   existing|new    : reutiliza dir existente OU gera experimento novo
-#   config-generator: script de geração (ex: scripts/experiment-configuration/generate-config.sh)
-#   exp_id_offset   : opcional, inteiro (default 0)
-#
-# Define (entre outras) as variáveis globais:
-#   depl_type
-#   exp_data_dir
-#   new_experiment
-#   exp_id_offset
-#   deployment_file
-#   deploy_schedule
-#   instance_info_file
-#   configuration_generator_script
-#   cancel_instances
-#
-# Requer que scripts/global-vars.sh já tenha sido source'ado antes.
+# Shared deployment initialization logic, reused by deploy.sh for local,
+# cloud, and remote deployments.
+
+# Load global variables shared by all deployment scripts.
+source scripts/global-vars.sh
+
+# Defaults for generated files
+: "${dpl_filename:=deployment.dpl}"
+: "${csv_filename:=deployment.csv}"
+: "${exp_id_digits:=4}"
+
+configuration_generator_script=""
+depl_type=""
+exp_data_dir=""
+new_experiment=false
+exp_id_offset=0
+deployment_file=""
+deploy_schedule=""
+instance_info_file=""
+cancel_instances=false
+
+# Helper: print usage and exit
+usage() {
+  >&2 echo "Usage: $0 <local|cloud|remote> [args ...]"
+  >&2 echo
+  >&2 echo "Examples:"
+  >&2 echo "  $0 local new scripts/experiment-configuration/generate-config.sh"
+  >&2 echo "  $0 cloud scripts/cloud-instance-info new scripts/experiment-configuration/generate-config.sh"
+  >&2 echo "  $0 remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh"
+  exit 1
+}
 
 # --------------------------------------------------------------------
-# 0) Flag opcional "-c" (cancel instances)
+# Parse first argument: deployment type
 # --------------------------------------------------------------------
-if [ "${1-}" = "-c" ]; then
-  cancel_instances=true
-  shift
-else
-  cancel_instances=false
-fi
-
-# --------------------------------------------------------------------
-# 1) Tipo de deploy
-# --------------------------------------------------------------------
-if [ $# -lt 1 ]; then
-  echo "initialize-deployment.sh: missing deployment type (local|cloud|remote)" >&2
-  return 1
+if [ -z "$1" ]; then
+  usage
 fi
 
 depl_type="$1"
 shift
 
 case "$depl_type" in
-  local|cloud)
+  local)
+    # Local deployment:
+    #   deploy.sh local new <config-generator>
+    new_experiment=true
+    if [ "$1" = "new" ]; then
+      shift
+      new_experiment=true
+    else
+      new_experiment=false
+    fi
+
+    if $new_experiment; then
+      exp_data_dir="deployment-data/local-0000"
+    else
+      if [ -z "$1" ]; then
+        >&2 echo "initialize-deployment.sh: local deployment requires existing experiment data dir or 'new'"
+        exit 1
+      fi
+      exp_data_dir="$1"
+      shift
+    fi
+
+    if [ -n "$1" ]; then
+      configuration_generator_script="$1"
+      shift
+    fi
+
     instance_info_file=""
+    cancel_instances=false
     ;;
-  remote)
-    if [ $# -lt 1 ]; then
-      echo "initialize-deployment.sh: remote deployment requires <instance-info> argument" >&2
-      return 1
+
+  cloud)
+    # Cloud deployment:
+    #   deploy.sh cloud <cloud-instance-info> new <config-generator>
+    if [ -z "$1" ]; then
+      >&2 echo "initialize-deployment.sh: cloud deployment requires cloud-instance-info file path"
+      exit 1
     fi
     instance_info_file="$1"
     shift
+
+    if [ "$1" = "new" ]; then
+      shift
+      new_experiment=true
+      exp_data_dir="deployment-data/cloud-0000"
+    else
+      new_experiment=false
+      if [ -z "$1" ]; then
+        >&2 echo "initialize-deployment.sh: cloud deployment requires existing experiment data dir or 'new'"
+        exit 1
+      fi
+      exp_data_dir="$1"
+      shift
+    fi
+
+    if [ -n "$1" ]; then
+      configuration_generator_script="$1"
+      shift
+    fi
+
+    cancel_instances=true
     ;;
+
+  remote)
+    # Remote (Emulab/cluster) deployment:
+    #   deploy.sh remote <instance-info> new <config-generator>
+    if [ -z "$1" ]; then
+      >&2 echo "initialize-deployment.sh: remote deployment requires instance-info file path"
+      exit 1
+    fi
+    instance_info_file="$1"
+    shift
+
+    if [ "$1" = "new" ]; then
+      shift
+      new_experiment=true
+      exp_data_dir="deployment-data/remote-0000"
+    else
+      new_experiment=false
+      if [ -z "$1" ]; then
+        >&2 echo "initialize-deployment.sh: remote deployment requires existing experiment data dir or 'new'"
+        exit 1
+      fi
+      exp_data_dir="$1"
+      shift
+    fi
+
+    if [ -n "$1" ]; then
+      configuration_generator_script="$1"
+      shift
+    fi
+
+    cancel_instances=false
+    ;;
+
   *)
-    echo "initialize-deployment.sh: unknown deployment type: $depl_type (allowed: local, cloud, remote)" >&2
-    return 1
+    >&2 echo "initialize-deployment.sh: unknown deployment type: $depl_type (allowed: local, cloud, remote)"
+    exit 1
     ;;
 esac
 
 # --------------------------------------------------------------------
-# 2) existing | new
+# Setup experiment directory
 # --------------------------------------------------------------------
-if [ $# -lt 1 ]; then
-  echo "initialize-deployment.sh: missing <existing|new> argument" >&2
-  return 1
-fi
-
-exp_mode="$1"
-shift
-
-# Garante defaults caso global-vars.sh não tenha sido carregado por algum motivo
-: "${deployment_data_root:=deployment-data}"
-: "${dpl_filename:=deployment.dpl}"
-: "${csv_filename:=deployment.csv}"
-: "${exp_id_digits:=4}"
-: "${local_master_command_template_file:=master-commands-template.cmd}"
-
-mkdir -p "$deployment_data_root"
-
-new_experiment=false
-configuration_generator_script=""
-exp_id_offset=0
-
-# --------------------------------------------------------------------
-# 3) Escolha / criação do diretório de experimento
-# --------------------------------------------------------------------
-if [ "$exp_mode" = "existing" ]; then
-  # Reutiliza um diretório existente (deve ser passado explicitamente)
-  if [ $# -lt 1 ]; then
-    echo "initialize-deployment.sh: existing deployment requires <exp_data_dir> argument" >&2
-    return 1
-  fi
-  exp_data_dir="$1"
-  shift
-  new_experiment=false
-
-elif [ "$exp_mode" = "new" ]; then
-  new_experiment=true
-
-  if [ $# -lt 1 ]; then
-    echo "initialize-deployment.sh: new deployment requires <config-generator.sh> argument" >&2
-    return 1
-  fi
-
-  configuration_generator_script="$1"
-  shift
-
-  if [ ! -x "$configuration_generator_script" ]; then
-    echo "initialize-deployment.sh: configuration generator not found or not executable: $configuration_generator_script" >&2
-    return 1
-  fi
-
-  if [ $# -ge 1 ]; then
-    exp_id_offset="$1"
-    shift
-  else
-    exp_id_offset=0
-  fi
-
-  # Cria diretório de experimento seguindo o padrão <depl_type>-NNNN
-  max_id=-1
-  for d in "$deployment_data_root"/"$depl_type"-[0-9][0-9][0-9][0-9]; do
-    [ -d "$d" ] || continue
-    base="${d##*/}"             # ex: remote-0003
-    num="${base#"$depl_type"-}" # ex: 0003
-    if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -gt "$max_id" ]; then
-      max_id="$num"
-    fi
-  done
-
-  next=$((max_id + 1))
-  printf -v exp_suffix "%0${exp_id_digits}d" "$next"
-  exp_data_dir="$deployment_data_root/$depl_type-$exp_suffix"
-
-  mkdir -p "$exp_data_dir" || return 1
-
-  echo "Using experiment data directory: $exp_data_dir"
-
-  # Gera deployment.dpl + configs
-  "$configuration_generator_script" "$exp_data_dir" "$exp_id_offset" || return 1
-
-  # Guarda cópia do script usado
-  cp "$configuration_generator_script" "$exp_data_dir" 2>/dev/null || true
-
+if $new_experiment; then
+  mkdir -p "$exp_data_dir"
 else
-  echo "initialize-deployment.sh: <existing|new> must be 'existing' or 'new'" >&2
-  return 1
+  if [ ! -d "$exp_data_dir" ]; then
+    >&2 echo "initialize-deployment.sh: experiment data directory '$exp_data_dir' does not exist"
+    exit 1
+  fi
 fi
 
-# Se for existing, loga o diretório para manter compatível com o que você já estava vendo
-if [ "$exp_mode" = "existing" ]; then
-  echo "Using experiment data directory: $exp_data_dir"
-fi
-
-# --------------------------------------------------------------------
-# 4) Arquivo de deployment (.dpl)
-# --------------------------------------------------------------------
 deployment_file="$exp_data_dir/$dpl_filename"
-echo "Using deployment file: $deployment_file"
+
+# If new experiment, clear old configs
+if $new_experiment; then
+  rm -f "$deployment_file" "$exp_data_dir/$csv_filename"
+  rm -rf "$exp_data_dir/config"
+fi
 
 # --------------------------------------------------------------------
-# 5) Geração de master-commands-template.cmd (LOG PESADO AQUI)
+# Determine exp_id_offset if old deployment file exists
 # --------------------------------------------------------------------
-deploy_schedule=""
-
-echo "initialize-deployment.sh: about to generate master commands:"
-echo "  depl_type                     = $depl_type"
-echo "  deployment_file (.dpl)        = $deployment_file"
-echo "  local_master_command_template = $local_master_command_template_file"
-echo "  output template path          = $exp_data_dir/$local_master_command_template_file"
-
-if [ -f "scripts/generate-master-commands.py" ]; then
-  echo "initialize-deployment.sh: calling: python3 scripts/generate-master-commands.py \\"
-  echo "  $depl_type \\"
-  echo "  $deployment_file \\"
-  echo "  $exp_data_dir/$local_master_command_template_file \\"
-  echo "  $exp_data_dir"
-
-  deploy_schedule=$(python3 scripts/generate-master-commands.py \
-      "$depl_type" \
-      "$deployment_file" \
-      "$exp_data_dir/$local_master_command_template_file" \
-      "$exp_data_dir")
-  status=$?
-
-  echo "initialize-deployment.sh: generate-master-commands.py exit code = $status"
-  echo "initialize-deployment.sh: deploy_schedule (raw) = '${deploy_schedule}'"
-
-  if [ $status -ne 0 ]; then
-    >&2 echo "initialize-deployment.sh: failed processing deployment file: $deployment_file"
-    return 2
+if [ -f "$deployment_file" ]; then
+  # Last "run" line in deployment file
+  last_line=$(grep '^run ' "$deployment_file" | tail -n 1)
+  if [ -n "$last_line" ]; then
+    # Format: run <id> ...
+    expID=$(echo "$last_line" | awk '{print $2}')
+    if [ -n "$expID" ]; then
+      exp_id_offset=$((expID + 1))
+    fi
   fi
 else
-  echo "initialize-deployment.sh: WARNING: scripts/generate-master-commands.py not found; skipping master command generation."
-fi
-
-# Para 'remote', o deploy_schedule em si não é usado, mas o arquivo
-# master-commands-template.cmd PRECISA existir para o deploy-remote.sh.
-if [ "$depl_type" = "remote" ]; then
-  if [ ! -f "$exp_data_dir/$local_master_command_template_file" ]; then
-    echo "initialize-deployment.sh: ERROR: expected '$exp_data_dir/$local_master_command_template_file' to exist, but it does not." >&2
-    echo "initialize-deployment.sh: ls -l '$exp_data_dir':"
-    ls -l "$exp_data_dir" 2>&1 || true
-    return 2
-  fi
-  # Garantimos que deploy_schedule fique definido, ainda que vazio.
-  deploy_schedule=""
+  exp_id_offset=0
 fi
 
 # --------------------------------------------------------------------
-# LOG FINAL
+# Export variables so deploy.sh and other scripts can use them
 # --------------------------------------------------------------------
-echo "initialize-deployment.sh: debug info:"
-echo "  depl_type          = ${depl_type:-<unset>}"
-echo "  exp_data_dir       = ${exp_data_dir:-<unset>}"
-echo "  new_experiment     = ${new_experiment:-<unset>}"
-echo "  exp_id_offset      = ${exp_id_offset:-<unset>}"
-echo "  deployment_file    = ${deployment_file:-<unset>}"
-echo "  instance_info_file = ${instance_info_file:-<unset>}"
-echo "  cancel_instances   = ${cancel_instances:-<unset>}"
-echo "  deploy_schedule    = ${deploy_schedule:-<unset>}"
+export configuration_generator_script
+export depl_type
+export exp_data_dir
+export new_experiment
+export exp_id_offset
+export deployment_file
+export instance_info_file
+export cancel_instances
+export dpl_filename
+export csv_filename
+export exp_id_digits
 
