@@ -4,6 +4,13 @@
 #
 # Deploy remoto usando instance-info, sem usuário hard-coded.
 
+# --------------------------------------------------------------------
+# Garantir defaults seguros para variáveis vindas da inicialização
+# (evita "unbound variable" com set -u).
+# --------------------------------------------------------------------
+: "${instance_info_file:=scripts/instance-info}"
+: "${instance_info_file_name:=$(basename "$instance_info_file")}"
+
 # 1) Descobre IP do master a partir do instance-info
 master_ip=$(awk '$4 == "master" {print $2}' "$instance_info_file")
 if [ -z "$master_ip" ]; then

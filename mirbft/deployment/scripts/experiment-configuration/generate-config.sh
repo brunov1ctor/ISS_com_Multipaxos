@@ -571,16 +571,26 @@ function generateCombinations() {
   done
 }
 
+# --------------------------------------------------------------------
+# Defaults para nomes de arquivos de saída
+# (evita "dpl_filename: unbound variable" e "csv_filename: unbound variable"
+#  quando o script é chamado sem esses nomes exportados).
+# --------------------------------------------------------------------
+: "${dpl_filename:=deployment.dpl}"
+: "${csv_filename:=deployment.csv}"
+
 # Obtain target directory and output file names
 if [ -n "$1" ]; then
   exp_data_dir=$1
   shift
 else
   exp_data_dir="generated-experiment-config"
-  mkdir -p $exp_data_dir
+  mkdir -p "$exp_data_dir"
 fi
+
 deployment_file="$exp_data_dir/$dpl_filename"
 csv_file="$exp_data_dir/$csv_filename"
+
 
 
 # Obtain the ID of the first experiment to generate, if any was given.
