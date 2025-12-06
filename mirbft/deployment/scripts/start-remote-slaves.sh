@@ -40,39 +40,30 @@ log_info "  remote_exp_dir = $remote_exp_dir"
 log_info
 
 ###############################################################################
-# 1) Distribui scripts e binários para TODOS os slaves
+# 1) Distribui scripts auxiliares e binários para TODOS os slaves
 ###############################################################################
 
 log_info "==== [start-remote-slaves] Distribuindo scripts/binários aos slaves ===="
 
 while read -r instance_id ctrl_ip data_ip role itag; do
+  # Só mexe em máquinas marcadas como "slave" (peers ou 1client).
   if [ "$role" != "slave" ]; then
     continue
   fi
 
-  # Esses slaves podem ser reutilizados para diferentes tags, então sempre
-  # garantimos ambiente neles.
   log_info "---------------------------------------------------------------------"
   log_info "  [REMOTO] Garantindo ambiente em $ctrl_ip"
   log_info "           instance_id = $instance_id"
   log_info "           tag         = $itag"
   log_info "---------------------------------------------------------------------"
 
-  # Garante diretórios básicos
+  # Garante diretórios básicos em TODOS os slaves
   ssh $ssh_options "${remote_user}@$ctrl_ip" "
     mkdir -p '$remote_work_dir' '$remote_exp_dir' '$remote_gopath/bin' '$remote_work_dir/scripts'
   " || {
     log_error "  [REMOTO] ERRO: não foi possível garantir diretórios em $ctrl_ip."
     continue
   }
-
-  # Copia o start-slave.sh para o diretório base de trabalho
-  scp $ssh_options \
-    scripts/start-slave.sh \
-    "${remote_user}@$ctrl_ip:$remote_work_dir/" || {
-      log_error "  [REMOTO] ERRO ao copiar start-slave.sh para $ctrl_ip."
-      continue
-    }
 
   # Copia scripts auxiliares para subdiretório scripts/
   scp $ssh_options \
@@ -102,7 +93,7 @@ log_info "==== [start-remote-slaves] Distribuição concluída. ===="
 log_info
 
 ###############################################################################
-# 2) Dispara os slaves da TAG pedida
+# 2) Dispara os slaves da TAG pedida (peers ou 1client)
 ###############################################################################
 
 log_info "==== [start-remote-slaves] Disparando slaves da tag '$tag' ===="
@@ -120,8 +111,24 @@ while read -r instance_id ctrl_ip data_ip role itag; do
 
   log_info "  [DEPLOY] Iniciando slave em ${ctrl_ip} (instance_id=${instance_id}, tag=${itag})"
 
-  # Chamada correta para start-slave.sh:
-  #   ./start-slave.sh <tag> <master_ip> <public_ip> <private_ip>
+  # Garante que o diretório de trabalho remoto exista (defensivo)
+  ssh $ssh_options "${remote_user}@${ctrl_ip}" "
+    mkdir -p '${remote_work_dir}'
+  " || {
+    log_error "  [DEPLOY] ERRO ao garantir remote_work_dir em ${ctrl_ip}."
+    continue
+  }
+
+  # Copia SEMPRE o start-slave.sh para o diretório base de trabalho daquele nó,
+  # garantindo que exista antes do chmod/exec (evita o erro 'No such file').
+  scp $ssh_options \
+    scripts/start-slave.sh \
+    "${remote_user}@${ctrl_ip}:${remote_work_dir}/" || {
+      log_error "  [DEPLOY] ERRO ao copiar start-slave.sh para ${ctrl_ip}."
+      continue
+    }
+
+  # Executa o start-slave.sh no nó remoto
   ssh $ssh_options "${remote_user}@${ctrl_ip}" "
     cd '${remote_work_dir}' &&
     chmod +x ./start-slave.sh &&
