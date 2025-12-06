@@ -2,8 +2,8 @@
 
 # --------------------------------------------------------------------
 # Bootstrap de permissões:
-# Garante que todos os scripts locais tenham permissão de execução,
-# incluindo scripts/stubborn-scp.sh, antes de qualquer uso.
+# Garante que todos os scripts locais tenham permissão de execução
+# (incluindo scripts/stubborn-scp.sh) antes de qualquer uso.
 # --------------------------------------------------------------------
 if [ -d "scripts" ]; then
   chmod +x scripts/*.sh 2>/dev/null || true
@@ -11,13 +11,14 @@ if [ -d "scripts" ]; then
 fi
 
 # Carrega variáveis globais compartilhadas pelos scripts de deployment.
+# (define trap_exit_command, csv_filename, etc.)
 source scripts/global-vars.sh
 
-# Kill all children of this script when exiting
+# Mata todos os filhos deste script ao sair (usa trap_exit_command do global-vars.sh).
 trap "$trap_exit_command" EXIT
 
-# The '-i' or '--init-only' flag makes the script exit after locally
-# initializing the deployment, without running it.
+# A flag '-i' ou '--init-only' faz o script sair após inicializar o deployment,
+# sem de fato executar nada nos nós.
 if [ "$1" = "-i" ] || [ "$1" = "--init-only" ]; then
   init_only=true
   shift
@@ -25,11 +26,9 @@ else
   init_only=false
 fi
 
-# Initializes the deployment.
-# This part of the script is separated, because it is reused by other
-# kinds of deployments.
-# It consumes multiple command line parameters and sets the following
-# variables:
+# Inicializa o deployment.
+# Este trecho é separado porque é reutilizado por outros tipos de deployment.
+# Ele consome vários parâmetros de linha de comando e define as variáveis:
 # - configuration_generator_script
 # - depl_type
 # - exp_data_dir
@@ -39,41 +38,16 @@ fi
 # - deploy_schedule
 # - instance_info_file
 # - cancel_instances
-# Some of them are used only internally some of them are used by this
-# including script.
 source scripts/initialize-deployment.sh
 
-# Exit if only initialization is required.
+# Se for apenas inicialização, sai aqui.
 if $init_only; then
   echo "Init only."
   echo "Experiment directory: $exp_data_dir"
   exit 0
 fi
 
-# --------------------------------------------------------------------
-# Executa o gerador de configuração, se informado
-# --------------------------------------------------------------------
-if [ -n "$configuration_generator_script" ]; then
-  echo "Using experiment data directory: $exp_data_dir"
-  "$configuration_generator_script" "$exp_data_dir" "$exp_id_offset"
-fi
-
-# --------------------------------------------------------------------
-# Gera o arquivo de comandos para o master (master-commands-template)
-# e preenche, gerando master-commands.cmd, além de determinar o
-# deploy_schedule, caso seja cloud.
-# --------------------------------------------------------------------
-if [ "$depl_type" = "remote" ] || [ "$depl_type" = "cloud" ] || [ "$depl_type" = "local" ]; then
-  echo "Using deployment file: $deployment_file"
-  source scripts/generate-master-commands-wrapper.sh
-else
-  >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
-  exit 1
-fi
-
-# --------------------------------------------------------------------
-# Inicia o deployment propriamente dito (local / cloud / remote).
-# --------------------------------------------------------------------
+# Inicia o deployment dependendo do tipo (local / cloud / remote)
 if [ "$depl_type" = "local" ]; then
   source scripts/deploy-local.sh
 elif [ "$depl_type" = "cloud" ]; then
@@ -81,13 +55,9 @@ elif [ "$depl_type" = "cloud" ]; then
 elif [ "$depl_type" = "remote" ]; then
   source scripts/deploy-remote.sh
 else
-  >&2 echo "$0: unknown deployment type after init: $depl_type (allowed values: local, cloud, remote)"
-  exit 1
+  >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
 fi
 
-# --------------------------------------------------------------------
-# Gera o resumo de resultados (CSV + summary)
-# --------------------------------------------------------------------
 echo "Generating result summary."
 scripts/analyze/summarize.sh \
   "$exp_data_dir/$csv_filename" \
