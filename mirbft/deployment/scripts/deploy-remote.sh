@@ -32,6 +32,9 @@ source scripts/global-vars.sh
 ###############################################################################
 
 # Variáveis usadas pelo template master-commands-template.cmd
+# Se remote_private_key_file não estiver definido, deixa vazio
+: "${remote_private_key_file:=}"
+
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
 export master_port
