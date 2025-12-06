@@ -31,10 +31,11 @@ source scripts/global-vars.sh
 # 3) Gera o arquivo final de comandos do master (master-commands.cmd)
 ###############################################################################
 
-# Variáveis usadas pelo template master-commands-template.cmd
-# Se remote_private_key_file não estiver definido, deixa vazio
-: "${remote_private_key_file:=}"
+# Valores padrão para variáveis que podem não vir de global-vars.sh
+: "${remote_private_key_file:=}"          # deixa vazio se não tiver chave específica
+: "${local_master_command_file:=master-commands.cmd}"
 
+# Variáveis usadas pelo template master-commands-template.cmd
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
 export master_port
