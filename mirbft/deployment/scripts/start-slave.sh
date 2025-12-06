@@ -1,63 +1,50 @@
 #!/bin/bash
 
+# scripts/start-slave.sh
+#
+# Inicializa um slave remoto (Emulab) e dispara o discoveryslave.
+# É chamado localmente pelo start-remote-slaves.sh.
+
+set -euo pipefail
+
 source scripts/global-vars.sh
 
-# Kill all children of this script when exiting
+# Mata filhos ao sair
 trap "$trap_exit_command" EXIT
 
-tag=$1
-master_ip=$2
-public_ip=$3
-private_ip=$4
+tag=$1        # tag do slave (peers, 1client, etc.)
+master_ip=$2  # IP de controle do master
+public_ip=$3  # IP de controle deste slave
+private_ip=$4 # IP de dados deste slave (10.10.1.X)
+
+###############################################################################
+# Comando de inicialização no slave
+###############################################################################
 
 init_command="
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
+  set -e
 
-  cd $remote_work_dir &&
-  rsync --progress -rptz -e \"ssh $ssh_options\" root@$master_ip:$remote_tls_directory . &&
-  cd tls-data &&
-  ./generate.sh $public_ip $private_ip &&
+  echo \"[slave-init] Iniciando init_command em $public_ip (tag=$tag)\"
 
-  cd $remote_work_dir &&
-  rsync --progress -rptz -e \"ssh $ssh_options\" root@$master_ip:$remote_gopath/bin/* $remote_gopath/bin/ &&
-  mkdir -p config &&
+  # GOPATH/GOBIN/PATH corretos para Go e scripts do ISS
+  export GOPATH=\"$remote_gopath\" &&
+  export GOBIN=\"\$GOPATH/bin\" &&
+  export PATH=\"\$GOBIN:/usr/local/go/bin:$remote_work_dir/bin:$remote_work_dir/scripts:$remote_work_dir/deployment/scripts:\$PATH\" &&
 
-  stubborn-scp.sh 5 $ssh_options $master_ip:$remote_code_dir/oldmir/oldmir-start.sh $remote_work_dir/bin &&
-  chmod u+x $remote_work_dir/bin/oldmir-start.sh"
+  echo \"[slave-init] GOPATH=\$GOPATH\"
+  echo \"[slave-init] GOBIN=\$GOBIN\"
+  echo \"[slave-init] PATH=\$PATH\"
 
-slave_command="
-  ulimit -Sn $open_files_limit &&
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
-  discoveryslave $tag $master_ip:$master_port $public_ip $private_ip"
+  # Garante árvore básica de diretórios
+  mkdir -p \
+    \"$remote_work_dir\" \
+    \"$remote_work_dir/bin\" \
+    \"$remote_work_dir/scripts\" \
+    \"$remote_work_dir/config\" \
+    \"$remote_work_dir/experiment-config\" \
+    \"$remote_work_dir/experiment-output\" &&
 
-echo "Setting up slave: $public_ip ($private_ip)"
+  cd \"$remote_work_dir\" &&
 
-# Periodically check slave status and wait until it is running.
-slave_status=$(scripts/remote-machine-status.sh $public_ip)
-echo "Slave status ($public_ip): $slave_status"
-while ! [[ "$slave_status" = "RUNNING" ]]; do
-  # Sleep a bit and obtain new status.
-  sleep $machine_status_poll_period
-  slave_status=$(scripts/remote-machine-status.sh $public_ip)
-  echo "Slave status: $slave_status"
-done
+  # Si
 
-# Wait until master server is ready.
-# This needs to happen before initialization of the slave, as the master needs to prepare files (e.g. code binaries)
-# That the slave downloads during initialization.
-echo "Waiting for master server."
-while ! ssh $ssh_options -q -o "ConnectTimeout=10" "root@$master_ip" "cat $remote_ready_file > /dev/null"; do
-  sleep $machine_status_poll_period
-  echo "Master not ready. Retrying in $machine_status_poll_period seconds."
-done
-
-# Initialize slave.
-# Retrying introduced because sometimes, when many instances of this script are run in parallel,
-# The ssh command fails with "connection reset by peer" or similar error.
-while ! ssh $ssh_options root@$public_ip "$init_command"; do
-  sleep 1
-  echo "Retrying to initialize slave."
-done
-
-echo "Master ready. Starting slave process."
-ssh $ssh_options root@$public_ip "$slave_command"
