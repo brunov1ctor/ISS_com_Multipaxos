@@ -1,86 +1,88 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
-###############################################################################
+#
 # start-slave.sh
 #
-# Uso (chamado pelo start-remote-slaves.sh):
-#   ./start-slave.sh <tag> <master_ip> <public_ip> <private_ip>
+# Script executado DENTRO da máquina remota (slave) para:
+#   - inicializar discoveryslave
+#   - aguardar o master ficar READY
+#   - (no modelo ISS) servir de endpoint para os comandos do master
 #
-# - tag        : "peers", "1client", etc.
-# - master_ip  : IP de controle do master (ex: 172.20.5.3)
-# - public_ip  : IP público/controle deste slave
-# - private_ip : IP de dados deste slave
-###############################################################################
 
-if [ "$#" -ne 4 ]; then
-  echo "Uso: $0 <tag> <master_ip> <public_ip> <private_ip>" >&2
-  exit 1
-fi
+set -euo pipefail
 
 tag="$1"
 master_ip="$2"
 public_ip="$3"
 private_ip="$4"
 
-# Diretório em que este script está
-this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+this_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+remote_work_dir="${this_dir}"
+remote_home="$(dirname "${this_dir}")"
 
-# Tenta localizar e carregar global-vars.sh
-if [ -f "${this_dir}/scripts/global-vars.sh" ]; then
-  # Caso remoto: this_dir = /users/$USER/iss
-  . "${this_dir}/scripts/global-vars.sh"
-elif [ -f "${this_dir}/global-vars.sh" ]; then
-  # Caso local: this_dir = .../deployment/scripts
-  . "${this_dir}/global-vars.sh"
-fi
+# Usuário remoto usado nos SSH de volta para o master.
+# Isso substitui o antigo 'root@...' e evita usuário fixo.
+remote_user="${DEPL_REMOTE_USER:-$USER}"
 
-# Valores padrão genéricos (sem usuário hardcoded)
-remote_home="${remote_home:-/users/${USER}}"
-remote_gopath="${remote_gopath:-${remote_home}/go}"
-remote_work_dir="${remote_work_dir:-${remote_home}/iss}"
-remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
-master_port="${master_port:-9999}"
+source "${this_dir}/global-vars.sh"
 
-# Diretório de trabalho do experimento no slave
-mkdir -p "${remote_work_dir}"
-cd "${remote_work_dir}"
+#
+# Logging básico do lado do slave
+#
+log_file="start-slave-${tag}.log"
 
-start_slave_log="${remote_work_dir}/start-slave-${tag}.log"
+echo "================================================================" >> "${log_file}"
+echo "[start-slave][${tag}] Host : $(hostname)" >> "${log_file}"
+echo "[start-slave][${tag}] User : ${remote_user}" >> "${log_file}"
+echo "[start-slave][${tag}] Data : $(date)" >> "${log_file}"
+echo "[start-slave][${tag}] Args : tag=${tag} master_ip=${master_ip} public_ip=${public_ip} private_ip=${private_ip}" >> "${log_file}"
+echo "[start-slave][${tag}] remote_home        = ${remote_home}" >> "${log_file}"
+echo "[start-slave][${tag}] remote_work_dir    = ${remote_work_dir}" >> "${log_file}"
+echo "[start-slave][${tag}] remote_status_file = ${remote_status_file}" >> "${log_file}"
+echo "[start-slave][${tag}] remote_gopath      = ${remote_gopath}" >> "${log_file}"
+echo "[start-slave][${tag}] master_port        = ${master_port}" >> "${log_file}"
+echo "================================================================" >> "${log_file}"
 
-# Status inicial
-echo "STARTING" > "${remote_status_file}"
+# ---------------------------------------------------------------------------
+# 1) Inicia o discoveryslave localmente
+# ---------------------------------------------------------------------------
 
-{
-  echo "================================================================"
-  echo "[start-slave][$tag] Host : $(hostname)"
-  echo "[start-slave][$tag] User : ${USER}"
-  echo "[start-slave][$tag] Data : $(date)"
-  echo "[start-slave][$tag] Args : tag=${tag} master_ip=${master_ip} public_ip=${public_ip} private_ip=${private_ip}"
-  echo "[start-slave][$tag] remote_home        = ${remote_home}"
-  echo "[start-slave][$tag] remote_work_dir    = ${remote_work_dir}"
-  echo "[start-slave][$tag] remote_status_file = ${remote_status_file}"
-  echo "[start-slave][$tag] remote_gopath      = ${remote_gopath}"
-  echo "[start-slave][$tag] master_port        = ${master_port}"
-  echo "================================================================"
-} >> "${start_slave_log}" 2>&1
+echo "[start-slave][${tag}] Iniciando discoveryslave..." >> "${log_file}"
 
-# Ajusta PATH para achar os binários (discoveryslave, orderingpeer, etc.)
 export GOPATH="${remote_gopath}"
-export PATH="${remote_gopath}/bin:${PATH}"
+export PATH="${remote_bin_dir}:${PATH}"
 
-echo "[start-slave][$tag] Iniciando discoveryslave..." >> "${start_slave_log}"
+discoveryslave \
+  -master "${master_ip}:${master_port}" \
+  -public "${public_ip}" \
+  -private "${private_ip}" \
+  >> "${remote_work_dir}/discoveryslave-${tag}.log" 2>&1 &
 
-# Lança discoveryslave em background e sai.
-# Assinatura: discoveryslave <tag> <master_ip:port> <public_ip> <private_ip>
-nohup discoveryslave "${tag}" "${master_ip}:${master_port}" "${public_ip}" "${private_ip}" \
-  >> "${start_slave_log}" 2>&1 &
+disc_pid=$!
 
-slave_pid=$!
-echo "[start-slave][$tag] discoveryslave iniciado (pid=${slave_pid})." >> "${start_slave_log}"
+echo "[start-slave][${tag}] discoveryslave iniciado (pid=${disc_pid})." >> "${log_file}"
 
-# Marca status como RUNNING e termina (ssh volta imediatamente para o start-remote-slaves.sh)
-echo "RUNNING" > "${remote_status_file}"
+# ---------------------------------------------------------------------------
+# 2) Espera o master criar o arquivo READY
+# ---------------------------------------------------------------------------
 
-exit 0
+echo "[start-slave][${tag}] Aguardando master criar READY file (${remote_ready_file})..." >> "${log_file}"
+
+while true; do
+  if ssh ${ssh_options} -q -o "ConnectTimeout=10" "${remote_user}@${master_ip}" "test -f '${remote_ready_file}'"; then
+    echo "[start-slave][${tag}] Master READY detectado." >> "${log_file}"
+    break
+  else
+    echo "Host key verification failed." >> "${log_file}" 2>/dev/null || true
+    echo "[start-slave][${tag}] Master ainda não READY, tentando novamente em 5s..." >> "${log_file}"
+    sleep 5
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# 3) Fim
+#    (O restante do controle é feito pelo master via discovery/exec-start)
+# ---------------------------------------------------------------------------
+
+echo "[start-slave][${tag}] Slave inicializado. Aguardando comandos do master..." >> "${log_file}"
 
