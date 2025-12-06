@@ -13,8 +13,9 @@ fi
 # Carrega variáveis globais compartilhadas pelos scripts de deployment.
 source scripts/global-vars.sh
 
-# Garante que trap_exit_command exista mesmo se não vier do ambiente
-trap_exit_command="${trap_exit_command:-:}"
+# Garante que trap_exit_command tenha um valor default mesmo se não
+# tiver sido definido em global-vars.sh (evita "unbound variable").
+: "${trap_exit_command:=:}"
 
 # Kill all children of this script when exiting
 trap "$trap_exit_command" EXIT
@@ -29,10 +30,9 @@ else
 fi
 
 # Initializes the deployment.
-# This part of the script is separated, because it is reused by other
-# kinds of deployments.
-# It consumes multiple command line parameters and sets the following
-# variables:
+# Esta parte do script é separada, porque é reutilizada por outros
+# tipos de deployment.
+# Ela consome múltiplos parâmetros de linha de comando e define:
 # - configuration_generator_script
 # - depl_type
 # - exp_data_dir
@@ -42,8 +42,6 @@ fi
 # - deploy_schedule
 # - instance_info_file
 # - cancel_instances
-# Some of them are used only internally some of them are used by this
-# including script.
 source scripts/initialize-deployment.sh
 
 # Exit if only initialization is required.
