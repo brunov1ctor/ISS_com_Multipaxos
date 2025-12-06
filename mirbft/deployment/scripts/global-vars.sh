@@ -1,145 +1,118 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-###############################################################################
-# ROOT / ARQUIVOS DOS EXPERIMENTOS
-###############################################################################
+#
+# Variáveis globais para os scripts de deployment/execução remota.
+# Este arquivo é "sourceado" por praticamente todos os scripts do diretório.
+#
 
-deployment_data_root=deployment-data
-dpl_filename=deployment.dpl
-csv_filename=deployment.csv
-result_summary_file=result-summary.csv
-exp_id_digits=4
+set -o nounset
+set -o pipefail
 
-analysis_query_params="-q queries/ethereum.sql -q queries/aggregates.sql -q queries/histograms.sql"
+# Diretório base deste script.
+this_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+deployment_dir="$( cd "${this_dir}/.." && pwd )"
+repo_dir="$( cd "${deployment_dir}/.." && pwd )"
 
-###############################################################################
-# SSH
-###############################################################################
-# Em Emulab não precisamos passar -i, usamos as chaves padrão do usuário Bruno.
-ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
+# ---------------------------------------------------------------------------
+# Configuração de logging
+# ---------------------------------------------------------------------------
 
-trap_exit_command='{ jobs; if [ -n "$(jobs -p)" ]; then kill $(jobs -p); fi; sleep 0.5; } > /dev/null 2>&1'
+log_ts() {
+  date +"%Y-%m-%d %H:%M:%S"
+}
 
-###############################################################################
-# MASTER
-###############################################################################
+log_info() {
+  echo "[INFO  ][$(log_ts)] $*"
+}
 
-master_machine=cloud-machine-templates/dedicated-machine-32-CPUs-32GB-RAM-fra02.cmt
-master_port=9999
-machine_status_poll_period=5
-open_files_limit=16384
+log_warn() {
+  echo "[WARN  ][$(log_ts)] $*" >&2
+}
 
-instance_ready_timeout=600
-instance_creation_batch=64
-instance_info_file_name=cloud-instance-info
-default_instance_info=last-cloud-instance-info
+log_error() {
+  echo "[ERROR ][$(log_ts)] $*" >&2
+}
 
-###############################################################################
-# LOCAL (node-0)
-###############################################################################
+# ---------------------------------------------------------------------------
+# Configuração SSH padrão
+# ---------------------------------------------------------------------------
 
-local_public_ip=127.0.0.1
-local_private_ip=127.0.0.1
-local_master_command_template_file=master-commands-template.cmd
-local_master_command_file=master-commands.cmd
-local_master_log=master-log.log
-local_master_status_file=master-status
-local_master_ready_file=master-ready
-local_result_fetching_log=result-fetching.log
+# Opções SSH “robustas” usadas em todos os scripts remotos.
+# - sem interação
+# - ignora verificação de host key (importante em ambientes de teste como Emulab)
+# - não grava known_hosts (evita conflito de chaves entre re-execuções)
+ssh_options="-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
-###############################################################################
-# REMOTO (Emulab)
-###############################################################################
+# Opções de SCP (usa as mesmas opções de SSH).
+scp_opts="-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
-# home remoto do usuário (vale para master e slaves)
-remote_home="/users/$USER"
+# ---------------------------------------------------------------------------
+# Parâmetros globais do experimento
+# (a maioria vem de variáveis de ambiente ou de defaults razoáveis)
+# ---------------------------------------------------------------------------
+
+# Porta do master (ordering/discovery)
+master_port="${MASTER_PORT:-9999}"
+
+# Tempo padrão de espera (ms) em várias operações
+default_wait_ms="${DEFAULT_WAIT_MS:-2000}"
+
+# ---------------------------------------------------------------------------
+# Caminhos *remotos*
+#
+# IMPORTANTE:
+#  - NÃO deixe usuário fixo (tipo /users/bruno).
+#  - Usamos, por padrão:
+#       remote_user  = DEPL_REMOTE_USER ou $USER
+#       remote_home  = DEPL_REMOTE_HOME ou $HOME ou /users/$remote_user
+# ---------------------------------------------------------------------------
+
+# Usuário remoto (pode ser sobrescrito na linha de comando ou via env)
+remote_user="${DEPL_REMOTE_USER:-$USER}"
+
+# Diretório home remoto:
+if [[ -n "${DEPL_REMOTE_HOME:-}" ]]; then
+  remote_home="${DEPL_REMOTE_HOME}"
+elif [[ -n "${HOME:-}" ]]; then
+  remote_home="${HOME}"
+else
+  # Fallback razoável para ambientes tipo Emulab.
+  remote_home="/users/${remote_user}"
+fi
 
 remote_work_dir="${remote_home}/iss"
-
-remote_instance_tag_file="$remote_work_dir/instance-tag"
-remote_status_file="$remote_work_dir/status"
-remote_ready_file="$remote_work_dir/master-ready"
-
-remote_main_log="$remote_work_dir/main_log.log"
-remote_master_log="$remote_work_dir/master-log.log"
-remote_slave_log="$remote_work_dir/slave-log.log"
-
-# Arquivo de chave privada usado remotamente (não precisamos de -i)
-remote_private_key_file=""
-
-remote_instance_detail_file="$remote_work_dir/instance-detail.json"
-remote_user_script_body="$remote_work_dir/user-script-body.sh"
-remote_user_script_uploaded="$remote_work_dir/user-script-uploaded"
-remote_master_command_file="$remote_work_dir/master-commands.cmd"
-remote_exp_dir="${remote_work_dir}/current-deployment-data"
-
-remote_analysis_processes=0
-
-###############################################################################
-# GOPATH / CÓDIGO REMOTO
-###############################################################################
-
+remote_status_file="${remote_work_dir}/status"
 remote_gopath="${remote_home}/go"
+remote_bin_dir="${remote_gopath}/bin"
+remote_exp_dir="${remote_work_dir}/current-deployment-data"
+remote_main_log="${remote_work_dir}/main.log"
+remote_ready_file="${remote_work_dir}/master-ready"
+remote_tls_directory="${remote_work_dir}/tls-data"
 
-# No Emulab, o código "oficial" fica em /tmp/ISS_com_Multipaxos/mirbft no master,
-# mas NÃO queremos que o deploy dê rm -rf nesse diretório.
-remote_code_dir="/tmp/ISS_com_Multipaxos/mirbft"
+# Arquivo usado por alguns scripts para registrar o mapeamento de instâncias
+remote_instance_info_file="${remote_exp_dir}/instance-info"
+remote_instance_detail_file="${remote_exp_dir}/instance-detail"
 
-remote_config_dir="$remote_work_dir/experiment-config"
-remote_tls_directory="$remote_code_dir/tls-data"
+# ---------------------------------------------------------------------------
+# Funções auxiliares
+# ---------------------------------------------------------------------------
 
-remote_log_archives="experiment-output-*.tar.gz"
-downloaded_code_dir="github.com/hyperledger-labs/mirbft/"
-downloaded_gopath="remote-gopath"
+# Espera em milissegundos (wrapper de sleep)
+wait_ms() {
+  local ms="$1"
+  python3 - <<EOF
+import time
+time.sleep(${ms} / 1000.0)
+EOF
+}
 
-# IMPORTANTE: NÃO incluir mais $remote_code_dir aqui,
-# para não apagar o repositório em /tmp/ISS_com_Multipaxos/mirbft no master.
-remote_delete_files="$remote_work_dir/experiment-output-*.tar.gz \
-  $remote_work_dir/experiment-output \
-  $remote_master_log $remote_slave_log \
-  $remote_status_file $remote_ready_file \
-  $remote_instance_tag_file $remote_master_command_file \
-  $remote_config_dir $remote_exp_dir"
-
-###############################################################################
-# OLDMIR (compatibilidade - não usado no Emulab, mas mantido)
-###############################################################################
-
-oldmir_git_repository=git@github.ibm.com:fabric-security-research/sbft.git
-oldmir_git_branch=mir
-oldmir_git_directory=sbft
-
-###############################################################################
-# ARQUIVOS PARA MASTER E SLAVES
-###############################################################################
-
-server_bootstrap_script=server-bootstrap-script.sh
-user_script_template_slave=user-script-slave.sh.template
-user_script_template_master=user-script-master.sh.template
-
-local_code_dir=".."
-local_code_files="
-$local_code_dir/announcer
-$local_code_dir/checkpoint
-$local_code_dir/cmd
-$local_code_dir/config
-$local_code_dir/crypto
-$local_code_dir/discovery
-$local_code_dir/log
-$local_code_dir/manager
-$local_code_dir/membership
-$local_code_dir/messenger
-$local_code_dir/oldmir
-$local_code_dir/orderer
-$local_code_dir/profiling
-$local_code_dir/request
-$local_code_dir/protobufs
-$local_code_dir/statetransfer
-$local_code_dir/tls-data
-$local_code_dir/tracing
-$local_code_dir/util
-$local_code_dir/validator
-$local_code_dir/multicast
-$local_code_dir/go.mod
-$local_code_dir/go.sum"
+# Pequeno helper para converter "ms" em "s" inteiro quando necessário.
+ms_to_s() {
+  local ms="$1"
+  python3 - <<EOF
+import math
+ms = ${ms}
+print(int(math.ceil(ms / 1000.0)))
+EOF
+}
 
