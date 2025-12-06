@@ -1,63 +1,61 @@
 #!/bin/bash
 
+set -euo pipefail
+
+# start-slave.sh
+#  - É chamado pelo start-remote-slaves.sh via SSH, já NO PRÓPRIO SLAVE.
+#  - Sobe o discoveryslave apontando para o master.
+#  - Garante que os diretórios de experimento existem.
+#
+# Uso:
+#   ./start-slave.sh <tag> <master_ip> <public_ip> <private_ip>
+
 source scripts/global-vars.sh
 
-# Kill all children of this script when exiting
-trap "$trap_exit_command" EXIT
+tag="$1"
+master_ip="$2"
+public_ip="$3"
+private_ip="$4"
 
-tag=$1
-master_ip=$2
-public_ip=$3
-private_ip=$4
+# Garante PATH corretinho no slave
+export PATH="$remote_gopath/bin:$remote_work_dir/bin:$PATH"
 
-init_command="
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
+echo "[start-slave][INFO ] hostname=$(hostname) tag=$tag master_ip=$master_ip public_ip=$public_ip private_ip=$private_ip"
 
-  cd $remote_work_dir &&
-  rsync --progress -rptz -e \"ssh $ssh_options\" root@$master_ip:$remote_tls_directory . &&
-  cd tls-data &&
-  ./generate.sh $public_ip $private_ip &&
+# Arquivo de status remoto (usado por outros scripts, se necessário)
+mkdir -p "$(dirname "$remote_status_file")"
+echo "RUNNING" > "$remote_status_file"
 
-  cd $remote_work_dir &&
-  rsync --progress -rptz -e \"ssh $ssh_options\" root@$master_ip:$remote_gopath/bin/* $remote_gopath/bin/ &&
-  mkdir -p config &&
+# Garante diretório de trabalho e futuro output
+mkdir -p "$remote_work_dir"
+cd "$remote_work_dir"
 
-  stubborn-scp.sh 5 $ssh_options $master_ip:$remote_code_dir/oldmir/oldmir-start.sh $remote_work_dir/bin &&
-  chmod u+x $remote_work_dir/bin/oldmir-start.sh"
+# Só por segurança, cria a raiz de experiment-output aqui.
+# Os subdiretórios experiment-output/0000/slave-__id__ serão criados
+# pelos comandos do master (generate-master-commands.py / discoveryslave).
+mkdir -p "$remote_work_dir/experiment-output"
 
-slave_command="
+echo "[start-slave][INFO ] Aguardando READY do master em $master_ip ($remote_ready_file)..."
+
+# Espera o master criar o arquivo master-ready
+while ! ssh $ssh_options -q -o "ConnectTimeout=10" "Bruno@${master_ip}" "test -f '$remote_ready_file'"; do
+  echo "[start-slave][INFO ] Master ainda não está READY. Aguardando $machine_status_poll_period segundos..."
+  sleep "$machine_status_poll_period"
+done
+
+echo "[start-slave][INFO ] Master READY detectado. Iniciando discoveryslave..."
+
+# Comando do slave: usa os parâmetros padrão do teu ambiente.
+slave_cmd="
   ulimit -Sn $open_files_limit &&
-  export PATH=\$PATH:$remote_gopath/bin:$remote_work_dir/bin &&
-  discoveryslave $tag $master_ip:$master_port $public_ip $private_ip"
+  cd '$remote_work_dir' &&
+  discoveryslave '$tag' '$master_ip:$master_port' '$public_ip' '$private_ip'
+"
 
-echo "Setting up slave: $public_ip ($private_ip)"
+echo "[start-slave][INFO ] Comando: $slave_cmd"
 
-# Periodically check slave status and wait until it is running.
-slave_status=$(scripts/remote-machine-status.sh $public_ip)
-echo "Slave status ($public_ip): $slave_status"
-while ! [[ "$slave_status" = "RUNNING" ]]; do
-  # Sleep a bit and obtain new status.
-  sleep $machine_status_poll_period
-  slave_status=$(scripts/remote-machine-status.sh $public_ip)
-  echo "Slave status: $slave_status"
-done
+# Roda em background no próprio slave, logando em um arquivo simples
+nohup bash -c "$slave_cmd" > \"$remote_work_dir/slave-$tag.log\" 2>&1 &
 
-# Wait until master server is ready.
-# This needs to happen before initialization of the slave, as the master needs to prepare files (e.g. code binaries)
-# That the slave downloads during initialization.
-echo "Waiting for master server."
-while ! ssh $ssh_options -q -o "ConnectTimeout=10" "root@$master_ip" "cat $remote_ready_file > /dev/null"; do
-  sleep $machine_status_poll_period
-  echo "Master not ready. Retrying in $machine_status_poll_period seconds."
-done
+echo "[start-slave][INFO ] discoveryslave para tag=$tag disparado em background."
 
-# Initialize slave.
-# Retrying introduced because sometimes, when many instances of this script are run in parallel,
-# The ssh command fails with "connection reset by peer" or similar error.
-while ! ssh $ssh_options root@$public_ip "$init_command"; do
-  sleep 1
-  echo "Retrying to initialize slave."
-done
-
-echo "Master ready. Starting slave process."
-ssh $ssh_options root@$public_ip "$slave_command"
