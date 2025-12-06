@@ -13,70 +13,119 @@
 #   local_result_fetching_log, master_port, instance_info_file (ou default).
 #
 
-set -euo pipefail
+set -e
 
-# Garante que o stubborn-scp.sh seja executável
-if [ ! -x scripts/stubborn-scp.sh ]; then
-  chmod +x scripts/stubborn-scp.sh || true
+source scripts/global-vars.sh
+
+if [ $# -lt 3 ]; then
+  echo "Uso: $0 <exp_data_dir> <deployment_file> <instance_info_file>"
+  exit 1
 fi
+
+exp_data_dir="$1"
+deployment_file="$2"
+instance_info_file="$3"
+
+echo "Using experiment data directory: $exp_data_dir"
+echo "Using deployment file: $deployment_file"
+
+# Garante diretório de dados do experimento
+mkdir -p "$exp_data_dir"
+
+# Arquivos locais gerados
+local_master_command_template_file="$exp_data_dir/master-commands-template.cmd"
+local_master_command_file="$exp_data_dir/master-commands.cmd"
+local_result_fetching_log="$exp_data_dir/result-fetching.log"
+
+###############################################################################
+# 1) Gerar master-commands-template a partir do .dpl
+###############################################################################
+
+echo "initialize-deployment.sh: about to generate master commands:"
+echo "  depl_type                     = remote"
+echo "  deployment_file (.dpl)        = $deployment_file"
+echo "  local_master_command_template = $local_master_command_template_file"
+echo "  output template path          = $local_master_command_template_file"
+
+python3 scripts/generate-master-commands.py \
+  remote \
+  "$deployment_file" \
+  "$local_master_command_template_file" \
+  "$exp_data_dir"
+
+rc=$?
+echo "initialize-deployment.sh: generate-master-commands.py exit code = $rc"
+if [ $rc -ne 0 ]; then
+  echo "ERRO: generate-master-commands.py falhou (rc=$rc)."
+  exit $rc
+fi
+
+###############################################################################
+# 2) Ler informações do master a partir do instance-info
+###############################################################################
+
+if [ ! -f "$instance_info_file" ]; then
+  echo "ERRO: instance_info_file não encontrado: $instance_info_file"
+  exit 1
+fi
+
+echo "initialize-deployment.sh: lendo master a partir de $instance_info_file"
+
+# Espera uma linha com role=master, ex:
+# host=node-0 ctrl_ip=172.20.4.4 data_ip=10.10.1.1 role=master tag=master
+master_ip=""
+master_data_ip=""
+
+while read -r line; do
+  # pula linhas em branco ou comentadas
+  [[ -z "$line" || "$line" =~ ^# ]] && continue
+
+  host=$(echo "$line" | sed 's/.*host=\([^ ]*\).*/\1/')
+  ctrl_ip=$(echo "$line" | sed 's/.*ctrl_ip=\([^ ]*\).*/\1/')
+  data_ip=$(echo "$line" | sed 's/.*data_ip=\([^ ]*\).*/\1/')
+  role=$(echo "$line" | sed 's/.*role=\([^ ]*\).*/\1/')
+
+  if [ "$role" = "master" ]; then
+    master_ip="$ctrl_ip"
+    master_data_ip="$data_ip"
+    break
+  fi
+done < "$instance_info_file"
+
+if [ -z "$master_ip" ]; then
+  echo "ERRO: não foi possível encontrar a entrada role=master em $instance_info_file"
+  exit 1
+fi
+
+echo "initialize-deployment.sh: master_ip   = $master_ip"
+echo "initialize-deployment.sh: master_data = $master_data_ip"
+
+###############################################################################
+# 3) Resetar estado nas máquinas remotas (master + slaves)
+###############################################################################
 
 echo "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
-###############################################################################
-# 1) Descobrir IPs das máquinas a partir de scripts/instance-info
-###############################################################################
+# Percorre todas as linhas de instance-info e roda o reset em cada ctrl_ip
+while read -r line; do
+  [[ -z "$line" || "$line" =~ ^# ]] && continue
 
-# Garante um default para o arquivo de instance-info se variável não estiver setada.
-instance_info_file="${instance_info_file:-scripts/instance-info}"
+  ctrl_ip=$(echo "$line" | sed 's/.*ctrl_ip=\([^ ]*\).*/\1/')
 
-if [ ! -f "$instance_info_file" ]; then
-  echo "ERROR: instance_info_file '$instance_info_file' não existe."
-  exit 1
-fi
+  ssh $ssh_options "Bruno@$ctrl_ip" "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}') 2>/dev/null || true" || true
 
-# Esperado em cada linha:
-# node-0  172.19.124.1  10.10.1.1  master master
-# node-1  172.19.124.2  10.10.1.2  slave  peers
-# ...
-
-# IP público do master (primeira linha com role 'master')
-master_ip=$(
-  awk '
-    NF >= 4 && $4 == "master" {
-      print $2
-      exit
-    }
-  ' "$instance_info_file"
-)
-
-if [ -z "$master_ip" ]; then
-  echo "ERROR: não foi possível encontrar uma linha com role master em $instance_info_file"
-  exit 1
-fi
-
-# Lista de TODOS os IPs (públicos) para reset (master + slaves)
-all_ips=$(awk 'NF >= 2 { print $2 }' "$instance_info_file")
-
-###############################################################################
-# 2) Matar analyze-continuously e afins em todas as máquinas
-###############################################################################
-
-for ip in $all_ips; do
-  ssh $ssh_options "Bruno@$ip" \
-    "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}') 2>/dev/null || true" \
-    || true
-done
+done < "$instance_info_file"
 
 echo
 echo "Killed continuous analysis scripts."
 echo
 
-###############################################################################
-# 3) Reset do estado de experimento em cada máquina (master + slaves)
-###############################################################################
+# Agora, para cada máquina (incluindo master), limpa estado de experimento anterior
+while read -r line; do
+  [[ -z "$line" || "$line" =~ ^# ]] && continue
+  ctrl_ip=$(echo "$line" | sed 's/.*ctrl_ip=\([^ ]*\).*/\1/')
 
-for ip in $all_ips; do
-  ssh $ssh_options "Bruno@$ip" "
+  ssh $ssh_options "Bruno@$ctrl_ip" "
     # Mata binários antigos e limpa dados do experimento anterior
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
     rm -rf $remote_delete_files
@@ -93,58 +142,50 @@ for ip in $all_ips; do
     # Mata sessões sshd antigas (notty), se existirem
     kill -9 \$(ps -ef | grep 'sshd: notty' | awk '{print \$2}') 2>/dev/null || true
   " || true
-done
+
+done < "$instance_info_file"
 
 echo
 echo " Reset machine state."
 echo
 
 ###############################################################################
-# 4) Garantir diretórios no MASTER e preparar master-commands.cmd
+# 4) Copiar master-commands e configs para o MASTER
 ###############################################################################
 
 echo "Ensuring remote directories on master ($master_ip)."
-
 ssh $ssh_options "Bruno@$master_ip" "
-  mkdir -p '$remote_work_dir' '$remote_exp_dir' '$remote_config_dir'
+  mkdir -p '$remote_work_dir'
+  mkdir -p '$remote_config_dir'
+  mkdir -p '$remote_exp_dir'
 " || true
 
 echo "Copying master commands and configs to master."
 
-# Caminhos locais dos arquivos de comandos do master dentro do exp_data_dir
-local_master_cmd_path="$exp_data_dir/$local_master_command_file"
-local_master_cmd_template="$exp_data_dir/$local_master_command_template_file"
+remote_master_command_file="$remote_work_dir/master-commands.cmd"
 
-# Se ainda não existe master-commands.cmd, tenta copiar do template
-if [ ! -f "$local_master_cmd_path" ]; then
-  if [ -f "$local_master_cmd_template" ]; then
-    echo "No pre-generated master command script, copying template."
-    cp "$local_master_cmd_template" "$local_master_cmd_path"
-    echo "Master command script written to $local_master_cmd_path."
-  else
-    echo "ERROR: nem '$local_master_cmd_path' nem '$local_master_cmd_template' existem."
-    exit 1
-  fi
+if [ -f "$local_master_command_file" ]; then
+  echo "Using pre-generated master command script: $local_master_command_file"
+else
+  echo "No pre-generated master command script, copying template."
+  cp "$local_master_command_template_file" "$local_master_command_file"
 fi
 
-# Usa o stubborn-scp.sh para enviar master-commands.cmd ao master
-scripts/stubborn-scp.sh 10 \
-  "$local_master_cmd_path" \
+echo "Master command script written to $local_master_command_file."
+
+# Copia master-commands.cmd
+scripts/stubborn-scp.sh \
+  "$local_master_command_file" \
   "Bruno@$master_ip:$remote_master_command_file"
 
-# Copiar diretório config/ (gerado pela generate-config.sh) para o master
-if [ -d "$exp_data_dir/config" ]; then
-  tar -C "$exp_data_dir/config" -cf - . \
-    | ssh $ssh_options "Bruno@$master_ip" "mkdir -p '$remote_config_dir' && tar -C '$remote_config_dir' -xf -"
-else
-  echo "WARNING: diretório '$exp_data_dir/config' não existe; seguindo mesmo assim."
-fi
+# Aqui também poderíamos copiar arquivos de config se necessário:
+#   scp $exp_data_dir/experiment-config/*.yml Bruno@$master_ip:$remote_config_dir/
 
 ###############################################################################
 # 5) Iniciar discoverymaster automaticamente no MASTER
 ###############################################################################
 # Aqui é o ponto crucial: fazemos o master ler master-commands.cmd e
-# coordenar as execuções nos slaves. Quando terminar, cria master-ready.
+# coordenar as execuções nos slaves.
 
 echo "Starting discoverymaster on master ($master_ip)."
 
@@ -157,7 +198,12 @@ ssh $ssh_options "Bruno@$master_ip" "
     exit 1
   fi
 
-  # Sobe discoverymaster em background, e quando terminar marca master-ready
+  # (Re)cria a flag de READY do master para os slaves
+  rm -f '$remote_ready_file'
+  echo 'READY' > '$remote_ready_file'
+  ls -l '$remote_ready_file' 2>/dev/null || echo 'WARNING: READY file not found after write' >&2
+
+  # Sobe discoverymaster em background
   nohup '$remote_gopath/bin/discoverymaster' \
     master \
     0.0.0.0:$master_port \
@@ -172,85 +218,50 @@ ssh $ssh_options "Bruno@$master_ip" "
 #
 # ssh ... "(
 #   cd '$remote_work_dir' || exit 1
-#   '$remote_gopath/bin/discoverymaster' master 0.0.0.0:$master_port master-commands.cmd
-#   echo DONE > '$remote_ready_file'
-# ) > '$remote_master_log' 2>&1 &"
+#   '$remote_gopath/bin/discoverymaster' master 0.0.0.0:$master_port 'master-commands.cmd' \
+#     > '$remote_master_log' 2>&1
+#   echo READY > '$remote_ready_file'
+# )" &
 #
-# Aqui mantemos a marcação via master-ready a cargo do pipeline original
-# (caso exista user-script-master), para ser o mínimo invasivo possível.
+# Mas, no teu pipeline, os slaves apenas precisam saber que o master
+# já subiu o discoverymaster, então marcamos READY imediatamente.
 
 ###############################################################################
-# 6) Result fetching (em background, como no ISS original)
+# 6) Disparar slaves remotos (1client + peers) usando start-remote-slaves.sh
 ###############################################################################
 
-local_result_fetch_log="$exp_data_dir/$local_result_fetching_log"
+# Extrai informações para cada tag a partir do arquivo de deployment,
+# por exemplo:
+#   -1 1 1client cloud-machine-templates/small-machine-fra05.cmt
+#   -1 4 peers   cloud-machine-templates/small-machine-fra05.cmt
 
-(
-  echo "Waiting for master server." > "$local_result_fetch_log"
+deploy_schedule=$(grep -v '^\s*#' "$deployment_file" | grep -v '^\s*$')
+echo "initialize-deployment.sh: deploy_schedule (raw) = '$deploy_schedule'"
 
-  # Espera até que o arquivo remote_ready_file exista no MASTER.
-  # Se nunca for criado, este loop continua tentando, mas não interrompe o deploy.
-  while true; do
-    if ssh $ssh_options "Bruno@$master_ip" "[ -f '$remote_ready_file' ]"; then
-      break
-    fi
-    echo "cat: $remote_ready_file: No such file or directory" >> "$local_result_fetch_log"
-    echo "Master not ready. Retrying in 5 seconds." >> "$local_result_fetch_log"
-    sleep 5
-  done
+num_clients=0
+num_peers=0
+client_tag=1client
+peer_tag=peers
 
-  # Quando master-ready aparecer, tentamos puxar o tar de experiment-output
-  scripts/stubborn-scp.sh 3 \
-    "Bruno@$master_ip:$remote_work_dir/experiment-output-0000.tar.gz" \
-    "$exp_data_dir/experiment-output-0000.tar.gz" \
-    || true
+while read -r line; do
+  [[ -z "$line" || "$line" =~ ^# ]] && continue
 
-  if [ -f "$exp_data_dir/experiment-output-0000.tar.gz" ]; then
-    mkdir -p "$exp_data_dir/experiment-output"
-    tar -C "$exp_data_dir/experiment-output" -xzf "$exp_data_dir/experiment-output-0000.tar.gz" || true
+  # coluna 2 = número de instâncias
+  n=$(echo "$line" | awk '{print $2}')
+  t=$(echo "$line" | awk '{print $3}')
+
+  if [ "$t" = "$client_tag" ]; then
+    num_clients="$n"
+  elif [ "$t" = "$peer_tag" ]; then
+    num_peers="$n"
   fi
+done <<< "$deploy_schedule"
 
-) &
+echo "  num_clients = $num_clients (tag=$client_tag)"
+echo "  num_peers   = $num_peers (tag=$peer_tag)"
 
-###############################################################################
-# 7) Disparar slaves (1client e peers)
-###############################################################################
-
-# Descobrimos quantos peers e clientes a partir do deployment.dpl
-
-if [ ! -f "$deployment_file" ]; then
-  echo "ERROR: deployment_file '$deployment_file' não encontrado."
-  exit 1
-fi
-
-num_clients=$(
-  awk '
-    $1 == "deploy" && $3 == "1client" {
-      print $2
-      exit
-    }
-  ' "$deployment_file"
-)
-
-[ -z "$num_clients" ] && num_clients=1
-
-num_peers=$(
-  awk '
-    $1 == "deploy" && $3 == "peers" {
-      print $2
-      exit
-    }
-  ' "$deployment_file"
-)
-
-[ -z "$num_peers" ] && num_peers=4
-
-peer_tag="peers"
-client_tag="1client"
-
-# Passamos todos os registros do instance-info para start-remote-slaves.sh
-#   instance_id public_ip private_ip role tag
-instance_args=$(awk 'NF >= 5 { print $1, $2, $3, $4, $5 }' "$instance_info_file")
+# start-remote-slaves.sh lê instance-info para descobrir ctrl_ip/data_ip
+instance_args="$instance_info_file"
 
 echo "Deploying slaves: $num_clients $client_tag"
 scripts/start-remote-slaves.sh \
