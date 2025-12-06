@@ -1,56 +1,106 @@
 # Obtain IP of the master node
-master_ip=$(cat $instance_info_file | awk '$4 == "master" {print $2}')
+master_ip=$(awk '$4 == "master" {print $2}' "$instance_info_file")
 if [ -z "$master_ip" ]; then
-  >&2 echo "remote-deploy.sh: could not obtain master ip from instance info file: $instance_info_file"
+  >&2 echo "deploy-remote.sh: could not obtain master ip from instance info file: $instance_info_file"
   exit 1
 fi
-cp $instance_info_file $exp_data_dir/$instance_info_file_name
+
+# Registra o instance-info dentro do diretório do experimento
+cp "$instance_info_file" "$exp_data_dir/$instance_info_file_name"
 echo "Using instance info file: $instance_info_file"
 echo "       Master IP address: $master_ip"
+echo
 
+# Carrega variáveis globais (remote_work_dir, remote_status_file, remote_delete_files, etc.).
+# initialize-deployment.sh já foi 'source'd pelo deploy.sh antes de chegar aqui.
+source scripts/global-vars.sh
 
-# Generate final master command file
-export ssh_key_file=$remote_private_key_file
-export own_public_ip=$master_ip
-export master_port
-export status_file=$remote_status_file
-envsubst '$ssh_key_file $own_public_ip $master_port $status_file' < "$exp_data_dir/$local_master_command_template_file" > "$exp_data_dir/$local_master_command_file"
-echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
+###############################################################################
+# 1) Limpeza dos nós remotos (sem usuário hard-coded)
+###############################################################################
 
-# Kill everything that is alive on the remote machines and prune old state
 echo "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
-for ip in $(cat $instance_info_file | awk '{print $2}'); do
-  # the grep -v \$\$ prevents the script from killing itself
-  ssh $ssh_options root@$ip "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}')" &
-  sleep 0.1 # Opening too many SSH connections at once makes some of them fail (keeping many open is OK, however).
+# 1a) Mata scripts de análise contínua antigos, se existirem
+for ip in $(awk '{print $2}' "$instance_info_file"); do
+  ssh $ssh_options "$ip" " \
+    pids=\$(ps -ef | grep 'analyze-continuously' | grep -v grep | awk '{print \$2}'); \
+    if [ -n \"\$pids\" ]; then kill -9 \$pids || true; fi \
+  " >/dev/null 2>&1 || true &
+  sleep 0.1
 done
 wait
 
-echo -e "\nKilled continuous analysis scripts.\n"
+echo
+echo "Killed continuous analysis scripts."
+echo
 
-for ip in $(cat $instance_info_file | awk '{print $2}'); do
-  ssh $ssh_options root@$ip "
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms
-    killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync
-    rm -rf $remote_delete_files
-    echo RUNNING > $remote_status_file
-    kill -9 \$(ps -ef | grep 'sshd: root@notty' | awk '{print \$2}')
-    echo -e '\n\n\nBERO\n\n\n'" &
-  sleep 0.1 # Opening too many SSH connections at once makes some of them fail (keeping many open is OK, however).
+# 1b) Limpa estado antigo (processos e arquivos) em todos os nós
+for ip in $(awk '{print $2}' "$instance_info_file"); do
+  ssh $ssh_options "$ip" " \
+    # Remove traffic shaping antigo (ignora erros).
+    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
+    # Mata processos de experimentos anteriores (ignora erros se não existirem).
+    killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
+    # Remove arquivos antigos relacionados ao experimento.
+    rm -rf $remote_delete_files 2>/dev/null || true; \
+    # Garante diretório do status e reseta para RUNNING.
+    mkdir -p \"$(dirname "$remote_status_file")\" 2>/dev/null || true; \
+    echo RUNNING > \"$remote_status_file\" 2>/dev/null || true \
+  " >/dev/null 2>&1 || true &
+  sleep 0.1
 done
 wait
 
-echo -e "\n Reset machine state.\n"
+echo
+echo " Reset machine state."
+echo
 
-# Start the master server.
-scripts/start-master.sh "$exp_data_dir" "$master_ip" &
+###############################################################################
+# 2) Export de variáveis usadas por generate-master-commands / templates
+###############################################################################
 
-# Start slaves according to schedule
-scripts/deploy-slaves-remote.sh "$exp_data_dir" "$instance_info_file" "$master_ip" $deploy_schedule &
+# Essas variáveis são consumidas indiretamente pelos comandos gerados
+# (master-commands.cmd) e/ou por scripts auxiliares.
+export ssh_key_file="$remote_private_key_file"
+export own_public_ip="$master_ip"
+export master_port
+export status_file="$remote_status_file"
+
+###############################################################################
+# 3) Dispara master (discoverymaster + orderingclient) no nó master
+###############################################################################
+
+echo "Starting master on $master_ip."
+scripts/start-master.sh "$exp_data_dir" "$master_ip"
+
+###############################################################################
+# 4) Dispara slaves remotos (peers e clients) de acordo com o instance-info
+###############################################################################
+
+# Conta quantos slaves com tag 'peers' e '1client' existem no instance-info.
+num_peers=$(awk '$4 == "slave" && $5 == "peers" {c++} END {print c+0}' "$instance_info_file")
+num_clients=$(awk '$4 == "slave" && $5 == "1client" {c++} END {print c+0}' "$instance_info_file")
+
+if [ "$num_peers" -gt 0 ]; then
+  echo "Starting $num_peers peer slaves."
+  scripts/start-remote-slaves.sh "$exp_data_dir" "peers" "$num_peers" "$master_ip" "$instance_info_file"
+fi
+
+if [ "$num_clients" -gt 0 ]; then
+  echo "Starting $num_clients client slaves (tag=1client)."
+  scripts/start-remote-slaves.sh "$exp_data_dir" "1client" "$num_clients" "$master_ip" "$instance_info_file"
+fi
+
+echo "All slaves started. waiting for them to finish."
+echo "Remote slave deployment finished."
+
+###############################################################################
+# 5) Inicia a coleta de resultados em background
+###############################################################################
 
 # Start result fetching in the background.
-scripts/fetch-results.sh $master_ip "$exp_data_dir" > $exp_data_dir/$local_result_fetching_log 2>&1 &
+scripts/fetch-results.sh "$master_ip" "$exp_data_dir" > "$exp_data_dir/$local_result_fetching_log" 2>&1 &
 
 echo "Waiting for deployment process and result fetching to finish."
 echo "For progress on experiment result fetching, see $exp_data_dir/$local_result_fetching_log."
@@ -62,3 +112,4 @@ if $cancel_instances; then
 else
   echo -e "Do not forget to cancel the used virtual servers using\n\n    scripts/cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name \n"
 fi
+
