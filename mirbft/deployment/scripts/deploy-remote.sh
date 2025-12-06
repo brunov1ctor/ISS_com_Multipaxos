@@ -1,7 +1,8 @@
 #!/bin/bash
-
+#
 # scripts/deploy-remote.sh
-# Deploy remoto usando Emulab (ou ambiente similar) sem usuário hard-coded.
+#
+# Deploy remoto usando instance-info, sem usuário hard-coded.
 
 # 1) Descobre IP do master a partir do instance-info
 master_ip=$(awk '$4 == "master" {print $2}' "$instance_info_file")
@@ -16,26 +17,33 @@ echo "Using instance info file: $instance_info_file"
 echo "       Master IP address: $master_ip"
 echo
 
-# 2) Carrega variáveis globais (remote_work_dir, remote_status_file, etc)
+# 2) Carrega variáveis globais (remote_work_dir, remote_status_file, etc.)
 source scripts/global-vars.sh
 
 ###############################################################################
 # 3) Gera o arquivo final de comandos do master (master-commands.cmd)
 ###############################################################################
 
-# Essas variáveis são usadas pelo template master-commands-template.cmd
+# Variáveis usadas pelo template master-commands-template.cmd
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
 export master_port
 export status_file="$remote_status_file"
 
-# Gera o script de comandos do master a partir do template
-envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
-  < "$local_master_command_template_file" \
-  > "$exp_data_dir/$local_master_command_file"
+# Caminhos do template e do arquivo final
+template_path="$exp_data_dir/master-commands-template.cmd"
+master_cmd_path="$exp_data_dir/$local_master_command_file"
 
-# No final do script, registra DONE no status_file remoto
-echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
+if [ ! -f "$template_path" ]; then
+  echo "WARNING: master command template not found at $template_path"
+else
+  envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
+    < "$template_path" \
+    > "$master_cmd_path"
+
+  # Garante que o status remoto será marcado como DONE no fim dos comandos
+  echo -e "\nwrite-file $status_file DONE" >> "$master_cmd_path"
+fi
 
 ###############################################################################
 # 4) Limpeza dos nós remotos (sem root@ nem usuário fixo)
@@ -45,7 +53,7 @@ echo "Killing everything that is alive and pruning state on the remote machines 
 echo
 
 # 4a) Mata scripts de análise contínua antigos, se existirem
-while read -r _ ctrl_ip _ _ _; do
+while read -r instance_id ctrl_ip data_ip role itag; do
   ssh $ssh_options "$ctrl_ip" " \
     pids=\$(ps -ef | grep 'analyze-continuously' | grep -v grep | awk '{print \$2}'); \
     if [ -n \"\$pids\" ]; then kill -9 \$pids || true; fi \
@@ -58,7 +66,7 @@ echo "Killed continuous analysis scripts."
 echo
 
 # 4b) Limpa estado antigo (processos e arquivos) em todos os nós
-while read -r _ ctrl_ip _ _ _; do
+while read -r instance_id ctrl_ip data_ip role itag; do
   ssh $ssh_options "$ctrl_ip" " \
     # Remove traffic shaping antigo (ignora erros).
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
