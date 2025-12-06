@@ -627,11 +627,14 @@ fi
   echo "# bucketsPerLeader: $bucketsPerLeader"
   echo "# batchsizes:       $batchsizes"
   echo "# auths:            $auths"
-  echo "# clients8:         $clients8"
+  # Não usamos clients8 neste setup; evita variável não definida com set -u
+  echo "# clients1:         $clients1"
   echo "# clients16:        $clients16"
+  echo "# clients32:        $clients32"
   echo "# duration:         $duration"
   echo "# peerTag:          $peerTag"
   echo ""
+
 
   clientsStarted=0
   if [ -n "$clients1" ]; then
