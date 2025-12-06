@@ -52,7 +52,7 @@ local_result_fetching_log=result-fetching.log
 ###############################################################################
 
 # home remoto do usuário (vale para master e slaves)
-remote_home="/users/Bruno"
+remote_home="/users/$USER"
 
 remote_work_dir="${remote_home}/iss"
 

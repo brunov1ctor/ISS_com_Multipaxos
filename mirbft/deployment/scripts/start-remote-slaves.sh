@@ -1,50 +1,139 @@
 #!/bin/bash
-
-# scripts/start-slave.sh
 #
-# Inicializa um slave remoto (Emulab) e dispara o discoveryslave.
-# É chamado localmente pelo start-remote-slaves.sh.
+# scripts/start-remote-slaves.sh
+#
+# Dispara slaves remotos de acordo com o deployment e instance-info.
+#
+# Uso:
+#   ./start-remote-slaves.sh <exp_data_dir> <tag> <num> <master_ip> <instance_info_file>
+#
 
-set -euo pipefail
+set -e
 
 source scripts/global-vars.sh
 
-# Mata filhos ao sair
-trap "$trap_exit_command" EXIT
+if [ $# -lt 5 ]; then
+  echo "Uso: $0 <exp_data_dir> <tag> <num> <master_ip> <instance_info_file>"
+  exit 1
+fi
 
-tag=$1        # tag do slave (peers, 1client, etc.)
-master_ip=$2  # IP de controle do master
-public_ip=$3  # IP de controle deste slave
-private_ip=$4 # IP de dados deste slave (10.10.1.X)
+exp_data_dir="$1"
+tag="$2"
+num="$3"
+master_ip="$4"
+instance_info_file="$5"
+remote_user="${REMOTE_SSH_USER:-$USER}"
+
+log_info()  { echo "[start-remote-slaves][INFO ] $*"; }
+log_error() { echo "[start-remote-slaves][ERROR] $*" >&2; }
+
+log_info "==== [start-remote-slaves] Diretórios detectados ====="
+log_info "  this_dir       = $(cd "$(dirname "$0")" && pwd)"
+log_info "  deployment_dir = $(pwd)"
+log_info "  repo_dir       = $(cd .. && pwd)"
+log_info "  remote_user    = $remote_user"
+log_info "  remote_gopath  = $remote_gopath"
+log_info "  remote_bin_dir = $remote_gopath/bin"
+log_info "  remote_work_dir= $remote_work_dir"
+log_info "  remote_exp_dir = $remote_exp_dir"
+log_info
 
 ###############################################################################
-# Comando de inicialização no slave
+# 1) Distribui scripts e binários para TODOS os slaves
 ###############################################################################
 
-init_command="
-  set -e
+log_info "==== [start-remote-slaves] Distribuindo scripts/binários aos slaves ===="
 
-  echo \"[slave-init] Iniciando init_command em $public_ip (tag=$tag)\"
+started=0
 
-  # GOPATH/GOBIN/PATH corretos para Go e scripts do ISS
-  export GOPATH=\"$remote_gopath\" &&
-  export GOBIN=\"\$GOPATH/bin\" &&
-  export PATH=\"\$GOBIN:/usr/local/go/bin:$remote_work_dir/bin:$remote_work_dir/scripts:$remote_work_dir/deployment/scripts:\$PATH\" &&
+while read -r instance_id ctrl_ip data_ip role itag; do
+  if [ "$role" != "slave" ]; then
+    continue
+  fi
 
-  echo \"[slave-init] GOPATH=\$GOPATH\"
-  echo \"[slave-init] GOBIN=\$GOBIN\"
-  echo \"[slave-init] PATH=\$PATH\"
+  if [ "$itag" != "$tag" ] && [ "$itag" != "peers" ] && [ "$itag" != "1client" ]; then
+    # Tag não bate nem é relevante, ignora.
+    continue
+  fi
 
-  # Garante árvore básica de diretórios
-  mkdir -p \
-    \"$remote_work_dir\" \
-    \"$remote_work_dir/bin\" \
-    \"$remote_work_dir/scripts\" \
-    \"$remote_work_dir/config\" \
-    \"$remote_work_dir/experiment-config\" \
-    \"$remote_work_dir/experiment-output\" &&
+  log_info "---------------------------------------------------------------------"
+  log_info "  [REMOTO] Garantindo ambiente em $ctrl_ip"
+  log_info "           instance_id = $instance_id"
+  log_info "           tag         = $itag"
+  log_info "---------------------------------------------------------------------"
 
-  cd \"$remote_work_dir\" &&
+  # Garante diretórios
+  ssh $ssh_options "${remote_user}@$ctrl_ip" "
+    mkdir -p '$remote_work_dir' '$remote_exp_dir' '$remote_gopath/bin' '$remote_work_dir/scripts'
+  " || {
+    log_error "  [REMOTO] ERRO: não foi possível garantir diretórios em $ctrl_ip."
+    continue
+  }
 
-  # Si
+  # Copia scripts necessários
+  scp $ssh_options \
+    scripts/start-slave.sh \
+    scripts/global-vars.sh \
+    scripts/remote-machine-status.sh \
+    scripts/stubborn-scp.sh \
+    "${remote_user}@$ctrl_ip:$remote_work_dir/scripts/" || {
+      log_error "  [REMOTO] ERRO ao copiar scripts para $ctrl_ip."
+      continue
+    }
+
+  # Copia binários (se quiser garantir binários idênticos em todos)
+  scp $ssh_options \
+    "$remote_gopath/bin/discoverymaster" \
+    "$remote_gopath/bin/discoveryslave" \
+    "$remote_gopath/bin/orderingpeer" \
+    "$remote_gopath/bin/orderingclient" \
+    "${remote_user}@$ctrl_ip:$remote_gopath/bin/" || {
+      log_error "  [REMOTO] ERRO ao copiar binários para $ctrl_ip."
+      continue
+    }
+
+  log_info "    [REMOTO] OK: ambiente garantido em $ctrl_ip."
+done < "$instance_info_file"
+
+log_info "==== [start-remote-slaves] Distribuição concluída. ===="
+log_info
+
+###############################################################################
+# 2) Dispara os slaves da TAG pedida
+###############################################################################
+
+log_info "==== [start-remote-slaves] Disparando slaves da tag '$tag' ===="
+
+started=0
+
+while read -r instance_id ctrl_ip data_ip role itag; do
+  if [ "$started" -ge "$num" ]; then
+    break
+  fi
+
+  if [ "$role" != "slave" ] || [ "$itag" != "$tag" ]; then
+    continue
+  fi
+
+  log_info "  [DEPLOY] Iniciando slave em ${ctrl_ip} (instance_id=${instance_id}, tag=${itag})"
+
+  # Chamada correta para start-slave.sh:
+  #   ./start-slave.sh <tag> <master_ip> <public_ip> <private_ip>
+  # Rodamos em background no slave via nohup, para o SSH não ficar preso.
+  ssh -o StrictHostKeyChecking=accept-new "${remote_user}@${ctrl_ip}" "
+    cd '${remote_work_dir}' &&
+    chmod +x ./start-slave.sh &&
+    nohup ./start-slave.sh '${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}' \
+      > '${remote_work_dir}/start-slave-${tag}.log' 2>&1 &
+  " || {
+    log_error "  [DEPLOY] ERRO ao disparar slave em ${ctrl_ip} (instance_id=${instance_id})."
+    continue
+  }
+
+  started=$((started+1))
+done < "$instance_info_file"
+
+log_info
+log_info "==== [start-remote-slaves] Todos os slaves disparados. ===="
+log_info "==== [start-remote-slaves] FIM ==========================================="
 
