@@ -19,14 +19,14 @@ else
 fi
 
 # --------------------------------------------------------------------
-# Suporte ao modo "new": gerar configs antes do initialize-deployment
-#
-# Uso esperado:
+# Suporte ao modo "new":
 #   ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
 #
-# Nesse caso:
-#   - Gera configs em deployment-data/remote-0000
-#   - Remove "new <script>" da linha de comando antes de chamar initialize-deployment.sh
+# Aqui:
+#   - Escolhemos um diretório do tipo deployment-data/remote-0000
+#   - Rodamos o generate-config.sh nesse diretório
+#   - Removemos "new <script>" dos argumentos antes de chamar initialize-deployment.sh,
+#     MAS mantendo o exp_data_dir como 3º argumento.
 # --------------------------------------------------------------------
 if [ "$1" = "remote" ] && [ "$3" = "new" ]; then
   depl_type="$1"
@@ -34,44 +34,49 @@ if [ "$1" = "remote" ] && [ "$3" = "new" ]; then
   new_flag="$3"
   config_gen_script="$4"
 
-  # Se por algum motivo não vier o script, usa um default
+  # Se o script não vier no 4º argumento, usa um default.
   if [ -z "$config_gen_script" ]; then
     config_gen_script="scripts/experiment-configuration/generate-config.sh"
   fi
 
-  # Diretório de experimento que o initialize-deployment.sh espera.
-  # Pelo erro anterior, sabemos que ele procura:
-  #   deployment-data/remote-0000/deployment.dpl
-  exp_data_dir="$deployment_data_root/remote-0000"
+  # Escolhe um diretório deployment-data/remote-XXXX ainda não usado.
+  exp_index=0
+  while :; do
+    candidate=$(printf "%s/remote-%04d" "$deployment_data_root" "$exp_index")
+    if [ ! -d "$candidate" ]; then
+      exp_data_dir="$candidate"
+      break
+    fi
+    exp_index=$((exp_index + 1))
+  done
 
   mkdir -p "$exp_data_dir"
 
   echo "Using experiment data directory: $exp_data_dir"
   # exp_id_offset = 0 (primeiro experimento)
   "$config_gen_script" "$exp_data_dir" 0
+  if [ $? -ne 0 ]; then
+    echo "ERROR: $config_gen_script falhou ao gerar configurações em $exp_data_dir"
+    exit 1
+  fi
 
-  # Depois de gerar as configs, removemos o "new <script>" da linha de comando,
-  # e deixamos apenas: remote scripts/instance-info
-  set -- "$depl_type" "$instance_info_file"
+  # *** AQUI ESTAVA O BUG ***
+  # Antes: set -- "$depl_type" "$instance_info_file"
+  # Agora: passamos também o exp_data_dir para o initialize-deployment.sh
+  set -- "$depl_type" "$instance_info_file" "$exp_data_dir"
 fi
 
 # --------------------------------------------------------------------
-# Inicializa o deployment (lê args, seta depl_type, exp_data_dir, etc.)
-# --------------------------------------------------------------------
-# Este script consome os parâmetros atuais de linha de comando e define:
-#  - configuration_generator_script
+# Inicializa o deployment (lê args e seta:
 #  - depl_type
 #  - exp_data_dir
-#  - new_experiment
-#  - exp_id_offset
-#  - deployment_file
-#  - deploy_schedule
-#  - instance_info_file
-#  - cancel_instances
+#  - deployment_file (deployment.dpl)
+#  - csv_filename, etc.)
+# --------------------------------------------------------------------
 source scripts/initialize-deployment.sh
 
 # --------------------------------------------------------------------
-# Se for só inicialização, sai aqui.
+# Se for só inicialização (-i), sai aqui.
 # --------------------------------------------------------------------
 if $init_only; then
   echo "Init only. Experiment directory: $exp_data_dir"
