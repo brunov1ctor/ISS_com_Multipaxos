@@ -4,8 +4,8 @@
 #
 # Versão para ambiente remoto (Emulab / instance-info / binários já instalados).
 #
-# Chamado pelo deploy.sh tipicamente como:
-#   scripts/start-remote-slaves.sh <exp_data_dir> <algum_numero> <tag> <instance_info_file>
+# Uso:
+#   scripts/start-remote-slaves.sh <exp_data_dir> <ignored_num> <tag> <instance_info_file>
 #   Ex.: scripts/start-remote-slaves.sh deployment-data/remote-0000 5 peers   scripts/instance-info
 #        scripts/start-remote-slaves.sh deployment-data/remote-0000 1 1client scripts/instance-info
 #
@@ -14,49 +14,69 @@
 #   - detecta a tag (peers, 1client, etc.)
 #   - detecta o arquivo instance-info
 #   - garante diretórios remotos e copia scripts/binários
-#   - dispara start-slave.sh em cada nó que tenha a tag desejada
+#   - dispara start-slave.sh em cada máquina com a tag desejada
 #
 
 set -euo pipefail
 
-source scripts/global-vars.sh
+# ---------------------------------------------------------------------------
+# 0) Parsing de argumentos
+# ---------------------------------------------------------------------------
 
-if [[ $# -lt 2 ]]; then
-  echo "Uso: $0 <exp_data_dir> <outros argumentos...>"
+if [[ $# -ne 4 ]]; then
+  echo "Uso: $0 <exp_data_dir> <ignored_num> <tag> <instance_info_file>" >&2
   exit 1
 fi
 
-############################################
-# Diretórios base
-############################################
+exp_data_dir_arg="$1"
+ignored_num="$2"      # mantido por compatibilidade, não é usado
+wanted_tag="$3"
+instance_info_arg="$4"
+
+# ---------------------------------------------------------------------------
+# 1) Diretórios locais básicos
+# ---------------------------------------------------------------------------
 
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-deployment_dir="$(cd "$this_dir/.." && pwd)"
-repo_dir="$(cd "$deployment_dir/.." && pwd)"
+deployment_dir="$(cd "${this_dir}/.." && pwd)"
+repo_dir="$(cd "${deployment_dir}/.." && pwd)"
 
-exp_data_dir_arg="$1"
-shift 1  # resto dos args: podem ser número, tag, instance-info etc.
+# Carrega variáveis globais se existir
+if [[ -f "${this_dir}/global-vars.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${this_dir}/global-vars.sh"
+fi
 
-############################################
-# Resolver exp_data_dir (sem exigir master-commands)
-############################################
+# Valores padrão para ambiente remoto (podem ser sobrescritos por global-vars.sh
+# ou por variáveis de ambiente).
+remote_user="${remote_user:-${DEPL_REMOTE_USER:-$USER}}"
+remote_gopath="${remote_gopath:-/users/${remote_user}/go}"
+remote_bin_dir="${remote_bin_dir:-${remote_gopath}/bin}"
+remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
+ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}"
+
+# ---------------------------------------------------------------------------
+# 2) Resolve exp_data_dir e instance-info
+# ---------------------------------------------------------------------------
 
 resolve_exp_dir_slaves() {
-  local arg="$1"
-  local cand_abs=""
-  local cand1=""
-  local cand2=""
+  local exp_arg="$1"
 
-  if [[ "$arg" = /* ]]; then
-    cand_abs="$arg"
-    if [[ -d "$cand_abs" ]]; then
-      echo "$cand_abs"
+  # Caminho absoluto?
+  if [[ "$exp_arg" = /* ]]; then
+    if [[ -d "$exp_arg" ]]; then
+      echo "$exp_arg"
       return 0
+    else
+      return 1
     fi
   fi
 
-  cand1="$deployment_dir/$arg"
-  cand2="$repo_dir/$arg"
+  # Relativo ao diretório deployment
+  local cand1="${deployment_dir}/${exp_arg}"
+  # Relativo ao repositório (deployment/<exp_arg>)
+  local cand2="${repo_dir}/${exp_arg}"
 
   if [[ -d "$cand1" ]]; then
     echo "$cand1"
@@ -70,195 +90,172 @@ resolve_exp_dir_slaves() {
   return 1
 }
 
-if ! exp_data_dir="$(resolve_exp_dir_slaves "$exp_data_dir_arg")"; then
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Diretório de experimento não encontrado para '$exp_data_dir_arg'."
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")]   Tentativas:"
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")]     - $deployment_dir/$exp_data_dir_arg"
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")]     - $repo_dir/$exp_data_dir_arg"
-  exit 1
-fi
+resolve_instance_info() {
+  local info_arg="$1"
 
-############################################
-# Detectar instance_info_file e wanted_tag
-############################################
-
-instance_info_file=""
-wanted_tag=""
-
-is_tag() {
-  case "$1" in
-    peers|1client|clients|client|peers+clients)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-for arg in "$@"; do
-  # Primeiro arquivo existente vira instance_info_file
-  if [[ -z "$instance_info_file" && -f "$arg" ]]; then
-    instance_info_file="$arg"
-    continue
-  fi
-
-  # Primeira tag conhecida vira wanted_tag
-  if [[ -z "$wanted_tag" ]] && is_tag "$arg"; then
-    wanted_tag="$arg"
-    continue
-  fi
-done
-
-if [[ -z "$instance_info_file" ]]; then
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Não foi possível detectar o arquivo instance-info entre os argumentos:"
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")]   exp_data_dir = $exp_data_dir_arg"
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")]   args        = $*"
-  exit 1
-fi
-
-if [[ -z "$wanted_tag" ]]; then
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Não foi possível detectar a tag (peers, 1client, etc.) entre os argumentos:"
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")]   exp_data_dir = $exp_data_dir_arg"
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")]   args        = $*"
-  exit 1
-fi
-
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Diretórios detectados ====="
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   this_dir           = $this_dir"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   deployment_dir     = $deployment_dir"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   repo_dir           = $repo_dir"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   exp_data_dir       = $exp_data_dir"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   instance_info_file = $instance_info_file"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   wanted_tag        = $wanted_tag"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_user        = $remote_user"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_gopath      = $remote_gopath"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_bin_dir     = $remote_bin_dir"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_work_dir    = $remote_work_dir"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_exp_dir     = $remote_exp_dir"
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] "
-
-if [[ ! -f "$instance_info_file" ]]; then
-  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Arquivo instance-info não encontrado: $instance_info_file"
-  exit 1
-fi
-
-# Número de tentativas do stubborn-scp (pode sobrescrever via env scp_retries)
-scp_retries="${scp_retries:-10}"
-
-# ===================================================================
-# 1) Distribui scripts e binários para os slaves da tag desejada
-# ===================================================================
-
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Distribuindo scripts/binários aos slaves ====""
-
-# Prepara diretório temporário de scripts a serem enviados
-tmp_scripts_dir="${exp_data_dir}/scripts-temp"
-rm -rf "$tmp_scripts_dir"
-mkdir -p "$tmp_scripts_dir"
-cp "$this_dir/start-slave.sh" "$tmp_scripts_dir/"
-cp "$this_dir/stubborn-scp.sh" "$tmp_scripts_dir/"
-cp "$this_dir/new-experiment-state.sh" "$tmp_scripts_dir/"
-
-process_instance_line() {
-  local line="$1"
-
-  # Ignora vazias e comentários
-  [[ -z "$line" ]] && return 0
-  [[ "$line" =~ ^[[:space:]]*# ]] && return 0
-
-  # Formato:
-  #   <tag> <ctrl_ip> <private_ip> <public_ip> <instance_id>
-  set -- $line
-  local tag="$1"
-  local ctrl_ip="$2"
-  local private_ip="$3"
-  local public_ip="$4"
-  local instance_id="$5"
-
-  # Só nos interessam as linhas da tag desejada
-  if [[ "$tag" != "$wanted_tag" ]]; then
+  # Absoluto?
+  if [[ "$info_arg" = /* && -f "$info_arg" ]]; then
+    echo "$info_arg"
     return 0
   fi
 
-  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ---------------------------------------------------------------------"
-  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   [REMOTO] Garantindo ambiente em $ctrl_ip"
-  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]            instance_id = $instance_id"
-  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]            tag         = $tag"
+  local cand1="${deployment_dir}/${info_arg}"
+  local cand2="${repo_dir}/${info_arg}"
 
-  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "
-    mkdir -p \
-      '$remote_work_dir' \
-      '$remote_exp_dir' \
-      '$remote_config_dir' \
-      '$remote_work_dir/scripts' \
-      '$remote_work_dir/logs' \
-      '$remote_work_dir/tls-data' \
-      '$remote_bin_dir'
-  " >/dev/null 2>&1 || true
+  if [[ -f "$cand1" ]]; then
+    echo "$cand1"
+    return 0
+  fi
+  if [[ -f "$cand2" ]]; then
+    echo "$cand2"
+    return 0
+  fi
 
-  # Copia scripts (incluindo stubborn-scp)
-  bash "$this_dir/stubborn-scp.sh" \
-    "$scp_retries" \
-    "$tmp_scripts_dir/" \
-    "${remote_user}@${ctrl_ip}:$remote_work_dir/scripts/"
+  # "Como está" (relativo ao CWD)
+  if [[ -f "$info_arg" ]]; then
+    echo "$info_arg"
+    return 0
+  fi
 
-  # Copia binários (orderingpeer, orderingclient, discovery*)
-  bash "$this_dir/stubborn-scp.sh" \
-    "$scp_retries" \
-    "$remote_bin_dir/" \
-    "${remote_user}@${ctrl_ip}:$remote_bin_dir/"
-
-  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]     [REMOTO] OK: ambiente garantido em $ctrl_ip."
+  return 1
 }
 
-while IFS= read -r line; do
-  process_instance_line "$line"
-done < "$instance_info_file"
+if ! exp_data_dir="$(resolve_exp_dir_slaves "$exp_data_dir_arg")"; then
+  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Diretório de experimento não encontrado para '$exp_data_dir_arg'." >&2
+  exit 1
+fi
 
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Distribuição concluída. ===="
+if ! instance_info_file="$(resolve_instance_info "$instance_info_arg")"; then
+  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Arquivo instance-info não encontrado para '$instance_info_arg'." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 3) Logs iniciais de contexto
+# ---------------------------------------------------------------------------
+
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Diretórios detectados ====="
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   this_dir           = ${this_dir}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   deployment_dir     = ${deployment_dir}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   repo_dir           = ${repo_dir}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   exp_data_dir       = ${exp_data_dir}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   instance_info_file = ${instance_info_file}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   wanted_tag        = ${wanted_tag}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_user        = ${remote_user}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_gopath      = ${remote_gopath}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_bin_dir     = ${remote_bin_dir}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_work_dir    = ${remote_work_dir}"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_exp_dir     = ${remote_exp_dir}"
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] "
 
-# ===================================================================
-# 2) Dispara os slaves da tag desejada
-# ===================================================================
+# ---------------------------------------------------------------------------
+# 4) Diretório temporário de scripts a serem enviados
+# ---------------------------------------------------------------------------
 
-echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Disparando slaves da tag '$wanted_tag' ===="
+tmp_scripts_dir="${exp_data_dir}/scripts-temp"
+rm -rf "${tmp_scripts_dir}"
+mkdir -p "${tmp_scripts_dir}"
+
+# Copiamos os scripts necessários para o lado remoto.
+cp "${this_dir}/start-slave.sh" "${tmp_scripts_dir}/"
+cp "${this_dir}/stubborn-scp.sh" "${tmp_scripts_dir}/" 2>/dev/null || true
+cp "${this_dir}/new-experiment-state.sh" "${tmp_scripts_dir}/" 2>/dev/null || true
+cp "${this_dir}/global-vars.sh" "${tmp_scripts_dir}/" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 5) Descobre master_ip (para repassar ao start-slave.sh)
+# ---------------------------------------------------------------------------
+
+master_ip=""
+
+while read -r iid ctrl_ip data_ip role tag; do
+  [[ -z "${iid}" ]] && continue
+  [[ "${iid}" =~ ^# ]] && continue
+
+  if [[ "${role}" == "master" || "${tag}" == "master" || "${iid}" == "master" ]]; then
+    master_ip="${ctrl_ip}"
+    break
+  fi
+done < "${instance_info_file}"
+
+if [[ -z "${master_ip}" ]]; then
+  echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Não foi possível determinar master_ip a partir de '${instance_info_file}'." >&2
+  exit 1
+fi
+
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] [start-remote-slaves] master_ip detectado = ${master_ip}"
+
+# ---------------------------------------------------------------------------
+# 6) Função para iniciar um slave para uma linha do instance-info
+# ---------------------------------------------------------------------------
+
+scp_retries="${SCP_RETRIES:-10}"
 
 start_instance_line() {
   local line="$1"
 
-  [[ -z "$line" ]] && return 0
-  [[ "$line" =~ ^[[:space:]]*# ]] && return 0
+  # Campos: instance_id ctrl_ip data_ip role tag
+  local instance_id ctrl_ip data_ip role tag
+  read -r instance_id ctrl_ip data_ip role tag <<< "$line"
 
-  set -- $line
-  local tag="$1"
-  local ctrl_ip="$2"
-  local private_ip="$3"
-  local public_ip="$4"
-  local instance_id="$5"
-
-  if [[ "$tag" != "$wanted_tag" ]]; then
+  # Ignora linhas vazias ou comentários
+  if [[ -z "${instance_id}" ]]; then
+    return 0
+  fi
+  if [[ "${instance_id}" =~ ^# ]]; then
     return 0
   fi
 
-  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   [DEPLOY] Iniciando slave em $ctrl_ip (instance_id=$instance_id, tag=$tag)"
+  # Filtra pela tag desejada
+  if [[ "${tag}" != "${wanted_tag}" ]]; then
+    return 0
+  fi
 
+  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] [start-remote-slaves] Iniciando slave '${instance_id}' (${tag}) em ${ctrl_ip}..."
+
+  # Garante diretórios básicos no remoto
+  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "mkdir -p '${remote_work_dir}/scripts' '${remote_work_dir}/logs' '${remote_exp_dir}' '${remote_bin_dir}'" || true
+
+  # Copia scripts auxiliares (start-slave, stubborn-scp, etc.)
+  bash "${this_dir}/stubborn-scp.sh" \
+    "${scp_retries}" \
+    "${tmp_scripts_dir}/" \
+    "${remote_user}@${ctrl_ip}:${remote_work_dir}/scripts/"
+
+  # Copia binários se existirem localmente
+  local local_bin_dir="${LOCAL_BIN_DIR:-${remote_bin_dir}}"
+  for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
+    if [[ -x "${local_bin_dir}/${bin}" ]]; then
+      bash "${this_dir}/stubborn-scp.sh" \
+        "${scp_retries}" \
+        "${local_bin_dir}/${bin}" \
+        "${remote_user}@${ctrl_ip}:${remote_bin_dir}/"
+    fi
+  done
+
+  # Recupera IP público/privado dessa linha
+  local public_ip="${ctrl_ip}"
+  local private_ip="${data_ip}"
+
+  # Dispara o start-slave.sh no host remoto em background
   ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "
-    nohup '$remote_work_dir/scripts/start-slave.sh' \
-      '$exp_data_dir' \
-      '$ctrl_ip' \
-      '$private_ip' \
-      '$public_ip' \
-      '$instance_id' \
-      '$tag' \
-      > '$remote_work_dir/logs/slave-${instance_id}.log' 2>&1 &
+    cd '${remote_work_dir}/scripts' && \
+    nohup ./start-slave.sh \
+      '${tag}' \
+      '${master_ip}' \
+      '${public_ip}' \
+      '${private_ip}' \
+      > '${remote_work_dir}/logs/slave-${instance_id}.log' 2>&1 &
   " >/dev/null 2>&1 || true
 }
 
+# ---------------------------------------------------------------------------
+# 7) Percorre o instance-info e inicia os slaves com a tag desejada
+# ---------------------------------------------------------------------------
+
 while IFS= read -r line; do
   start_instance_line "$line"
-done < "$instance_info_file"
+done < "${instance_info_file}"
 
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] "
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Todos os slaves disparados. ===="
