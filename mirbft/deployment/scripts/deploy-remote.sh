@@ -27,6 +27,9 @@
 
 set -euo pipefail
 
+this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+deployment_dir="$(cd "$this_dir/.." && pwd)"
+
 ############################################
 # Helper: resolve instance-info path
 ############################################
@@ -42,13 +45,8 @@ resolve_instance_info() {
   fi
 
   # Try relative to repo root and deployment dir
-  local this_dir
-  this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local deployment_dir
-  deployment_dir="$(cd "$this_dir/.." && pwd)"
   local repo_dir
   repo_dir="$(cd "$deployment_dir/.." && pwd)"
-
   local cand1="$repo_dir/$info_arg"
   local cand2="$deployment_dir/$info_arg"
 
@@ -251,9 +249,23 @@ echo
 echo "    scripts/cancel-cloud-instances.sh $exp_data_dir/cloud-instance-info"
 echo
 
-# Summarize results (this may be done by the master or locally)
+# --------------------------------------------------------------------
+# 8) Generate result summary (using analyze/summarize.sh)
+# --------------------------------------------------------------------
+
 echo "Generating result summary."
-scripts/summarize.sh "$exp_data_dir"
+
+params_file="$exp_data_dir/experiment-parameters.csv"
+root_dir="$exp_data_dir"
+summarize_script="$deployment_dir/scripts/analyze/summarize.sh"
+
+if [[ -f "$summarize_script" && -f "$params_file" ]]; then
+  "$summarize_script" "$params_file" "$root_dir" > "$exp_data_dir/result-summary.csv"
+  # Mostra o resumo no terminal, como acontecia antes
+  cat "$exp_data_dir/result-summary.csv"
+else
+  echo "WARNING: summarize script ($summarize_script) ou parâmetros ($params_file) não encontrados; pulando resumo."
+fi
 
 echo "Done. Experiment data directory: $exp_data_dir"
 
