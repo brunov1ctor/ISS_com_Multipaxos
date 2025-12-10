@@ -4,18 +4,38 @@
 #
 # Remote deployment using instance-info (e.g., Emulab/cluster).
 #
-# Fluxo:
-#   1) Descobre IP do master a partir do instance-info.
-#   2) Gera master-commands.{cmd,template} dentro de $exp_data_dir.
-#   3) Limpa execuções anteriores nos nós remotos.
-#   4) Sobe o master remoto.
-#   5) Dispara peers (tag=peers) e clients (tag=1client).
-#   6) Delega ao topo do deploy.sh a geração do resumo final.
+# This script is *sourced* by deploy.sh, which has already:
+#   - sourced scripts/global-vars.sh
+#   - run scripts/initialize-deployment.sh
+#
+# We assume the following variables are available:
+#   - exp_data_dir
+#   - instance_info_file
+#   - cancel_instances
+#   - remote_status_file
+#   - remote_work_dir, remote_delete_files, local_result_fetching_log, etc.
+#
+# High-level steps:
+#   [STEP 1] Determine master IP from instance-info.
+#   [STEP 2] Kill previous runs and prune state on all machines.
+#   [STEP 3] Generate master command script (master-commands.cmd).
+#   [STEP 4] Start master remotely (using start-master.sh).
+#   [STEP 5] Start peer and client slaves.
+#   [STEP 6] Hand control back; deploy.sh cuida do summarize final.
 
 set -euo pipefail
 
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 deployment_dir="$(cd "$this_dir/.." && pwd)"
+
+############################################
+# Normalizar ssh_options (sem chave fixa, sem spam)
+############################################
+
+# Forçamos um ssh_options padrão, sem -i hard-coded.
+# Quem quiser usar uma chave customizada pode sobrescrever ssh_options
+# antes de chamar deploy.sh, se realmente precisar disso.
+ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
 ############################################
 # Helper: resolve instance-info path
@@ -25,13 +45,13 @@ resolve_instance_info() {
   local base_dir="$1"   # e.g. $exp_data_dir
   local info_arg="$2"   # e.g. scripts/instance-info
 
-  # Caminho absoluto?
+  # Absolute path?
   if [[ "$info_arg" = /* ]] && [[ -f "$info_arg" ]]; then
     echo "$info_arg"
     return 0
   fi
 
-  # Tenta relativo ao repo root e ao deployment dir
+  # Try relative to repo root and deployment dir
   local repo_dir
   repo_dir="$(cd "$deployment_dir/.." && pwd)"
   local cand1="$repo_dir/$info_arg"
@@ -46,12 +66,13 @@ resolve_instance_info() {
     return 0
   fi
 
-  # Tenta como está (relativo ao CWD)
+  # Finally, try "as is" (relative to current dir):
   if [[ -f "$info_arg" ]]; then
     echo "$info_arg"
     return 0
   fi
 
+  # Could not resolve:
   return 1
 }
 
@@ -76,7 +97,7 @@ while read -r tag ctrl_ip data_ip role itag; do
   [[ -z "$tag" ]] && continue
   [[ "$tag" =~ ^[[:space:]]*# ]] && continue
 
-  # Heurística: linha que representa o master
+  # Heuristic: role "master" OR tag "-1" (for master) or tag "master"
   if [[ "$role" == "master" || "$tag" == "master" || "$tag" == "-1" ]]; then
     master_ip="$ctrl_ip"
     break
@@ -93,7 +114,56 @@ echo "[STEP 1] Master IP address: $master_ip"
 echo
 
 # --------------------------------------------------------------------
-# 2) Generate master-commands template and script
+# 2) Kill previous runs and prune state on all machines
+# --------------------------------------------------------------------
+
+echo "[STEP 2] Cleaning up previous experiment state on all nodes..."
+
+# 2a) Kill any tail/fetch scripts, kill discovery/ordering, remove traffic shaping
+while read -r instance_id ctrl_ip data_ip role itag; do
+  [[ -z "$instance_id" ]] && continue
+  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
+
+  echo "  - Cleanup (phase 1) on ${ctrl_ip} ..."
+  ssh $ssh_options "$ctrl_ip" " \
+    pkill -f 'tail -F' 2>/dev/null || true; \
+    pkill -f 'fetch-results.sh' 2>/dev/null || true; \
+    pkill -f 'start-slave.sh' 2>/dev/null || true; \
+    pkill -f discoverymaster 2>/dev/null || true; \
+    pkill -f discoveryslave 2>/dev/null || true; \
+    pkill -f orderingpeer 2>/dev/null || true; \
+    pkill -f orderingclient 2>/dev/null || true; \
+    pkill -f 'scp ' 2>/dev/null || true; \
+    pkill -f rsync 2>/dev/null || true; \
+    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
+  "
+done < "$instance_info_file"
+
+echo "  - Phase 1 cleanup done on all nodes."
+echo
+
+# 2b) Reset machine state (processes, files, bandwidth)
+while read -r instance_id ctrl_ip data_ip role itag; do
+  [[ -z "$instance_id" ]] && continue
+  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
+
+  echo "  - Cleanup (phase 2: state prune) on ${ctrl_ip} (${instance_id})..."
+  ssh $ssh_options "$ctrl_ip" " \
+    # Remove traffic shaping (ignore errors).
+    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
+    # Kill previous experiment processes (ignore if not running).
+    killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
+    # Remove old experiment-related files.
+    rm -rf $remote_delete_files 2>/dev/null || true; \
+  "
+done < "$instance_info_file"
+
+echo
+echo "[STEP 2] Remote machine state reset complete."
+echo
+
+# --------------------------------------------------------------------
+# 3) Pre-generate master command script
 # --------------------------------------------------------------------
 
 local_master_command_template="master-commands-template.cmd"
@@ -118,7 +188,7 @@ if [[ "$rc" -ne 0 ]]; then
   exit 1
 fi
 
-export ssh_key_file="$remote_private_key_file"
+export ssh_key_file="${remote_private_key_file:-}"
 export own_public_ip="$master_ip"
 export master_port
 export status_file="$remote_status_file"
@@ -139,59 +209,12 @@ echo "Master command script written to $local_cmd_path."
 echo
 
 # --------------------------------------------------------------------
-# 3) Kill previous runs and prune state on all machines
-# --------------------------------------------------------------------
-
-echo "[STEP 2] Cleaning up previous experiment state on all nodes..."
-
-# 3a) Mata tails, scripts de fetch e processos de ordenação / discovery
-while read -r instance_id ctrl_ip data_ip role itag; do
-  [[ -z "$instance_id" ]] && continue
-  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
-
-  echo "  - Cleanup (phase 1) on $ctrl_ip ..."
-  ssh $ssh_options "$ctrl_ip" " \
-    pkill -f 'tail -F' 2>/dev/null || true; \
-    pkill -f 'fetch-results.sh' 2>/dev/null || true; \
-    pkill -f 'start-slave.sh' 2>/dev/null || true; \
-    pkill -f discoverymaster 2>/dev/null || true; \
-    pkill -f discoveryslave 2>/dev/null || true; \
-    pkill -f orderingpeer 2>/dev/null || true; \
-    pkill -f orderingclient 2>/dev/null || true; \
-    pkill -f 'scp ' 2>/dev/null || true; \
-    pkill -f rsync 2>/dev/null || true; \
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-  "
-done < "$instance_info_file"
-
-echo "Killed continuous analysis scripts."
-echo
-
-# 3b) Remove traffic shaping + arquivos de experimento anterior
-while read -r instance_id ctrl_ip data_ip role itag; do
-  [[ -z "$instance_id" ]] && continue
-  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
-
-  echo "  - Cleanup (phase 2) on $ctrl_ip ..."
-  ssh $ssh_options "$ctrl_ip" " \
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-    killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
-    rm -rf $remote_delete_files 2>/dev/null || true; \
-  "
-done < "$instance_info_file"
-
-echo
-echo "[STEP 2] Reset machine state: OK."
-echo
-
-# --------------------------------------------------------------------
 # 4) Start master
 # --------------------------------------------------------------------
 
 echo "[STEP 3] Starting master on $master_ip."
 scripts/start-master.sh "$exp_data_dir" "$master_ip"
-
-echo "[STEP 3] Master start script finished."
+echo "[STEP 3] Master start sequence finished."
 echo
 
 # --------------------------------------------------------------------
@@ -211,7 +234,7 @@ echo "Remote slave deployment finished."
 echo
 
 # --------------------------------------------------------------------
-# 6) Wait for result fetching (feito por outro script) e finalizar
+# 6) Final message (deploy.sh cuidará do summarize)
 # --------------------------------------------------------------------
 
 echo "[STEP 5] Waiting for deployment process and result fetching to finish."
@@ -220,6 +243,5 @@ echo "Do not forget to cancel the used virtual servers using"
 echo
 echo "    scripts/cancel-cloud-instances.sh $exp_data_dir/cloud-instance-info"
 echo
-
 echo "Done. Experiment data directory: $exp_data_dir"
 
