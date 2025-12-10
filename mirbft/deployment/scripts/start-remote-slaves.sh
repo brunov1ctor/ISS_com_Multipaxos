@@ -14,13 +14,27 @@
 #   - detecta a tag (peers, 1client, etc.)
 #   - detecta o arquivo instance-info
 #   - garante diretórios remotos e copia scripts/binários
-#   - dispara start-slave.sh em cada máquina com a tag desejada
+#   - dispara start-slave.sh em cada máquina com a tag desejada.
 #
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# 0) Parsing de argumentos
+# 0) Normalizar opções de SSH (silenciar warnings)
+# ---------------------------------------------------------------------------
+
+ssh_options_default="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+ssh_options="${ssh_options:-$ssh_options_default}"
+
+if [[ -n "${remote_private_key_file:-}" && ! -f "$remote_private_key_file" ]]; then
+  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] remote_private_key_file '$remote_private_key_file' não existe; ignorando chave explícita." >&2
+  ssh_options="$(echo "$ssh_options" | sed "s|-i[[:space:]]\+$remote_private_key_file||g")"
+fi
+
+ssh_options="$ssh_options -o LogLevel=ERROR"
+
+# ---------------------------------------------------------------------------
+# 1) Parsing de argumentos
 # ---------------------------------------------------------------------------
 
 if [[ $# -ne 4 ]]; then
@@ -34,7 +48,7 @@ wanted_tag="$3"
 instance_info_arg="$4"
 
 # ---------------------------------------------------------------------------
-# 1) Diretórios locais básicos
+# 2) Diretórios locais básicos
 # ---------------------------------------------------------------------------
 
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,10 +68,9 @@ remote_gopath="${remote_gopath:-/users/${remote_user}/go}"
 remote_bin_dir="${remote_bin_dir:-${remote_gopath}/bin}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
-ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}"
 
 # ---------------------------------------------------------------------------
-# 2) Resolve exp_data_dir e instance-info
+# 3) Resolve exp_data_dir e instance-info
 # ---------------------------------------------------------------------------
 
 resolve_exp_dir_slaves() {
@@ -131,7 +144,7 @@ if ! instance_info_file="$(resolve_instance_info "$instance_info_arg")"; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3) Logs iniciais de contexto
+# 4) Logs iniciais de contexto
 # ---------------------------------------------------------------------------
 
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Diretórios detectados ====="
@@ -149,7 +162,7 @@ echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_exp_dir     = ${remote_exp
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] "
 
 # ---------------------------------------------------------------------------
-# 4) Diretório temporário de scripts a serem enviados
+# 5) Diretório temporário de scripts a serem enviados
 # ---------------------------------------------------------------------------
 
 tmp_scripts_dir="${exp_data_dir}/scripts-temp"
@@ -163,7 +176,7 @@ cp "${this_dir}/new-experiment-state.sh" "${tmp_scripts_dir}/" 2>/dev/null || tr
 cp "${this_dir}/global-vars.sh" "${tmp_scripts_dir}/" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 5) Descobre master_ip (para repassar ao start-slave.sh)
+# 6) Descobre master_ip (para repassar ao start-slave.sh)
 # ---------------------------------------------------------------------------
 
 master_ip=""
@@ -186,7 +199,7 @@ fi
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] [start-remote-slaves] master_ip detectado = ${master_ip}"
 
 # ---------------------------------------------------------------------------
-# 6) Função para iniciar um slave para uma linha do instance-info
+# 7) Função para iniciar um slave para uma linha do instance-info
 # ---------------------------------------------------------------------------
 
 scp_retries="${SCP_RETRIES:-10}"
@@ -250,7 +263,7 @@ start_instance_line() {
 }
 
 # ---------------------------------------------------------------------------
-# 7) Percorre o instance-info e inicia os slaves com a tag desejada
+# 8) Percorre o instance-info e inicia os slaves com a tag desejada
 # ---------------------------------------------------------------------------
 
 while IFS= read -r line; do
