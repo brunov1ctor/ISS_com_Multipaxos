@@ -12,8 +12,8 @@
 #   - exp_data_dir
 #   - instance_info_file
 #   - cancel_instances
-#   - remote_status_file
-#   - remote_work_dir, remote_delete_files, local_result_fetching_log, etc.
+#   - remote_private_key_file, remote_status_file, ssh_options,
+#     remote_work_dir, remote_delete_files, local_result_fetching_log, etc.
 #
 # High-level steps:
 #   [STEP 1] Determine master IP from instance-info.
@@ -29,13 +29,14 @@ this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 deployment_dir="$(cd "$this_dir/.." && pwd)"
 
 ############################################
-# Normalizar ssh_options (sem chave fixa, sem spam)
+# Ajustar ssh_options sem quebrar global-vars
 ############################################
 
-# Forçamos um ssh_options padrão, sem -i hard-coded.
-# Quem quiser usar uma chave customizada pode sobrescrever ssh_options
-# antes de chamar deploy.sh, se realmente precisar disso.
-ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+# Se global-vars.sh tiver definido ssh_options, usamos e só acrescentamos
+# opções para evitar bloqueios interativos.
+ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}"
+# Garante que não haja prompt de senha/host (se falhar, falha direto)
+ssh_options="$ssh_options -o BatchMode=yes -o ConnectTimeout=10"
 
 ############################################
 # Helper: resolve instance-info path
@@ -93,12 +94,12 @@ if ! instance_info_file="$(resolve_instance_info "$exp_data_dir" "$instance_info
 fi
 
 master_ip=""
-while read -r tag ctrl_ip data_ip role itag; do
-  [[ -z "$tag" ]] && continue
-  [[ "$tag" =~ ^[[:space:]]*# ]] && continue
+# instance-info: instance_id ctrl_ip data_ip role tag
+while read -r instance_id ctrl_ip data_ip role tag; do
+  [[ -z "$instance_id" ]] && continue
+  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
-  # Heuristic: role "master" OR tag "-1" (for master) or tag "master"
-  if [[ "$role" == "master" || "$tag" == "master" || "$tag" == "-1" ]]; then
+  if [[ "$role" == "master" || "$tag" == "master" ]]; then
     master_ip="$ctrl_ip"
     break
   fi
@@ -119,31 +120,23 @@ echo
 
 echo "[STEP 2] Cleaning up previous experiment state on all nodes..."
 
-# 2a) Kill any tail/fetch scripts, kill discovery/ordering, remove traffic shaping
-while read -r instance_id ctrl_ip data_ip role itag; do
+# 2a) Fase 1: matar analisadores contínuos / scripts antigos (se existirem)
+while read -r instance_id ctrl_ip data_ip role tag; do
   [[ -z "$instance_id" ]] && continue
   [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
-  echo "  - Cleanup (phase 1) on ${ctrl_ip} ..."
+  echo "  - Cleanup (phase 1) on ${ctrl_ip} (${instance_id})..."
   ssh $ssh_options "$ctrl_ip" " \
-    pkill -f 'tail -F' 2>/dev/null || true; \
-    pkill -f 'fetch-results.sh' 2>/dev/null || true; \
-    pkill -f 'start-slave.sh' 2>/dev/null || true; \
-    pkill -f discoverymaster 2>/dev/null || true; \
-    pkill -f discoveryslave 2>/dev/null || true; \
-    pkill -f orderingpeer 2>/dev/null || true; \
-    pkill -f orderingclient 2>/dev/null || true; \
-    pkill -f 'scp ' 2>/dev/null || true; \
-    pkill -f rsync 2>/dev/null || true; \
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-  "
+    pids=\$(ps -ef | grep 'analyze-continuously' | grep -v grep | awk '{print \$2}'); \
+    if [ -n \"\$pids\" ]; then kill -9 \$pids || true; fi \
+  " >/dev/null 2>&1 || true
 done < "$instance_info_file"
 
 echo "  - Phase 1 cleanup done on all nodes."
 echo
 
-# 2b) Reset machine state (processes, files, bandwidth)
-while read -r instance_id ctrl_ip data_ip role itag; do
+# 2b) Fase 2: reset de estado de experimento (processos, arquivos, shaping)
+while read -r instance_id ctrl_ip data_ip role tag; do
   [[ -z "$instance_id" ]] && continue
   [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
@@ -155,7 +148,10 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
     # Remove old experiment-related files.
     rm -rf $remote_delete_files 2>/dev/null || true; \
-  "
+    # Ensure status dir and reset status to RUNNING (se usado).
+    mkdir -p \"\$(dirname \"$remote_status_file\")\" 2>/dev/null || true; \
+    echo RUNNING > \"$remote_status_file\" 2>/dev/null || true \
+  " >/dev/null 2>&1 || true
 done < "$instance_info_file"
 
 echo
@@ -178,15 +174,20 @@ echo "  output template path          = $exp_data_dir/$local_master_command_temp
 python3 scripts/generate-master-commands.py \
   remote \
   "$deployment_file" \
-  "$exp_data_dir/$local_master_command_template" \
+  "$local_master_command_template" \
   "$exp_data_dir"
 rc=$?
 
 echo "initialize-deployment.sh: generate-master-commands.py exit code = $rc"
+
 if [[ "$rc" -ne 0 ]]; then
-  echo "ERROR: generate-master-commands.py failed with exit code $rc"
-  exit 1
+  echo "initialize-deployment.sh: failed processing deployment file: $deployment_file"
+  # Para remoto, ainda continuamos; o schedule pode estar vazio.
 fi
+
+# --------------------------------------------------------------------
+# 4) Prepare master-commands.cmd locally, substituting placeholders
+# --------------------------------------------------------------------
 
 export ssh_key_file="${remote_private_key_file:-}"
 export own_public_ip="$master_ip"
@@ -196,7 +197,7 @@ export status_file="$remote_status_file"
 local_template_path="$exp_data_dir/$local_master_command_template"
 local_cmd_path="$exp_data_dir/$local_master_command_file"
 
-if [ ! -f "$local_template_path" ]; then
+if [[ ! -f "$local_template_path" ]]; then
   echo "Using pre-generated master command script at $local_cmd_path."
   cp "$local_cmd_path" "$local_cmd_path" 2>/dev/null || true
 else
@@ -209,7 +210,7 @@ echo "Master command script written to $local_cmd_path."
 echo
 
 # --------------------------------------------------------------------
-# 4) Start master
+# 5) Start master
 # --------------------------------------------------------------------
 
 echo "[STEP 3] Starting master on $master_ip."
@@ -218,7 +219,7 @@ echo "[STEP 3] Master start sequence finished."
 echo
 
 # --------------------------------------------------------------------
-# 5) Start peer and client slaves
+# 6) Start peer and client slaves
 # --------------------------------------------------------------------
 
 peers_tag="peers"
@@ -234,7 +235,7 @@ echo "Remote slave deployment finished."
 echo
 
 # --------------------------------------------------------------------
-# 6) Final message (deploy.sh cuidará do summarize)
+# 7) Final message (deploy.sh cuidará do summarize)
 # --------------------------------------------------------------------
 
 echo "[STEP 5] Waiting for deployment process and result fetching to finish."
