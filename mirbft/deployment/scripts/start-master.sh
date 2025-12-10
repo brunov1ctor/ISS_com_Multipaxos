@@ -21,8 +21,25 @@ if [[ $# -lt 2 ]]; then
   exit 1
 fi
 
-exp_data_dir="$1"
+# Diretórios base
+this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+deployment_dir="$(cd "$this_dir/.." && pwd)"
+
+# Primeiro argumento (pode ser relativo ou absoluto)
+exp_data_dir_arg="$1"
 master_ip="$2"
+
+# Normaliza exp_data_dir para caminho absoluto baseado em deployment_dir
+if [[ "$exp_data_dir_arg" = /* ]]; then
+  exp_data_dir="$exp_data_dir_arg"
+else
+  exp_data_dir="$deployment_dir/$exp_data_dir_arg"
+fi
+
+if [[ ! -d "$exp_data_dir" ]]; then
+  echo "ERRO: diretório de experimento não existe: $exp_data_dir"
+  exit 1
+fi
 
 echo "Using experiment data directory: ${exp_data_dir}"
 echo "Using master IP: ${master_ip}"
@@ -59,6 +76,14 @@ echo "Remote work dir: ${remote_work_dir}"
 echo "Remote master command path: ${remote_master_cmd}"
 echo
 
+# Aqui a gente para com “aviso falso”: se não existir, ERRO e pronto.
+if [[ ! -f "${local_master_cmd}" ]]; then
+  echo "ERRO: master-commands.cmd não encontrado em ${local_master_cmd}"
+  echo "      initialize-deployment.sh disse que escreveu, mas o arquivo não está visível aqui."
+  echo "      Verifique se o deploy.sh está chamando start-master.sh a partir do diretório 'deployment/'."
+  exit 1
+fi
+
 ###################################################
 # Garante diretórios remotos
 ###################################################
@@ -82,7 +107,7 @@ echo
 
 echo "Copying master commands and configs to master."
 
-# Copia master-commands.cmd (sem aviso falso; se não existir, stubborn-scp reclama)
+# Copia master-commands.cmd (agora com caminho absoluto correto)
 bash scripts/stubborn-scp.sh 10 \
   "${local_master_cmd}" \
   "${remote_user}@${master_ip}:${remote_master_cmd}"
