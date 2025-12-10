@@ -14,11 +14,96 @@
 #   - cancel_instances
 #   - remote_private_key_file, remote_status_file, ssh_options,
 #     remote_work_dir, remote_delete_files, local_result_fetching_log, etc.
+#
+# This script performs:
+#   1) Determine master IP from instance-info.
+#   2) Generate master-commands template and final master-commands.cmd
+#      *inside* $exp_data_dir.
+#   3) Kill any previous runs, prune state on all machines.
+#   4) Reset machine state (traffic shaping, processes, files).
+#   5) Start master remotely (using start-master.sh).
+#   6) Start slaves remotely (peers and clients).
+#   7) Wait for finish, fetch results, summarize.
 
-# 1) Discover master IP from instance-info (role == master)
-master_ip=$(awk '$4 == "master" {print $2}' "$instance_info_file")
-if [ -z "$master_ip" ]; then
-  >&2 echo "deploy-remote.sh: could not obtain master ip from instance info file: $instance_info_file"
+set -euo pipefail
+
+############################################
+# Helper: resolve instance-info path
+############################################
+
+resolve_instance_info() {
+  local base_dir="$1"   # e.g. $exp_data_dir
+  local info_arg="$2"   # e.g. scripts/instance-info
+
+  # If it's an absolute path that exists, use it:
+  if [[ "$info_arg" = /* ]] && [[ -f "$info_arg" ]]; then
+    echo "$info_arg"
+    return 0
+  fi
+
+  # Try relative to repo root and deployment dir
+  local this_dir
+  this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local deployment_dir
+  deployment_dir="$(cd "$this_dir/.." && pwd)"
+  local repo_dir
+  repo_dir="$(cd "$deployment_dir/.." && pwd)"
+
+  local cand1="$repo_dir/$info_arg"
+  local cand2="$deployment_dir/$info_arg"
+
+  if [[ -f "$cand1" ]]; then
+    echo "$cand1"
+    return 0
+  fi
+  if [[ -f "$cand2" ]]; then
+    echo "$cand2"
+    return 0
+  fi
+
+  # Finally, try "as is" (relative to current dir):
+  if [[ -f "$info_arg" ]]; then
+    echo "$info_arg"
+    return 0
+  fi
+
+  # Could not resolve:
+  return 1
+}
+
+############################################
+# 1) Determine master IP from instance-info
+############################################
+
+# exp_data_dir is already set by initialize-deployment.sh
+# instance_info_file is relative to the repository or absolute
+deployment_file="$exp_data_dir/deployment.dpl"
+
+if [[ ! -f "$deployment_file" ]]; then
+  echo "ERROR: Deployment file not found: $deployment_file"
+  exit 1
+fi
+
+if ! instance_info_file="$(resolve_instance_info "$exp_data_dir" "$instance_info_file")"; then
+  echo "ERROR: Could not find instance-info file '$instance_info_file'."
+  exit 1
+fi
+
+# Grab the first instance marked as "master" or with tag == -1/1client
+master_ip=""
+while read -r tag ctrl_ip data_ip role itag; do
+  [[ -z "$tag" ]] && continue
+  [[ "$tag" =~ ^[[:space:]]*# ]] && continue
+
+  # Heuristic: role "master" OR tag "-1" (for master) or tag "master"
+  if [[ "$role" == "master" || "$tag" == "master" || "$tag" == "-1" ]]; then
+    master_ip="$ctrl_ip"
+    break
+  fi
+done < "$instance_info_file"
+
+if [[ -z "$master_ip" ]]; then
+  echo "ERROR: Could not determine master IP from instance-info '$instance_info_file'."
   exit 1
 fi
 
@@ -44,15 +129,14 @@ echo "  output template path          = $exp_data_dir/$local_master_command_temp
 python3 scripts/generate-master-commands.py \
   remote \
   "$deployment_file" \
-  "$local_master_command_template" \
+  "$exp_data_dir/$local_master_command_template" \
   "$exp_data_dir"
 rc=$?
 
 echo "initialize-deployment.sh: generate-master-commands.py exit code = $rc"
-
-if [ $rc -ne 0 ]; then
-  echo "initialize-deployment.sh: failed processing deployment file: $deployment_file"
-  # For remote we still continue, but deploy_schedule may be empty.
+if [[ "$rc" -ne 0 ]]; then
+  echo "ERROR: generate-master-commands.py failed with exit code $rc"
+  exit 1
 fi
 
 # --------------------------------------------------------------------
@@ -84,15 +168,24 @@ echo
 # --------------------------------------------------------------------
 
 echo "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
-echo
 
-# 4a) Kill continuous analysis scripts (if any)
+# 4a) Kill any tail/fetch scripts, kill discovery/ordering, remove traffic shaping
 while read -r instance_id ctrl_ip data_ip role itag; do
+  [[ -z "$instance_id" ]] && continue
+  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
+
   ssh $ssh_options "$ctrl_ip" " \
-    pids=\$(ps -ef | grep 'analyze-continuously' | grep -v grep | awk '{print \$2}'); \
-    if [ -n \"\$pids\" ]; then kill -9 \$pids || true; fi \
-  " >/dev/null 2>&1 || true &
-  sleep 0.1
+    pkill -f 'tail -F' 2>/dev/null || true; \
+    pkill -f 'fetch-results.sh' 2>/dev/null || true; \
+    pkill -f 'start-slave.sh' 2>/dev/null || true; \
+    pkill -f discoverymaster 2>/dev/null || true; \
+    pkill -f discoveryslave 2>/dev/null || true; \
+    pkill -f orderingpeer 2>/dev/null || true; \
+    pkill -f orderingclient 2>/dev/null || true; \
+    pkill -f 'scp ' 2>/dev/null || true; \
+    pkill -f rsync 2>/dev/null || true; \
+    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
+  " &
 done < "$instance_info_file"
 wait
 
@@ -101,6 +194,9 @@ echo
 
 # 4b) Reset machine state (processes, files, bandwidth)
 while read -r instance_id ctrl_ip data_ip role itag; do
+  [[ -z "$instance_id" ]] && continue
+  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
+
   ssh $ssh_options "$ctrl_ip" " \
     # Remove traffic shaping (ignore errors).
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
@@ -108,11 +204,7 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
     # Remove old experiment-related files.
     rm -rf $remote_delete_files 2>/dev/null || true; \
-    # Ensure status dir and reset status to RUNNING.
-    mkdir -p \"\$(dirname \"$remote_status_file\")\" 2>/dev/null || true; \
-    echo RUNNING > \"$remote_status_file\" 2>/dev/null || true \
-  " >/dev/null 2>&1 || true &
-  sleep 0.1
+  " &
 done < "$instance_info_file"
 wait
 
@@ -121,50 +213,47 @@ echo " Reset machine state."
 echo
 
 # --------------------------------------------------------------------
-# 5) Start master (discoverymaster + orderingclient) on master node
+# 5) Start master
 # --------------------------------------------------------------------
 
 echo "Starting master on $master_ip."
 scripts/start-master.sh "$exp_data_dir" "$master_ip"
 
+# The master is now responsible for starting discovery,
+# generating experiment configs, starting peers/clients, etc.
+
 # --------------------------------------------------------------------
-# 6) Start remote slaves (peers and clients) according to instance-info
+# 6) Start peer and client slaves
 # --------------------------------------------------------------------
 
-# Count slaves with tag 'peers' and '1client'
-num_peers=$(awk '$4 == "slave" && $5 == "peers" {c++} END {print c+0}' "$instance_info_file")
-num_clients=$(awk '$4 == "slave" && $5 == "1client" {c++} END {print c+0}' "$instance_info_file")
+# Peers: tag "peers"
+peers_tag="peers"
+echo "Starting peer slaves (tag=$peers_tag)."
+scripts/start-remote-slaves.sh "$exp_data_dir" 5 "$peers_tag" "$instance_info_file"
 
-if [ "$num_peers" -gt 0 ]; then
-  echo "Starting $num_peers peer slaves."
-  scripts/start-remote-slaves.sh "$exp_data_dir" "peers" "$num_peers" "$master_ip" "$instance_info_file"
-fi
-
-if [ "$num_clients" -gt 0 ]; then
-  echo "Starting $num_clients client slaves (tag=1client)."
-  scripts/start-remote-slaves.sh "$exp_data_dir" "1client" "$num_clients" "$master_ip" "$instance_info_file"
-fi
+# Clients: tag "1client" (single client per experiment)
+clients_tag="1client"
+echo "Starting client slaves (tag=$clients_tag)."
+scripts/start-remote-slaves.sh "$exp_data_dir" 1 "$clients_tag" "$instance_info_file"
 
 echo "All slaves started. waiting for them to finish."
 echo "Remote slave deployment finished."
+echo
 
 # --------------------------------------------------------------------
-# 7) Fetch results in background
+# 7) Wait for result fetching and summarization
 # --------------------------------------------------------------------
-
-scripts/fetch-results.sh "$master_ip" "$exp_data_dir" > "$exp_data_dir/$local_result_fetching_log" 2>&1 &
 
 echo "Waiting for deployment process and result fetching to finish."
-echo "For progress on experiment result fetching, see $exp_data_dir/$local_result_fetching_log."
-wait
+echo "For progress on experiment result fetching, see $local_result_fetching_log."
+echo "Do not forget to cancel the used virtual servers using"
+echo
+echo "    scripts/cancel-cloud-instances.sh $exp_data_dir/cloud-instance-info"
+echo
 
-# --------------------------------------------------------------------
-# 8) Cancel cloud instances if configured
-# --------------------------------------------------------------------
+# Summarize results (this may be done by the master or locally)
+echo "Generating result summary."
+scripts/summarize.sh "$exp_data_dir"
 
-if $cancel_instances; then
-  scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"
-else
-  echo -e "Do not forget to cancel the used virtual servers using\n\n    scripts/cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name \n"
-fi
+echo "Done. Experiment data directory: $exp_data_dir"
 
