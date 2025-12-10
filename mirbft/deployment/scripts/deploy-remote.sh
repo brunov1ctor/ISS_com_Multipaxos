@@ -185,6 +185,7 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     pkill -f rsync 2>/dev/null || true; \
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
   "
+  echo "  - [reset-proc] $ctrl_ip: OK."
 done < "$instance_info_file"
 
 echo "Killed continuous analysis scripts."
@@ -204,6 +205,7 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     # Remove old experiment-related files.
     rm -rf $remote_delete_files 2>/dev/null || true; \
   "
+  echo "  - [reset-state] $ctrl_ip: OK."
 done < "$instance_info_file"
 
 echo
