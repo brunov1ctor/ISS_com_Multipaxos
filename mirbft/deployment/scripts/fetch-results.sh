@@ -13,121 +13,96 @@
 #   2) SE NÃO HOUVER .tar.gz, faz FALLBACK:
 #        - lê scripts/instance-info
 #        - para cada linha com "slave", faz rsync de:
-#            Bruno@<ip_ctrl>:/users/Bruno/iss/experiment-output
+#            ${remote_user}@<ip_ctrl>:${remote_work_dir}/experiment-output
 #          para:
 #            <exp_dir>/experiment-output
-#   3) No final mostra o que veio e imprime próximos passos
 #
-# Depois disso:
-#   - você roda analyze.sh em cada experimento (0000..0003)
-#   - depois summarize.sh para gerar o CSV de métricas.
-
 set -euo pipefail
 
 source scripts/global-vars.sh
 
-# Mata filhos ao sair
-trap "$trap_exit_command" EXIT
+master_ip="$1"
+exp_dir="$2"
 
-if [ $# -lt 2 ]; then
+if [[ -z "$master_ip" || -z "$exp_dir" ]]; then
   echo "Uso: $0 <master_ip> <exp_dir>"
   exit 1
 fi
 
-master_ip="$1"
-exp_dir="$2"
-raw_results="$exp_dir/raw-results"
+mkdir -p "$exp_dir/experiment-output"
 
-echo "=== [fetch-results] INÍCIO ==="
-echo "  master_ip   = $master_ip"
-echo "  exp_dir     = $exp_dir"
-echo "  raw_results = $raw_results"
-echo "  remote_exp_dir    = $remote_exp_dir"
-echo "  remote_log_archs  = $remote_log_archives"
+echo "[INFO] Iniciando fetch de resultados do master $master_ip para $exp_dir"
 echo
 
-mkdir -p "$raw_results"
+# --------------------------------------------------------------------
+# 1) Tenta baixar .tar.gz (padrão ISS).
+# --------------------------------------------------------------------
 
-############################################
-# 1) TENTATIVA PADRÃO: .tar.gz no MASTER  #
-############################################
-echo "[fetch-results] Tentando baixar arquivos de log (raw-results) do master..."
-echo "  rsync: $master_ip:$remote_exp_dir/raw-results/$remote_log_archives -> $raw_results"
+tar_glob="experiment-output-*.tar.gz"
+found_tar=false
 
-set +e
-rsync --progress -rtz -e "ssh $ssh_options" \
-  "$master_ip:$remote_exp_dir/raw-results/$remote_log_archives" \
-  "$raw_results"
-rsync_rc=$?
-set -e
+echo "[INFO] Tentando baixar arquivos $tar_glob do master (padrão ISS)..."
 
-if [ $rsync_rc -ne 0 ]; then
-  echo "[fetch-results] Aviso: não foi possível baixar $remote_log_archives do master (rc=$rsync_rc)."
-fi
+rsync -rtz --progress -e "ssh $ssh_options" \
+  "${remote_user}@${master_ip}:${remote_work_dir}/$tar_glob" \
+  "$exp_dir/" && found_tar=true || true
 
-echo
-echo "[fetch-results] Conteúdo de $raw_results:"
-ls -lh "$raw_results" 2>/dev/null || echo "(vazio)"
-echo
-
-num_archives=$(ls -1 "$raw_results"/experiment-output-*-slave-*.tar.gz 2>/dev/null | wc -l || echo 0)
-
-if [ "$num_archives" -gt 0 ]; then
-  echo "[fetch-results] Encontrados $num_archives arquivos .tar.gz no master. (fluxo padrão ISS)"
-  echo "=== [fetch-results] FIM (modo .tar.gz/master) ==="
-  echo
+if $found_tar; then
+  echo "[INFO] Arquivos .tar.gz encontrados. Descompactando..."
+  mkdir -p "$exp_dir/experiment-output"
+  for f in "$exp_dir"/$tar_glob; do
+    echo "  - Extraindo $f"
+    tar -xzf "$f" -C "$exp_dir/experiment-output"
+  done
+  echo "[INFO] Extração concluída."
   exit 0
 fi
 
-##########################################################
-# 2) FALLBACK: BUSCAR LOGS DIRETO NOS SLAVES (Emulab)    #
-##########################################################
-echo "[fetch-results] Nenhum experiment-output-*.tar.gz encontrado no master."
-echo "[fetch-results] Usando FALLBACK: rsync de experiment-output/ diretamente dos slaves."
+echo "[INFO] Nenhum $tar_glob encontrado no master. Partindo para fallback (rsync de cada slave)."
 echo
 
-instance_info="scripts/instance-info"
-if [ ! -f "$instance_info" ]; then
-  echo "[fetch-results] ERRO: $instance_info não encontrado. Não sei de onde puxar os slaves."
+# --------------------------------------------------------------------
+# 2) FALLBACK: rsync direto do experiment-output de cada slave.
+# --------------------------------------------------------------------
+
+instance_info_file="scripts/instance-info"
+
+if [[ ! -f "$instance_info_file" ]]; then
+  echo "[ERRO] Arquivo $instance_info_file não encontrado; não sei de onde puxar os resultados."
   exit 1
 fi
 
-# Vamos jogar tudo em <exp_dir>/experiment-output
-mkdir -p "$exp_dir/experiment-output"
+echo "[INFO] Lendo lista de slaves em $instance_info_file..."
+echo
 
-echo "[fetch-results] Lendo slaves de $instance_info..."
-while read -r host ctrl_ip exp_ip role tag; do
-  # pula linhas vazias ou comentários
-  [ -z "${host:-}" ] && continue
-  [[ "$host" =~ ^# ]] && continue
+while read -r line; do
+  tag=$(echo "$line" | awk '{print $1}')
+  ctrl_ip=$(echo "$line" | awk '{print $2}')
 
-  if [ "$role" != "slave" ]; then
+  # Linhas de comentário ou vazias
+  [[ -z "$tag" ]] && continue
+  [[ "$tag" == \#* ]] && continue
+
+  # Só interessa slaves
+  if [[ "$tag" != "slave" ]]; then
     continue
   fi
 
-  echo "  [fallback] Slave: host=$host ctrl_ip=$ctrl_ip role=$role tag=$tag"
-  echo "    rsync Bruno@${ctrl_ip}:/users/Bruno/iss/experiment-output -> ${exp_dir}/"
-  set +e
-  rsync --progress -rtz -e "ssh $ssh_options" \
-    "Bruno@${ctrl_ip}:/users/Bruno/iss/experiment-output" \
-    "$exp_dir/"
-  rc_slave=$?
-  set -e
-
-  if [ $rc_slave -ne 0 ]; then
-    echo "    [fallback] Aviso: falha ao rsync de $host (rc=$rc_slave)."
-  else
-    echo "    [fallback] OK: logs copiados de $host."
-  fi
+  echo "[INFO] Slave detectado:"
+  echo "      tag    = $tag"
+  echo "      ctrl_ip= $ctrl_ip"
   echo
-done < "$instance_info"
 
-echo
-echo "[fetch-results] Resultado local em $exp_dir/experiment-output:"
-ls -R "$exp_dir/experiment-output" 2>/dev/null || echo "(não há experiment-output/ local)"
-echo
+  echo "    rsync ${remote_user}@${ctrl_ip}:${remote_work_dir}/experiment-output -> ${exp_dir}/"
 
-echo "=== [fetch-results] FIM (modo fallback/slaves) ==="
+  rsync --progress -rtz -e "ssh $ssh_options" \
+    "${remote_user}@${ctrl_ip}:${remote_work_dir}/experiment-output" \
+    "$exp_dir/" || true
+
+  echo
+done < "$instance_info_file"
+
+echo "[INFO] Fetch de resultados via fallback concluído."
 echo
 echo "Próximos passos sugeridos (no node-0):"
 echo "  1) Analisar cada experimento:"

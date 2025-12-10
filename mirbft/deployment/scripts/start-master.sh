@@ -16,13 +16,12 @@ source scripts/global-vars.sh
 # Mata os filhos ao sair
 trap "$trap_exit_command" EXIT
 
-###################################################
-# Parâmetros
-###################################################
+if [[ $# -lt 2 ]]; then
+  echo "Uso: $0 <exp_data_dir> <master_ip>"
+  exit 1
+fi
 
-# Diretório de dados do experimento (por ex: deployment-data/remote-0000)
 exp_data_dir="$1"
-# IP (ou hostname) do master remoto
 master_ip="$2"
 
 echo "Using experiment data directory: ${exp_data_dir}"
@@ -40,45 +39,39 @@ local_deployment_csv="${exp_data_dir}/${csv_filename}"
 local_deployment_dpl="${exp_data_dir}/${dpl_filename}"
 
 # Diretórios remotos (com defaults defensivos caso algo não venha de global-vars.sh)
-remote_work_dir="${remote_work_dir:-/users/Bruno/iss}"
+remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
 remote_config_dir="${remote_config_dir:-${remote_work_dir}/experiment-config}"
 
-# Arquivos remotos importantes
+# Caminho remoto preferido do master-commands.cmd (pode ser sobrescrito via remote_master_command_file)
 remote_master_cmd="${remote_master_command_file:-${remote_work_dir}/master-commands.cmd}"
-remote_ready_file="${remote_ready_file:-${remote_work_dir}/master-ready}"
-remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
+
+# Arquivos de log/ready remotos
 remote_main_log="${remote_main_log:-${remote_work_dir}/main_log.log}"
+remote_ready_file="${remote_ready_file:-${remote_work_dir}/master-ready}"
+
+# Arquivo de script remoto (corpo do user-script)
+remote_user_script_body="${remote_work_dir}/start-master-remote.sh"
+remote_user_script_uploaded="${remote_work_dir}/start-master-remote.uploaded"
 
 echo "Local master command script: ${local_master_cmd}"
 echo "Remote work dir: ${remote_work_dir}"
-echo "Remote READY file: ${remote_ready_file}"
+echo "Remote master command path: ${remote_master_cmd}"
 echo
 
-###################################################
-# Validações leves (sem abortar o script)
-###################################################
-
+# Verificação simples de existência do master-commands.cmd
 if [[ ! -f "${local_master_cmd}" ]]; then
   echo "AVISO: Arquivo de comandos do master não encontrado localmente: ${local_master_cmd}"
   echo "       Vou prosseguir assim mesmo; certifique-se de que o master-commands.cmd já exista no master."
 fi
 
-if [[ ! -f "${local_deployment_csv}" ]]; then
-  echo "AVISO: deployment.csv não encontrado em ${exp_data_dir} (a cópia para o master será pulada)."
-fi
-
-if [[ ! -f "${local_deployment_dpl}" ]]; then
-  echo "AVISO: deployment.dpl não encontrado em ${exp_data_dir} (a cópia para o master será pulada)."
-fi
-
 ###################################################
-# Garante diretórios no master
+# Garante diretórios remotos
 ###################################################
 
 echo "Ensuring remote directories on master (${master_ip})."
 
-ssh ${ssh_options} "Bruno@${master_ip}" "mkdir -p \
+ssh ${ssh_options} "${remote_user}@${master_ip}" "mkdir -p \
   '${remote_work_dir}' \
   '${remote_exp_dir}' \
   '${remote_config_dir}' \
@@ -97,36 +90,36 @@ echo "Copying master commands and configs to master."
 
 # Copia master-commands.cmd (se existir)
 if [[ -f "${local_master_cmd}" ]]; then
-  scripts/stubborn-scp.sh 10 \
+  bash scripts/stubborn-scp.sh 10 \
     "${local_master_cmd}" \
-    "Bruno@${master_ip}:${remote_master_cmd}"
+    "${remote_user}@${master_ip}:${remote_master_cmd}"
 else
   echo "AVISO: pulando cópia do master-commands.cmd (arquivo local inexistente: ${local_master_cmd})"
 fi
 
 # Copia deployment.csv e deployment.dpl (se existirem)
 if [[ -f "${local_deployment_csv}" ]]; then
-  scripts/stubborn-scp.sh 10 \
+  bash scripts/stubborn-scp.sh 10 \
     "${local_deployment_csv}" \
-    "Bruno@${master_ip}:${remote_exp_dir}/deployment.csv"
+    "${remote_user}@${master_ip}:${remote_exp_dir}/deployment.csv"
 else
-  echo "AVISO: pulando cópia do deployment.csv (arquivo local inexistente: ${local_deployment_csv})"
+  echo "AVISO: deployment.csv não encontrado em ${exp_data_dir} (a cópia para o master será pulada)."
 fi
 
 if [[ -f "${local_deployment_dpl}" ]]; then
-  scripts/stubborn-scp.sh 10 \
+  bash scripts/stubborn-scp.sh 10 \
     "${local_deployment_dpl}" \
-    "Bruno@${master_ip}:${remote_exp_dir}/deployment.dpl"
+    "${remote_user}@${master_ip}:${remote_exp_dir}/deployment.dpl"
 else
-  echo "AVISO: pulando cópia do deployment.dpl (arquivo local inexistente: ${local_deployment_dpl})"
+  echo "AVISO: deployment.dpl não encontrado em ${exp_data_dir} (a cópia para o master será pulada)."
 fi
 
-# Copia arquivos de configuração do experimento (configs YAML, etc.)
+# Copia diretório de configs (config-000X.yml) se existir
 if [[ -d "${exp_data_dir}/config" ]]; then
   echo "Copying experiment config files to master."
-  scripts/stubborn-scp.sh 10 \
+  bash scripts/stubborn-scp.sh 10 \
     "${exp_data_dir}/config/" \
-    "Bruno@${master_ip}:${remote_config_dir}/"
+    "${remote_user}@${master_ip}:${remote_config_dir}/"
 else
   echo "AVISO: diretório de configs não encontrado em ${exp_data_dir}/config (nenhum YAML será copiado)."
 fi
@@ -138,29 +131,24 @@ echo
 # Gera script remoto que de fato inicia o master
 ###################################################
 
-remote_user_script_body="${remote_user_script_body:-${remote_work_dir}/user-script-body.sh}"
-remote_user_script_uploaded="${remote_user_script_uploaded:-${remote_work_dir}/user-script-uploaded}"
-
-echo "Gerando script remoto do master em ${remote_user_script_body}."
-
-# Monta o corpo do script que roda no master
-cat > /tmp/user-script-master-body.$$ <<EOF
-#!/bin/bash
+cat > "/tmp/user-script-master-body.$$" <<EOF
+#!/usr/bin/env bash
 set -euo pipefail
 
-cd "${remote_work_dir}"
+export PATH="${remote_bin_dir}:/usr/local/go/bin:\$PATH"
 
-# Marca que o script subiu
-echo "user-script-master iniciado em \$(date)" > "${remote_status_file}"
+echo "Master remote script started." >> "${remote_main_log}"
+echo "Master IP: ${master_ip}" >> "${remote_main_log}"
+echo "Experiment directory: ${remote_exp_dir}" >> "${remote_main_log}"
 
-# Apaga arquivos de READY/STATUS antigos
-rm -f "${remote_ready_file}" || true
+# Marca READY como "iniciando"
+echo "STARTING" > "${remote_ready_file}"
 
 # Inicia discoverymaster
 echo "Iniciando discoverymaster no master..." >> "${remote_main_log}"
-nohup discoverymaster \\
-  --deployment-file "${remote_exp_dir}/deployment.dpl" \\
-  --master-address "${master_ip}:${master_port}" \\
+nohup discoverymaster \
+  --deployment-file "${remote_exp_dir}/deployment.dpl" \
+  --master-address "${master_ip}:${master_port}" \
   >> "${remote_main_log}" 2>&1 &
 
 # Inicia orderingclient de acordo com master-commands.cmd
@@ -173,12 +161,12 @@ echo "Master READY em \$(date)" >> "${remote_main_log}"
 EOF
 
 # Copia o corpo do script para o master
-scripts/stubborn-scp.sh 10 \
+bash scripts/stubborn-scp.sh 10 \
   "/tmp/user-script-master-body.$$" \
-  "Bruno@${master_ip}:${remote_user_script_body}"
+  "${remote_user}@${master_ip}:${remote_user_script_body}"
 
-# Marca flag de "script enviado"
-ssh ${ssh_options} "Bruno@${master_ip}" "chmod +x '${remote_user_script_body}' && echo 1 > '${remote_user_script_uploaded}'"
+# Garante permissão de execução e marca upload concluído
+ssh ${ssh_options} "${remote_user}@${master_ip}" "chmod +x '${remote_user_script_body}' && echo 1 > '${remote_user_script_uploaded}'"
 
 rm -f "/tmp/user-script-master-body.$$"
 
@@ -187,7 +175,7 @@ rm -f "/tmp/user-script-master-body.$$"
 ###################################################
 
 echo "Starting result processor and master server."
-ssh ${ssh_options} "Bruno@${master_ip}" "nohup '${remote_user_script_body}' >/dev/null 2>&1 &"
+ssh ${ssh_options} "${remote_user}@${master_ip}" "nohup '${remote_user_script_body}' >/dev/null 2>&1 &"
 
 echo "Master discovery + orderingclient disparados."
 echo "Continuous analysis (remote) disparada (ou ignorada em caso de erro)."

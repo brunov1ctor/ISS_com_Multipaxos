@@ -2,153 +2,127 @@
 
 # scripts/start-remote-slaves.sh
 #
-# Uso (do deploy-remote.sh):
-#   scripts/start-remote-slaves.sh \
-#       <exp_data_dir> <tag> <num_slaves> <master_ip> <instance_info_file>
+# Dispara os slaves (peers/clients) em ambiente remoto (Emulab/cluster).
+#
+# Uso:
+#   scripts/start-remote-slaves.sh <exp_data_dir> <instance_info_file> <tag>
 #
 # Onde:
-#   tag               = "peers" ou "1client"
-#   num_slaves        = quantos nós dessa tag queremos iniciar
-#   master_ip         = IP do master (para o start-slave.sh remoto)
-#   instance_info_file= arquivo scripts/instance-info
+#   <tag> é "peers", "1client", etc., conforme definido no instance-info.
+#
 
-# Carrega variáveis globais (ssh_options, remote_work_dir, remote_bin_dir, etc.)
+set -euo pipefail
+
 source scripts/global-vars.sh
 
-# Garante que filhos morram se este script sair
-trap "$trap_exit_command" EXIT
-
-exp_data_dir="$1"
-tag="$2"
-num_slaves="$3"
-master_ip="$4"
-instance_info_file="$5"
-
-# Diretórios locais (deployment e repo)
-this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-deployment_dir="$(cd "${this_dir}/.." && pwd)"
-repo_dir="$(cd "${deployment_dir}/.." && pwd)"
-
-echo "[INFO  ][$(date +"%F %T")] ==== [start-remote-slaves] Diretórios detectados ====="
-echo "[INFO  ][$(date +"%F %T")]   this_dir       = ${this_dir}"
-echo "[INFO  ][$(date +"%F %T")]   deployment_dir = ${deployment_dir}"
-echo "[INFO  ][$(date +"%F %T")]   repo_dir       = ${repo_dir}"
-echo "[INFO  ][$(date +"%F %T")]   remote_user    = ${remote_user}"
-echo "[INFO  ][$(date +"%F %T")]   remote_gopath  = ${remote_gopath}"
-echo "[INFO  ][$(date +"%F %T")]   remote_bin_dir = ${remote_bin_dir}"
-echo "[INFO  ][$(date +"%F %T")]   remote_work_dir= ${remote_work_dir}"
-echo "[INFO  ][$(date +"%F %T")]   remote_exp_dir = ${remote_exp_dir}"
-echo "[INFO  ][$(date +"%F %T")] "
-
-if [ ! -f "${instance_info_file}" ]; then
-  echo "[ERROR ][$(date +"%F %T")] Arquivo de instance info não encontrado: ${instance_info_file}"
+if [[ $# -lt 3 ]]; then
+  echo "Uso: $0 <exp_data_dir> <instance_info_file> <tag>"
   exit 1
 fi
 
-# Diretório local dos binários (no node-0)
-# Se GOBIN estiver setado, usa ele; senão, usa $GOPATH/bin; se não tiver, cai pro remote_gopath/bin
-if [ -n "${GOBIN:-}" ]; then
-  local_bin_dir="${GOBIN}"
-elif [ -n "${GOPATH:-}" ]; then
-  local_bin_dir="${GOPATH}/bin"
-else
-  local_bin_dir="${remote_gopath}/bin"
-fi
+exp_data_dir="$1"
+instance_info_file="$2"
+wanted_tag="$3"
 
-echo "[INFO  ][$(date +"%F %T")] ==== [start-remote-slaves] Distribuindo scripts/binários aos slaves ===="
+this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+deployment_dir="$(cd "$this_dir/.." && pwd)"
+repo_dir="$(cd "$deployment_dir/.." && pwd)"
 
-# ---------------------------------------------------------------------------
-# 1) DISTRIBUIÇÃO DE SCRIPTS E BINÁRIOS
-# ---------------------------------------------------------------------------
-started=0
-while read -r instance_id ctrl_ip data_ip role itag; do
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Diretórios detectados ====="
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   this_dir       = $this_dir"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   deployment_dir = $deployment_dir"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   repo_dir       = $repo_dir"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_user    = $remote_user"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_gopath  = $remote_gopath"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_bin_dir = $remote_bin_dir"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_work_dir= $remote_work_dir"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_exp_dir = $remote_exp_dir"
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] "
+
+# --------------------------------------------------------------------
+# 1) Distribui scripts e binários para os slaves da tag desejada
+# --------------------------------------------------------------------
+
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Distribuindo scripts/binários aos slaves ===="
+
+while read -r tag ctrl_ip private_ip public_ip instance_id; do
   # pula linhas vazias ou comentários
-  [ -z "${instance_id}" ] && continue
-  case "${instance_id}" in
-    \#*) continue ;;
-  esac
+  [[ -z "$tag" ]] && continue
+  [[ "$tag" == \#* ]] && continue
 
-  # só slaves com a tag desejada (peers ou 1client)
-  if [ "${role}" != "slave" ] || [ "${itag}" != "${tag}" ]; then
+  # só nos interessam as linhas da tag desejada
+  if [[ "$tag" != "$wanted_tag" ]]; then
     continue
   fi
 
-  echo "[INFO  ][$(date +"%F %T")] ---------------------------------------------------------------------"
-  echo "[INFO  ][$(date +"%F %T")]   [REMOTO] Garantindo ambiente em ${ctrl_ip}"
-  echo "[INFO  ][$(date +"%F %T")]            instance_id = ${instance_id}"
-  echo "[INFO  ][$(date +"%F %T")]            tag         = ${itag}"
-  echo "[INFO  ][$(date +"%F %T")] ---------------------------------------------------------------------"
+  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ---------------------------------------------------------------------"
+  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   [REMOTO] Garantindo ambiente em $ctrl_ip"
+  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]            instance_id = $instance_id"
+  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]            tag         = $tag"
 
-  # 1.1) Garante diretórios remotos
-  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" " \
-    mkdir -p '${remote_work_dir}/scripts' '${remote_bin_dir}' '${remote_exp_dir}' 2>/dev/null || true \
+  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "
+    mkdir -p \
+      '$remote_work_dir' \
+      '$remote_exp_dir' \
+      '$remote_config_dir' \
+      '$remote_work_dir/scripts' \
+      '$remote_work_dir/logs' \
+      '$remote_work_dir/tls-data' \
+      '$remote_work_dir/bin'
   " >/dev/null 2>&1 || true
 
-  # 1.2) Copia scripts básicos (para o nó remoto)
-  scp ${ssh_options} \
-    "${this_dir}/global-vars.sh" \
-    "${this_dir}/remote-machine-status.sh" \
-    "${this_dir}/stubborn-scp.sh" \
-    "${remote_user}@${ctrl_ip}:${remote_work_dir}/scripts/" >/dev/null 2>&1 || true
+  # Copia scripts necessários (incluindo stubborn-scp.sh)
+  mkdir -p "$exp_data_dir/scripts-temp"
+  cp "$this_dir/start-slave.sh" "$exp_data_dir/scripts-temp/"
+  cp "$this_dir/stubborn-scp.sh" "$exp_data_dir/scripts-temp/"
+  cp "$this_dir/new-experiment-state.sh" "$exp_data_dir/scripts-temp/"
 
-  # 1.3) Copia start-slave.sh (para raiz de trabalho remota)
-  scp ${ssh_options} \
-    "${this_dir}/start-slave.sh" \
-    "${remote_user}@${ctrl_ip}:${remote_work_dir}/start-slave.sh" >/dev/null 2>&1 || true
+  bash "${this_dir}/stubborn-scp.sh" \
+    "$scp_retries" \
+    "$exp_data_dir/scripts-temp/" \
+    "${remote_user}@${ctrl_ip}:$remote_work_dir/scripts/"
 
-  # 1.4) Copia binários (desc/ord)
-  scp ${ssh_options} \
-    "${local_bin_dir}/discoverymaster" \
-    "${local_bin_dir}/discoveryslave" \
-    "${local_bin_dir}/orderingpeer" \
-    "${local_bin_dir}/orderingclient" \
-    "${remote_user}@${ctrl_ip}:${remote_bin_dir}/" >/dev/null 2>&1 || true
+  # Copia binários (orderingpeer, orderingclient, discovery*)
+  bash "${this_dir}/stubborn-scp.sh" \
+    "$scp_retries" \
+    "$remote_bin_dir/" \
+    "${remote_user}@${ctrl_ip}:$remote_bin_dir/"
 
-  echo "[INFO  ][$(date +"%F %T")]     [REMOTO] OK: ambiente garantido em ${ctrl_ip}."
+  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]     [REMOTO] OK: ambiente garantido em $ctrl_ip."
+done < "$instance_info_file"
 
-  started=$((started + 1))
-  [ "${started}" -ge "${num_slaves}" ] && break
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Distribuição concluída. ===="
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] "
 
-  # Evita abrir SSH demais de uma vez
-  sleep 0.1
-done < "${instance_info_file}"
+# --------------------------------------------------------------------
+# 2) Dispara os slaves da tag desejada
+# --------------------------------------------------------------------
 
-echo "[INFO  ][$(date +"%F %T")] ==== [start-remote-slaves] Distribuição concluída. ===="
-echo "[INFO  ][$(date +"%F %T")] "
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Disparando slaves da tag '$wanted_tag' ===="
 
-# ---------------------------------------------------------------------------
-# 2) DISPARO DOS SLAVES (start-slave.sh remoto)
-# ---------------------------------------------------------------------------
-echo "[INFO  ][$(date +"%F %T")] ==== [start-remote-slaves] Disparando slaves da tag '${tag}' ===="
+while read -r tag ctrl_ip private_ip public_ip instance_id; do
+  [[ -z "$tag" ]] && continue
+  [[ "$tag" == \#* ]] && continue
 
-started=0
-while read -r instance_id ctrl_ip data_ip role itag; do
-  [ -z "${instance_id}" ] && continue
-  case "${instance_id}" in
-    \#*) continue ;;
-  esac
-
-  if [ "${role}" != "slave" ] || [ "${itag}" != "${tag}" ]; then
+  if [[ "$tag" != "$wanted_tag" ]]; then
     continue
   fi
 
-  echo "[INFO  ][$(date +"%F %T")]   [DEPLOY] Iniciando slave em ${ctrl_ip} (instance_id=${instance_id}, tag=${itag})"
+  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   [DEPLOY] Iniciando slave em $ctrl_ip (instance_id=$instance_id, tag=$tag)"
 
-  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" " \
-    cd '${remote_work_dir}' && \
-    chmod +x start-slave.sh scripts/*.sh 2>/dev/null || true && \
-    ./start-slave.sh '${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}' \
-      >> '${remote_work_dir}/start-slave-${tag}.log' 2>&1 & \
+  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "
+    nohup '$remote_work_dir/scripts/start-slave.sh' \
+      '$exp_data_dir' \
+      '$ctrl_ip' \
+      '$private_ip' \
+      '$public_ip' \
+      '$instance_id' \
+      '$tag' \
+      > '$remote_work_dir/logs/slave-\${instance_id}.log' 2>&1 &
   " >/dev/null 2>&1 || true
+done < "$instance_info_file"
 
-  started=$((started + 1))
-  [ "${started}" -ge "${num_slaves}" ] && break
-
-  sleep 0.1
-done < "${instance_info_file}"
-
-echo "[INFO  ][$(date +"%F %T")] "
-echo "[INFO  ][$(date +"%F %T")] ==== [start-remote-slaves] Todos os slaves disparados. ===="
-echo "[INFO  ][$(date +"%F %T")] ==== [start-remote-slaves] FIM ==========================================="
-wait
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] "
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Todos os slaves disparados. ===="
+echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] FIM ==========================================="
 
