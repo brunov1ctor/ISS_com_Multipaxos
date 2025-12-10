@@ -4,7 +4,7 @@
 # Diretórios / arquivos base
 #############################
 
-# Diretório raiz onde ficam os dados de deployment (já está assim no seu setup).
+# Diretório raiz onde ficam os dados de deployment.
 deployment_data_root=deployment-data
 
 # Nomes dos arquivos gerados pelo generate-config.sh
@@ -13,7 +13,7 @@ csv_filename=deployment.csv
 result_summary_file=result-summary.csv
 exp_id_digits=4
 
-# Queries usadas no analyze (pode deixar igual ao original ou ajustar se quiser)
+# Queries usadas no analyze
 analysis_query_params="-q queries/ethereum.sql -q queries/aggregates.sql -q queries/histograms.sql"
 
 #########################################
@@ -28,7 +28,6 @@ trap_exit_command='{ jobs; if [ -n "$(jobs -p)" ]; then kill $(jobs -p); fi; }'
 ############################################
 
 # Nome padrão de arquivo de instance-info para scripts de CLOUD.
-# Para o modo REMOTE (Emulab), você já passa "scripts/instance-info" direto para o deploy.sh.
 instance_info_file_name="cloud-instance-info"
 default_instance_info=last-cloud-instance-info
 
@@ -64,7 +63,6 @@ remote_gopath="${remote_gopath:-/users/${remote_user}/go}"
 remote_bin_dir="${remote_bin_dir:-$remote_gopath/bin}"
 
 # Código remoto (se você quiser clonar o repositório também nos slaves).
-# Pode deixar assim ou ajustar para o caminho real do clone remoto.
 remote_code_dir="$remote_work_dir/mirbft"
 remote_tls_directory="$remote_code_dir/tls-data"
 
@@ -75,7 +73,7 @@ remote_log_archives="experiment-output-*.tar.gz"
 # Portas / discovery / master
 #########################################
 
-# Porta de discovery/master (a mesma que você já usava).
+# Porta de discovery/master.
 master_port=9999
 
 #########################################
@@ -94,7 +92,12 @@ local_slave_log=slave-log.log
 #########################################
 
 # Arquivos/diretórios que serão removidos nos nós remotos ao iniciar um novo experimento.
-remote_delete_files="$remote_work_dir/experiment-output $remote_work_dir/current-deployment-data $remote_work_dir/master-ready $remote_work_dir/master-log.log $remote_work_dir/main_log.log $remote_work_dir/slave-log.log"
+remote_delete_files="$remote_work_dir/experiment-output \
+$remote_work_dir/current-deployment-data \
+$remote_work_dir/master-ready \
+$remote_work_dir/master-log.log \
+$remote_work_dir/main_log.log \
+$remote_work_dir/slave-log.log"
 
 #########################################
 # Caminhos usados pelo deploy (local)
@@ -114,7 +117,7 @@ local_experiment_output_root="$deployment_data_root/local-experiments"
 local_master_host=127.0.0.1
 local_master_port=9999
 
-# IP privado local para experiments (não precisa mudar).
+# IP privado local para experiments.
 local_private_ip=127.0.0.1
 
 # Arquivos de comandos/log/status do master, gerados localmente.
@@ -129,12 +132,32 @@ local_result_fetching_log=result-fetching.log
 # SSH / chaves
 #########################################
 
-# Chave PRIVADA opcional para acesso remoto (se quiser usar uma específica).
-# Pode ser sobrescrita via variável de ambiente remote_private_key_file.
-remote_private_key_file="${remote_private_key_file:-$HOME/.ssh/id_rsa}"
+# Caminho padrão de chave para Emulab (se existir).
+default_ssh_key="/users/${remote_user}/.ssh/id_rsa"
 
-# Opções padrão de SSH (add aqui se quiser -o StrictHostKeyChecking=no etc.)
-ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$remote_private_key_file"}"
+# Se remote_private_key_file não foi definido externamente,
+# tenta usar a default, se o arquivo existir.
+if [[ -z "${remote_private_key_file:-}" ]]; then
+  if [[ -f "$default_ssh_key" ]]; then
+    remote_private_key_file="$default_ssh_key"
+  else
+    remote_private_key_file=""
+  fi
+fi
+
+# Opções padrão de SSH:
+# - usa -i somente se tivermos uma chave definida e existente;
+# - sempre desabilita StrictHostKeyChecking e não grava em known_hosts.
+if [[ -z "${ssh_options:-}" ]]; then
+  if [[ -n "$remote_private_key_file" && -f "$remote_private_key_file" ]]; then
+    ssh_options="-i $remote_private_key_file -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+  else
+    ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+  fi
+fi
+
+# Opções de SCP (por padrão iguais às de SSH).
+scp_options="${scp_options:-$ssh_options}"
 
 #########################################
 # Configuração de análise contínua
