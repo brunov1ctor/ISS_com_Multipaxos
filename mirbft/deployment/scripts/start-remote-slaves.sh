@@ -20,18 +20,10 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# 0) Normalizar opções de SSH (silenciar warnings)
+# 0) Normalizar opções de SSH (sem chave fixa, sem spam)
 # ---------------------------------------------------------------------------
 
-ssh_options_default="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-ssh_options="${ssh_options:-$ssh_options_default}"
-
-if [[ -n "${remote_private_key_file:-}" && ! -f "$remote_private_key_file" ]]; then
-  echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] remote_private_key_file '$remote_private_key_file' não existe; ignorando chave explícita." >&2
-  ssh_options="$(echo "$ssh_options" | sed "s|-i[[:space:]]\+$remote_private_key_file||g")"
-fi
-
-ssh_options="$ssh_options -o LogLevel=ERROR"
+ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
 # ---------------------------------------------------------------------------
 # 1) Parsing de argumentos
@@ -169,7 +161,6 @@ tmp_scripts_dir="${exp_data_dir}/scripts-temp"
 rm -rf "${tmp_scripts_dir}"
 mkdir -p "${tmp_scripts_dir}"
 
-# Copiamos os scripts necessários para o lado remoto.
 cp "${this_dir}/start-slave.sh" "${tmp_scripts_dir}/"
 cp "${this_dir}/stubborn-scp.sh" "${tmp_scripts_dir}/" 2>/dev/null || true
 cp "${this_dir}/new-experiment-state.sh" "${tmp_scripts_dir}/" 2>/dev/null || true
