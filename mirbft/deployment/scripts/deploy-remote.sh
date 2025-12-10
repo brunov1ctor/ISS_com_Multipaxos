@@ -3,27 +3,14 @@
 # scripts/deploy-remote.sh
 #
 # Remote deployment using instance-info (e.g., Emulab/cluster).
-
-# This script is *sourced* by deploy.sh, which has already:
-#   - sourced scripts/global-vars.sh
-#   - run scripts/initialize-deployment.sh
 #
-# So we assume the following variables are available:
-#   - exp_data_dir
-#   - instance_info_file
-#   - cancel_instances
-#   - remote_private_key_file, remote_status_file, ssh_options,
-#     remote_work_dir, remote_delete_files, local_result_fetching_log, etc.
-#
-# This script performs:
-#   1) Determine master IP from instance-info.
-#   2) Generate master-commands template and final master-commands.cmd
-#      *inside* $exp_data_dir.
-#   3) Kill any previous runs, prune state on all machines.
-#   4) Reset machine state (traffic shaping, processes, files).
-#   5) Start master remotely (using start-master.sh).
-#   6) Start slaves remotely (peers and clients).
-#   7) Wait for finish, fetch results, summarize.
+# Fluxo:
+#   1) Descobre IP do master a partir do instance-info.
+#   2) Gera master-commands.{cmd,template} dentro de $exp_data_dir.
+#   3) Limpa execuções anteriores nos nós remotos.
+#   4) Sobe o master remoto.
+#   5) Dispara peers (tag=peers) e clients (tag=1client).
+#   6) Delega ao topo do deploy.sh a geração do resumo final.
 
 set -euo pipefail
 
@@ -38,13 +25,13 @@ resolve_instance_info() {
   local base_dir="$1"   # e.g. $exp_data_dir
   local info_arg="$2"   # e.g. scripts/instance-info
 
-  # If it's an absolute path that exists, use it:
+  # Caminho absoluto?
   if [[ "$info_arg" = /* ]] && [[ -f "$info_arg" ]]; then
     echo "$info_arg"
     return 0
   fi
 
-  # Try relative to repo root and deployment dir
+  # Tenta relativo ao repo root e ao deployment dir
   local repo_dir
   repo_dir="$(cd "$deployment_dir/.." && pwd)"
   local cand1="$repo_dir/$info_arg"
@@ -59,13 +46,12 @@ resolve_instance_info() {
     return 0
   fi
 
-  # Finally, try "as is" (relative to current dir):
+  # Tenta como está (relativo ao CWD)
   if [[ -f "$info_arg" ]]; then
     echo "$info_arg"
     return 0
   fi
 
-  # Could not resolve:
   return 1
 }
 
@@ -73,8 +59,6 @@ resolve_instance_info() {
 # 1) Determine master IP from instance-info
 ############################################
 
-# exp_data_dir is already set by initialize-deployment.sh
-# instance_info_file is relative to the repository or absolute
 deployment_file="$exp_data_dir/deployment.dpl"
 
 if [[ ! -f "$deployment_file" ]]; then
@@ -87,13 +71,12 @@ if ! instance_info_file="$(resolve_instance_info "$exp_data_dir" "$instance_info
   exit 1
 fi
 
-# Grab the first instance marked as "master" or with tag == -1/1client
 master_ip=""
 while read -r tag ctrl_ip data_ip role itag; do
   [[ -z "$tag" ]] && continue
   [[ "$tag" =~ ^[[:space:]]*# ]] && continue
 
-  # Heuristic: role "master" OR tag "-1" (for master) or tag "master"
+  # Heurística: linha que representa o master
   if [[ "$role" == "master" || "$tag" == "master" || "$tag" == "-1" ]]; then
     master_ip="$ctrl_ip"
     break
@@ -105,19 +88,17 @@ if [[ -z "$master_ip" ]]; then
   exit 1
 fi
 
-echo "Using instance info file: $instance_info_file"
-echo "       Master IP address: $master_ip"
+echo "[STEP 1] Using instance info file: $instance_info_file"
+echo "[STEP 1] Master IP address: $master_ip"
 echo
 
 # --------------------------------------------------------------------
-# 2) Pre-generate master command script if needed
+# 2) Generate master-commands template and script
 # --------------------------------------------------------------------
 
 local_master_command_template="master-commands-template.cmd"
 local_master_command_file="master-commands.cmd"
 
-# generate-master-commands.py will read the deployment file and produce
-# a template script (with placeholders) that we then envsubst.
 echo "initialize-deployment.sh: about to generate master commands:"
 echo "  depl_type                     = remote"
 echo "  deployment_file (.dpl)        = $deployment_file"
@@ -136,10 +117,6 @@ if [[ "$rc" -ne 0 ]]; then
   echo "ERROR: generate-master-commands.py failed with exit code $rc"
   exit 1
 fi
-
-# --------------------------------------------------------------------
-# 3) Prepare master-commands.cmd locally, substituting placeholders
-# --------------------------------------------------------------------
 
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
@@ -162,16 +139,17 @@ echo "Master command script written to $local_cmd_path."
 echo
 
 # --------------------------------------------------------------------
-# 4) Kill previous runs and prune state on all machines
+# 3) Kill previous runs and prune state on all machines
 # --------------------------------------------------------------------
 
-echo "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
+echo "[STEP 2] Cleaning up previous experiment state on all nodes..."
 
-# 4a) Kill any tail/fetch scripts, kill discovery/ordering, remove traffic shaping
+# 3a) Mata tails, scripts de fetch e processos de ordenação / discovery
 while read -r instance_id ctrl_ip data_ip role itag; do
   [[ -z "$instance_id" ]] && continue
   [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
+  echo "  - Cleanup (phase 1) on $ctrl_ip ..."
   ssh $ssh_options "$ctrl_ip" " \
     pkill -f 'tail -F' 2>/dev/null || true; \
     pkill -f 'fetch-results.sh' 2>/dev/null || true; \
@@ -183,89 +161,65 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     pkill -f 'scp ' 2>/dev/null || true; \
     pkill -f rsync 2>/dev/null || true; \
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-  " &
+  "
 done < "$instance_info_file"
-wait
 
 echo "Killed continuous analysis scripts."
 echo
 
-# 4b) Reset machine state (processes, files, bandwidth)
+# 3b) Remove traffic shaping + arquivos de experimento anterior
 while read -r instance_id ctrl_ip data_ip role itag; do
   [[ -z "$instance_id" ]] && continue
   [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
+  echo "  - Cleanup (phase 2) on $ctrl_ip ..."
   ssh $ssh_options "$ctrl_ip" " \
-    # Remove traffic shaping (ignore errors).
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-    # Kill previous experiment processes (ignore if not running).
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
-    # Remove old experiment-related files.
     rm -rf $remote_delete_files 2>/dev/null || true; \
-  " &
+  "
 done < "$instance_info_file"
-wait
 
 echo
-echo " Reset machine state."
+echo "[STEP 2] Reset machine state: OK."
 echo
 
 # --------------------------------------------------------------------
-# 5) Start master
+# 4) Start master
 # --------------------------------------------------------------------
 
-echo "Starting master on $master_ip."
+echo "[STEP 3] Starting master on $master_ip."
 scripts/start-master.sh "$exp_data_dir" "$master_ip"
 
-# The master is now responsible for starting discovery,
-# generating experiment configs, starting peers/clients, etc.
+echo "[STEP 3] Master start script finished."
+echo
 
 # --------------------------------------------------------------------
-# 6) Start peer and client slaves
+# 5) Start peer and client slaves
 # --------------------------------------------------------------------
 
-# Peers: tag "peers"
 peers_tag="peers"
-echo "Starting peer slaves (tag=$peers_tag)."
+echo "[STEP 4] Starting peer slaves (tag=$peers_tag)."
 scripts/start-remote-slaves.sh "$exp_data_dir" 5 "$peers_tag" "$instance_info_file"
 
-# Clients: tag "1client" (single client per experiment)
 clients_tag="1client"
-echo "Starting client slaves (tag=$clients_tag)."
+echo "[STEP 4] Starting client slaves (tag=$clients_tag)."
 scripts/start-remote-slaves.sh "$exp_data_dir" 1 "$clients_tag" "$instance_info_file"
 
-echo "All slaves started. waiting for them to finish."
+echo "[STEP 4] All slaves started. Waiting for them to finish."
 echo "Remote slave deployment finished."
 echo
 
 # --------------------------------------------------------------------
-# 7) Wait for result fetching and summarization
+# 6) Wait for result fetching (feito por outro script) e finalizar
 # --------------------------------------------------------------------
 
-echo "Waiting for deployment process and result fetching to finish."
+echo "[STEP 5] Waiting for deployment process and result fetching to finish."
 echo "For progress on experiment result fetching, see $local_result_fetching_log."
 echo "Do not forget to cancel the used virtual servers using"
 echo
 echo "    scripts/cancel-cloud-instances.sh $exp_data_dir/cloud-instance-info"
 echo
-
-# --------------------------------------------------------------------
-# 8) Generate result summary (using analyze/summarize.sh)
-# --------------------------------------------------------------------
-
-echo "Generating result summary."
-
-params_file="$exp_data_dir/experiment-parameters.csv"
-root_dir="$exp_data_dir"
-summarize_script="$deployment_dir/scripts/analyze/summarize.sh"
-
-if [[ -f "$summarize_script" && -f "$params_file" ]]; then
-  "$summarize_script" "$params_file" "$root_dir" > "$exp_data_dir/result-summary.csv"
-  # Mostra o resumo no terminal, como acontecia antes
-  cat "$exp_data_dir/result-summary.csv"
-else
-  echo "WARNING: summarize script ($summarize_script) ou parâmetros ($params_file) não encontrados; pulando resumo."
-fi
 
 echo "Done. Experiment data directory: $exp_data_dir"
 
