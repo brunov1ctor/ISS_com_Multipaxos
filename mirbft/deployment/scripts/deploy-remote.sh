@@ -173,7 +173,7 @@ while read -r instance_id ctrl_ip data_ip role itag; do
   [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
   echo "  - [reset-proc] $ctrl_ip: matando processos antigos e removendo traffic shaping..."
-  ssh $ssh_options "$ctrl_ip" " \
+  if ssh $ssh_options "$ctrl_ip" " \
     pkill -f 'tail -F' 2>/dev/null || true; \
     pkill -f 'fetch-results.sh' 2>/dev/null || true; \
     pkill -f 'start-slave.sh' 2>/dev/null || true; \
@@ -184,28 +184,36 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     pkill -f 'scp ' 2>/dev/null || true; \
     pkill -f rsync 2>/dev/null || true; \
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-  "
-  echo "  - [reset-proc] $ctrl_ip: OK."
+  "; then
+    echo "  - [reset-proc] $ctrl_ip: OK."
+  else
+    rc=$?
+    echo "  - [reset-proc] $ctrl_ip: WARNING (ssh exit $rc). Continuando mesmo assim."
+  fi
 done < "$instance_info_file"
 
 echo "Killed continuous analysis scripts."
 echo
 
-# 4b) Reset machine state (processes, files, bandwidth) – mais verboso e sequencial
+# 4b) Reset machine state (processes, files, bandwidth) – mais verboso e tolerante a erro
 while read -r instance_id ctrl_ip data_ip role itag; do
   [[ -z "$instance_id" ]] && continue
   [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
   echo "  - [reset-state] $ctrl_ip: removendo shaping, matando processos do experimento e limpando arquivos antigos..."
-  ssh $ssh_options "$ctrl_ip" " \
+  if ssh $ssh_options "$ctrl_ip" " \
     # Remove traffic shaping (ignore errors).
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
     # Kill previous experiment processes (ignore if not running).
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
     # Remove old experiment-related files.
     rm -rf $remote_delete_files 2>/dev/null || true; \
-  "
-  echo "  - [reset-state] $ctrl_ip: OK."
+  "; then
+    echo "  - [reset-state] $ctrl_ip: OK."
+  else
+    rc=$?
+    echo "  - [reset-state] $ctrl_ip: WARNING (ssh exit $rc). Continuando mesmo assim."
+  fi
 done < "$instance_info_file"
 
 echo

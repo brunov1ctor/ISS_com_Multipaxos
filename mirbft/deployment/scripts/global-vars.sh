@@ -146,14 +146,12 @@ if [[ -z "${remote_private_key_file:-}" ]]; then
 fi
 
 # Opções padrão de SSH:
-# - BatchMode=yes: nunca pedir senha / passphrase interativamente.
-# - ConnectTimeout=10: se não conectar, falha em ~10s.
-# - StrictHostKeyChecking=no + UserKnownHostsFile=/dev/null: não encher o saco com host key.
+# - se existir chave, usa -i; senão, deixa o ssh usar o que o ambiente tiver.
 if [[ -z "${ssh_options:-}" ]]; then
   if [[ -n "$remote_private_key_file" && -f "$remote_private_key_file" ]]; then
-    ssh_options="-i $remote_private_key_file -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    ssh_options="-i $remote_private_key_file -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
   else
-    ssh_options="-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
   fi
 fi
 
