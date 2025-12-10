@@ -15,11 +15,23 @@
 set -euo pipefail
 
 log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2
+  echo "[stubborn-scp] $*" >&2
 }
 
 usage() {
-  log "Uso esperado: $0 <tentativas> [-i] <origem> <destino>"
+  cat >&2 <<EOF
+Uso:
+  $0 <retries> -i host:/caminho/remoto /caminho/local
+  $0 <retries> origem destino
+
+Em que:
+  - <retries> é o número de tentativas
+  - <origem> e <destino> são caminhos locais ou host:path
+
+Exemplos:
+  $0 10 -i user@host:/tmp/foo ./foo
+  $0 10 ./foo user@host:/tmp/foo
+EOF
   exit 1
 }
 
@@ -30,87 +42,95 @@ fi
 retries="$1"
 shift
 
-# Aceita (e ignora) um '-i' legado
-if [[ "${1:-}" == "-i" ]]; then
-  shift
+if ! [[ "$retries" =~ ^[0-9]+$ ]]; then
+  echo "Primeiro argumento deve ser número de tentativas." >&2
+  usage
 fi
 
-if [[ $# -lt 2 ]]; then
-  usage
+mode=""
+if [[ "$1" == "-i" ]]; then
+  mode="pull"
+  shift
+else
+  mode="auto"
 fi
 
 src="$1"
 dst="$2"
 
-# Detecta quem é remoto (host:path)
-is_src_remote=false
-is_dst_remote=false
-[[ "$src" == *:* ]] && is_src_remote=true
-[[ "$dst" == *:* ]] && is_dst_remote=true
-
-if $is_src_remote && $is_dst_remote; then
-  log "ERRO: tanto origem quanto destino parecem remotos (contêm ':')."
-  exit 1
+if [[ "$mode" == "pull" ]]; then
+  # Modo compatível antigo: remoto->local
+  if [[ "$src" != *:* ]]; then
+    echo "No modo -i, a origem deve ser host:/caminho/remoto" >&2
+    exit 1
+  fi
+else
+  # Modo auto: um lado tem host:
+  if [[ "$src" == *:* && "$dst" == *:* ]]; then
+    echo "Exatamente um lado deve conter host:path" >&2
+    exit 1
+  fi
+  if [[ "$src" != *:* && "$dst" != *:* ]]; then
+    echo "Um dos lados deve conter host:path" >&2
+    exit 1
+  fi
 fi
-
-if ! $is_src_remote && ! $is_dst_remote; then
-  log "ERRO: nenhum lado parece remoto (nenhum contém ':')."
-  exit 1
-fi
-
-# Opções de SSH para NÃO pedir confirmação de host
-ssh_base_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
-
-copy_remote_to_local() {
-  local remote="$1"
-  local local_path="$2"
-
-  local host="${remote%%:*}"
-  local remote_path="${remote#*:}"
-
-  mkdir -p "$(dirname "$local_path")"
-
-  if ssh $ssh_base_opts "$host" "cat '$remote_path'" > "$local_path"; then
-    return 0
-  else
-    return $?
-  fi
-}
-
-copy_local_to_remote() {
-  local local_path="$1"
-  local remote="$2"
-
-  local host="${remote%%:*}"
-  local remote_path="${remote#*:}"
-
-  # Garante diretório remoto
-  if ! ssh $ssh_base_opts "$host" "mkdir -p \"\$(dirname '$remote_path')\""; then
-    return $?
-  fi
-
-  if cat "$local_path" | ssh $ssh_base_opts "$host" "cat > '$remote_path'"; then
-    return 0
-  else
-    return $?
-  fi
-}
 
 attempt=1
 status=1
 
 while (( attempt <= retries )); do
-  log "Tentativa $attempt/$retries: copiando '$src' -> '$dst'"
+  log "Tentativa $attempt de $retries..."
 
-  if $is_src_remote && ! $is_dst_remote; then
-    if copy_remote_to_local "$src" "$dst"; then
-      log "Cópia remoto->local concluída com sucesso."
-      exit 0
+  if [[ "$mode" == "pull" ]]; then
+    # src: host:/caminho  dst: local
+    host="${src%%:*}"
+    rpath="${src#*:}"
+
+    if ssh ${ssh_options:-} "$host" "test -f '$rpath'"; then
+      ssh ${ssh_options:-} "$host" "cat '$rpath'" > "$dst" && {
+        log "Cópia remoto->local concluída com sucesso."
+        exit 0
+      }
+    else
+      log "Arquivo remoto '$rpath' não existe em $host."
+      status=1
     fi
-  elif ! $is_src_remote && $is_dst_remote; then
-    if copy_local_to_remote "$src" "$dst"; then
-      log "Cópia local->remoto concluída com sucesso."
-      exit 0
+  else
+    # Modo auto (um lado é remoto)
+    if [[ "$src" == *:* ]]; then
+      # remoto -> local
+      host="${src%%:*}"
+      rpath="${src#*:}"
+
+      if ssh ${ssh_options:-} "$host" "test -f '$rpath'"; then
+        ssh ${ssh_options:-} "$host" "cat '$rpath'" > "$dst" && {
+          log "Cópia remoto->local concluída com sucesso."
+          exit 0
+        }
+      else
+        log "Arquivo remoto '$rpath' não existe em $host."
+        status=1
+      fi
+    else
+      # local -> remoto
+      host="${dst%%:*}"
+      rpath="${dst#*:}"
+
+      if [[ ! -f "$src" && ! -d "$src" ]]; then
+        log "Origem local '$src' não existe."
+        status=1
+      else
+        # Se for diretório, empacota via tar; se for arquivo, envia direto.
+        if [[ -d "$src" ]]; then
+          tar czf - -C "$(dirname "$src")" "$(basename "$src")" | \
+            ssh ${ssh_options:-} "$host" "mkdir -p \"\$(dirname '$rpath')\" && tar xzf - -C \"\$(dirname '$rpath')\""
+        else
+          ssh ${ssh_options:-} "$host" "mkdir -p \"\$(dirname '$rpath')\" && cat > '$rpath'" < "$src"
+        fi
+        log "Cópia local->remoto concluída com sucesso."
+        exit 0
+      fi
     fi
   fi
 
