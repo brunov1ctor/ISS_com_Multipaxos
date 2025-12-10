@@ -59,12 +59,6 @@ echo "Remote work dir: ${remote_work_dir}"
 echo "Remote master command path: ${remote_master_cmd}"
 echo
 
-# Verificação simples de existência do master-commands.cmd
-if [[ ! -f "${local_master_cmd}" ]]; then
-  echo "AVISO: Arquivo de comandos do master não encontrado localmente: ${local_master_cmd}"
-  echo "       Vou prosseguir assim mesmo; certifique-se de que o master-commands.cmd já exista no master."
-fi
-
 ###################################################
 # Garante diretórios remotos
 ###################################################
@@ -88,14 +82,10 @@ echo
 
 echo "Copying master commands and configs to master."
 
-# Copia master-commands.cmd (se existir)
-if [[ -f "${local_master_cmd}" ]]; then
-  bash scripts/stubborn-scp.sh 10 \
-    "${local_master_cmd}" \
-    "${remote_user}@${master_ip}:${remote_master_cmd}"
-else
-  echo "AVISO: pulando cópia do master-commands.cmd (arquivo local inexistente: ${local_master_cmd})"
-fi
+# Copia master-commands.cmd (sem aviso falso; se não existir, stubborn-scp reclama)
+bash scripts/stubborn-scp.sh 10 \
+  "${local_master_cmd}" \
+  "${remote_user}@${master_ip}:${remote_master_cmd}"
 
 # Copia deployment.csv e deployment.dpl (se existirem)
 if [[ -f "${local_deployment_csv}" ]]; then
