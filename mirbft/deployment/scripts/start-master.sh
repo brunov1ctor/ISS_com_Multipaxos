@@ -52,17 +52,20 @@ echo
 
 echo "Copying master commands and configs to master."
 
+# *** ATENÇÃO ***
+# Aqui é cópia LOCAL -> REMOTO, portanto SEM -i.
+
 # Copia o master-commands.cmd para o master.
-bash "$deployment_dir/scripts/stubborn-scp.sh" 10 -i \
+bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
   "$local_master_cmd" \
   "$master_ip:iss/master-commands.cmd"
 
 # Copia scripts auxiliares necessários no master.
-bash "$deployment_dir/scripts/stubborn-scp.sh" 10 -i \
+bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
   "$deployment_dir/scripts/start-slave.sh" \
   "$master_ip:iss/scripts/start-slave.sh"
 
-bash "$deployment_dir/scripts/stubborn-scp.sh" 10 -i \
+bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
   "$deployment_dir/scripts/stubborn-scp.sh" \
   "$master_ip:iss/scripts/stubborn-scp.sh"
 
@@ -75,9 +78,9 @@ ssh $ssh_options "$master_ip" "mkdir -p '$remote_work_dir/experiment-config'"
 # Caminho padrão: $HOME/iss/experiment-config/config-000X.yml
 local_config_src_dir="$HOME/iss/experiment-config"
 
-# Se existirem configs, copia todas.
+# Se existirem configs, copia todas (também LOCAL -> REMOTO, sem -i).
 if ls "$local_config_src_dir"/config-*.yml >/dev/null 2>&1; then
-  bash "$deployment_dir/scripts/stubborn-scp.sh" 10 -i \
+  bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
     "$local_config_src_dir"/config-*.yml \
     "$master_ip:iss/experiment-config/"
 else
