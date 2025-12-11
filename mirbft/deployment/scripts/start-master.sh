@@ -52,15 +52,12 @@ echo
 
 echo "Copying master commands and configs to master."
 
-# *** ATENÇÃO ***
-# Aqui é cópia LOCAL -> REMOTO, portanto SEM -i.
-
-# Copia o master-commands.cmd para o master.
+# Copia o master-commands.cmd para o master (LOCAL -> REMOTO, sem -i).
 bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
   "$local_master_cmd" \
   "$master_ip:iss/master-commands.cmd"
 
-# Copia scripts auxiliares necessários no master.
+# Copia scripts auxiliares necessários no master (LOCAL -> REMOTO, sem -i).
 bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
   "$deployment_dir/scripts/start-slave.sh" \
   "$master_ip:iss/scripts/start-slave.sh"
@@ -78,15 +75,20 @@ ssh $ssh_options "$master_ip" "mkdir -p '$remote_work_dir/experiment-config'"
 # que coloca os arquivos em: $exp_data_dir/config/config-000X.yml
 local_config_src_dir="$exp_data_dir/config"
 
-# Se existirem configs, copia todas (LOCAL -> REMOTO, sem -i).
-if ls "$local_config_src_dir"/config-*.yml >/dev/null 2>&1; then
-  bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
-    "$local_config_src_dir"/config-*.yml \
-    "$master_ip:iss/experiment-config/"
-else
+# Copia cada config individualmente (LOCAL -> REMOTO, sem -i).
+shopt -s nullglob
+config_files=("$local_config_src_dir"/config-*.yml)
+if (( ${#config_files[@]} == 0 )); then
   echo "WARNING: nenhum arquivo config-XXXX.yml encontrado em $local_config_src_dir; configs não foram copiadas."
+else
+  for cfg in "${config_files[@]}"; do
+    echo "  - Enviando config $(basename "$cfg") para $master_ip..."
+    bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
+      "$cfg" \
+      "$master_ip:iss/experiment-config/"
+  done
 fi
-
+shopt -u nullglob
 
 echo "Done."
 echo
