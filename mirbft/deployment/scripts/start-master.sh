@@ -74,11 +74,11 @@ echo "Copying experiment config files to master."
 # Garante que o diretório de configs exista no master.
 ssh $ssh_options "$master_ip" "mkdir -p '$remote_work_dir/experiment-config'"
 
-# Configs locais gerados pelo generate-local-config.sh.
-# Caminho padrão: $HOME/iss/experiment-config/config-000X.yml
-local_config_src_dir="$HOME/iss/experiment-config"
+# Configs locais geradas pelo generate-config.sh do deploy,
+# que coloca os arquivos em: $exp_data_dir/config/config-000X.yml
+local_config_src_dir="$exp_data_dir/config"
 
-# Se existirem configs, copia todas (também LOCAL -> REMOTO, sem -i).
+# Se existirem configs, copia todas (LOCAL -> REMOTO, sem -i).
 if ls "$local_config_src_dir"/config-*.yml >/dev/null 2>&1; then
   bash "$deployment_dir/scripts/stubborn-scp.sh" 10 \
     "$local_config_src_dir"/config-*.yml \
@@ -86,6 +86,7 @@ if ls "$local_config_src_dir"/config-*.yml >/dev/null 2>&1; then
 else
   echo "WARNING: nenhum arquivo config-XXXX.yml encontrado em $local_config_src_dir; configs não foram copiadas."
 fi
+
 
 echo "Done."
 echo
