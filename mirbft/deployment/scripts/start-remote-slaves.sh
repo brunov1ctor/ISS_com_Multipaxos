@@ -20,10 +20,14 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# 0) Normalizar opções de SSH (sem chave fixa, sem spam)
+# 0) Normalizar opções de SSH
+#    - Se global-vars.sh já definiu ssh_options, usamos ele.
+#    - Caso contrário, usamos um default simples.
 # ---------------------------------------------------------------------------
 
-ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+if [[ -z "${ssh_options:-}" ]]; then
+  ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+fi
 
 # ---------------------------------------------------------------------------
 # 1) Parsing de argumentos
@@ -242,14 +246,15 @@ start_instance_line() {
   local private_ip="${data_ip}"
 
   # Dispara o start-slave.sh no host remoto em background
-  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "
+  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" " \
     cd '${remote_work_dir}/scripts' && \
-    nohup ./start-slave.sh \
+    /usr/bin/nohup bash ./start-slave.sh \
       '${tag}' \
       '${master_ip}' \
       '${public_ip}' \
       '${private_ip}' \
-      > '${remote_work_dir}/logs/slave-${instance_id}.log' 2>&1 &
+      '${remote_exp_dir}' \
+      > '${remote_work_dir}/logs/slave-${instance_id}.log' 2>&1 & \
   " >/dev/null 2>&1 || true
 }
 
