@@ -1,107 +1,113 @@
 #!/bin/bash
-
+#
 # scripts/deploy-remote.sh
 #
-# Remote deployment using instance-info (e.g., Emulab/cluster).
-
-# This script is *sourced* by deploy.sh, which has already:
-#   - sourced scripts/global-vars.sh
-#   - run scripts/initialize-deployment.sh
+# Faz o deploy remoto de um experimento:
+#   - prepara diretório de experimento (deployment-data/remote-XXXX)
+#   - gera comandos do master
+#   - reseta estado das máquinas remotas
+#   - garante que os binários discovery/ordering existem LOCALMENTE
+#   - dispara master (discoverymaster + orderingclient)
+#   - dispara slaves (peers e clients)
+#   - espera término, faz fetch dos resultados e resume.
 #
-# So we assume the following variables are available:
-#   - exp_data_dir
-#   - instance_info_file
-#   - cancel_instances
-#   - remote_private_key_file, remote_status_file, ssh_options,
-#     remote_work_dir, remote_delete_files, local_result_fetching_log, etc.
+# Uso (chamado por deploy.sh):
+#   scripts/deploy-remote.sh <instance_info_file> <new|reuse> <config_generator_script>
 #
-# This script performs:
-#   1) Determine master IP from instance-info.
-#   2) Generate master-commands template and final master-commands.cmd
-#      *inside* $exp_data_dir.
-#   3) Kill any previous runs, prune state on all machines.
-#   4) Reset machine state (traffic shaping, processes, files).
-#   5) Start master remotely (using start-master.sh).
-#   6) Start slaves remotely (peers and clients).
-#   7) Wait for finish, fetch results. (Resumo final é chamado fora.)
+# Exemplo:
+#   scripts/deploy-remote.sh scripts/instance-info new scripts/experiment-configuration/generate-config.sh
+#
 
 set -euo pipefail
 
+# --------------------------------------------------------------------
+# 1) Diretórios básicos
+# --------------------------------------------------------------------
+
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-deployment_dir="$(cd "$this_dir/.." && pwd)"
+deployment_dir="$(cd "${this_dir}/.." && pwd)"
 
-############################################
-# Helper: resolve instance-info path
-############################################
+# Variáveis globais (remote_work_dir, remote_exp_dir, ssh_options, etc.)
+# shellcheck source=/dev/null
+. "${deployment_dir}/scripts/global-vars.sh"
 
-resolve_instance_info() {
-  local base_dir="$1"   # e.g. $exp_data_dir
-  local info_arg="$2"   # e.g. scripts/instance-info
+# --------------------------------------------------------------------
+# 2) Parsing de argumentos
+# --------------------------------------------------------------------
 
-  # If it's an absolute path that exists, use it:
-  if [[ "$info_arg" = /* ]] && [[ -f "$info_arg" ]]; then
-    echo "$info_arg"
-    return 0
-  fi
-
-  # Try relative to repo root and deployment dir
-  local repo_dir
-  repo_dir="$(cd "$deployment_dir/.." && pwd)"
-  local cand1="$repo_dir/$info_arg"
-  local cand2="$deployment_dir/$info_arg"
-
-  if [[ -f "$cand1" ]]; then
-    echo "$cand1"
-    return 0
-  fi
-  if [[ -f "$cand2" ]]; then
-    echo "$cand2"
-    return 0
-  fi
-
-  # Finally, try "as is" (relative to current dir):
-  if [[ -f "$info_arg" ]]; then
-    echo "$info_arg"
-    return 0
-  fi
-
-  # Could not resolve:
-  return 1
-}
-
-############################################
-# 1) Determine master IP from instance-info
-############################################
-
-# exp_data_dir is already set by initialize-deployment.sh
-# instance_info_file is relative to the repository or absolute
-deployment_file="$exp_data_dir/deployment.dpl"
-
-if [[ ! -f "$deployment_file" ]]; then
-  echo "ERROR: Deployment file not found: $deployment_file"
+if [[ $# -ne 3 ]]; then
+  echo "Uso: $0 <instance_info_file> <new|reuse> <config_generator_script>" >&2
   exit 1
 fi
 
-if ! instance_info_file="$(resolve_instance_info "$exp_data_dir" "$instance_info_file")"; then
-  echo "ERROR: Could not find instance-info file '$instance_info_file'."
+instance_info_file_arg="$1"
+mode="$2"          # "new" ou "reuse"
+config_generator_script="$3"
+
+# Resolve instance-info (pode ser relativo ao deployment_dir)
+if [[ "$instance_info_file_arg" = /* && -f "$instance_info_file_arg" ]]; then
+  instance_info_file="$instance_info_file_arg"
+elif [[ -f "${deployment_dir}/${instance_info_file_arg}" ]]; then
+  instance_info_file="${deployment_dir}/${instance_info_file_arg}"
+else
+  instance_info_file="$instance_info_file_arg"
+fi
+
+if [[ ! -f "$instance_info_file" ]]; then
+  echo "ERRO: instance-info não encontrado: $instance_info_file" >&2
   exit 1
 fi
 
-# Grab the first instance marked as "master" or with tag == -1/1client
+# --------------------------------------------------------------------
+# 3) Escolhe / cria diretório de experimento (deployment-data/remote-XXXX)
+# --------------------------------------------------------------------
+
+exp_base_dir="${deployment_dir}/deployment-data"
+mkdir -p "${exp_base_dir}"
+
+if [[ "${mode}" == "new" ]]; then
+  # Encontra o próximo índice remote-0000, remote-0001, ...
+  idx=0
+  while true; do
+    candidate="${exp_base_dir}/remote-$(printf '%04d' "$idx")"
+    if [[ ! -d "$candidate" ]]; then
+      exp_data_dir="$candidate"
+      mkdir -p "$exp_data_dir"
+      break
+    fi
+    idx=$((idx + 1))
+  done
+else
+  # reuse => pega o remote-XXXX mais recente
+  last_dir="$(ls -1d "${exp_base_dir}"/remote-* 2>/dev/null | sort | tail -n 1 || true)"
+  if [[ -z "$last_dir" ]]; then
+    echo "ERRO: modo 'reuse' especificado, mas não há nenhum remote-XXXX em ${exp_base_dir}" >&2
+    exit 1
+  fi
+  exp_data_dir="$last_dir"
+fi
+
+echo "Using experiment data directory: $(basename "$exp_data_dir")"
+echo "Using experiment data directory (full path): $exp_data_dir"
+
+# --------------------------------------------------------------------
+# 4) Determina master_ip a partir do instance-info
+# --------------------------------------------------------------------
+
 master_ip=""
-while read -r tag ctrl_ip data_ip role itag; do
-  [[ -z "$tag" ]] && continue
-  [[ "$tag" =~ ^[[:space:]]*# ]] && continue
 
-  # Heuristic: role "master" OR tag "-1" (for master) or tag "master"
-  if [[ "$role" == "master" || "$tag" == "master" || "$tag" == "-1" ]]; then
+while read -r instance_id ctrl_ip data_ip role tag; do
+  [[ -z "$instance_id" ]] && continue
+  [[ "${instance_id}" =~ ^# ]] && continue
+
+  if [[ "$role" == "master" || "$tag" == "master" || "$instance_id" == "master" ]]; then
     master_ip="$ctrl_ip"
     break
   fi
 done < "$instance_info_file"
 
 if [[ -z "$master_ip" ]]; then
-  echo "ERROR: Could not determine master IP from instance-info '$instance_info_file'."
+  echo "ERRO: não foi possível determinar o master_ip a partir de $instance_info_file" >&2
   exit 1
 fi
 
@@ -110,153 +116,190 @@ echo "       Master IP address: $master_ip"
 echo
 
 # --------------------------------------------------------------------
-# 2) Pre-generate master command script if needed
+# 4.5) Gera configs de experimento (via script passado)
 # --------------------------------------------------------------------
 
-local_master_command_template="master-commands-template.cmd"
-local_master_command_file="master-commands.cmd"
+echo "initialize-deployment.sh: about to generate configs..."
+echo "  exp_data_dir        = $exp_data_dir"
+echo "  config_generator    = $config_generator_script"
+echo
 
-# generate-master-commands.py will read the deployment file and produce
-# a template script (with placeholders) that we then envsubst.
-echo "initialize-deployment.sh: about to generate master commands:"
-echo "  depl_type                     = remote"
-echo "  deployment_file (.dpl)        = $deployment_file"
-echo "  local_master_command_template = $local_master_command_template"
-echo "  output template path          = $exp_data_dir/$local_master_command_template"
+# O script de geração de configs recebe:
+#   <exp_data_dir> <instance_info_file>
+#
+# Ele deve:
+#   - gerar deployment.dpl
+#   - gerar deployment.csv
+#   - gerar arquivos config-XXXX.yml em $exp_data_dir/config
+"${deployment_dir}/${config_generator_script}" "$exp_data_dir" "$instance_info_file"
 
-python3 scripts/generate-master-commands.py \
-  remote \
-  "$deployment_file" \
-  "$exp_data_dir/$local_master_command_template" \
-  "$exp_data_dir"
-rc=$?
-
-echo "initialize-deployment.sh: generate-master-commands.py exit code = $rc"
-if [[ "$rc" -ne 0 ]]; then
-  echo "ERROR: generate-master-commands.py failed with exit code $rc"
-  exit 1
-fi
-
-# --------------------------------------------------------------------
-# 3) Prepare master-commands.cmd locally, substituting placeholders
-# --------------------------------------------------------------------
-
-export ssh_key_file="$remote_private_key_file"
-export own_public_ip="$master_ip"
-export master_port
-export status_file="$remote_status_file"
-
-local_template_path="$exp_data_dir/$local_master_command_template"
-local_cmd_path="$exp_data_dir/$local_master_command_file"
-
-if [ ! -f "$local_template_path" ]; then
-  echo "Using pre-generated master command script at $local_cmd_path."
-  cp "$local_cmd_path" "$local_cmd_path" 2>/dev/null || true
-else
-  envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
-    < "$local_template_path" \
-    > "$local_cmd_path"
-fi
-
-echo "Master command script written to $local_cmd_path."
+echo "Generated configs for experiments."
 echo
 
 # --------------------------------------------------------------------
-# 4) Kill previous runs and prune state on all machines
+# 5) Garante que os binários discovery/ordering existem LOCALMENTE
+#     - discoverymaster, discoveryslave, orderingpeer, orderingclient
+#     - tenta compilar com 'go install ./...' se faltar algo
+# --------------------------------------------------------------------
+
+ensure_local_binaries() {
+  echo
+  echo "Ensuring local discovery/ordering binaries exist."
+
+  # Repo root é um nível acima de deployment_dir (mirbft/)
+  local repo_dir
+  repo_dir="$(cd "$deployment_dir/.." && pwd)"
+
+  if ! command -v go >/dev/null 2>&1; then
+    echo "  [WARN] 'go' não encontrado no PATH; não é possível compilar binários automaticamente."
+    echo "         Instale o Go ou compile os binários manualmente (discoverymaster, discoveryslave, orderingpeer, orderingclient)."
+    return
+  fi
+
+  # GOPATH/bin padrão
+  local gopath_bin
+  gopath_bin="$(go env GOPATH 2>/dev/null)/bin"
+  if [[ -z "$gopath_bin" || "$gopath_bin" == "/bin" ]]; then
+    gopath_bin="$HOME/go/bin"
+  fi
+
+  # Permite override via LOCAL_BIN_DIR
+  if [[ -z "${LOCAL_BIN_DIR:-}" ]]; then
+    LOCAL_BIN_DIR="$gopath_bin"
+  fi
+  export LOCAL_BIN_DIR
+
+  echo "  - Usando LOCAL_BIN_DIR=$LOCAL_BIN_DIR"
+
+  # Verifica presença dos binários
+  local missing=""
+  for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
+    if [[ ! -x "$LOCAL_BIN_DIR/$bin" ]]; then
+      echo "  - Faltando binário: $LOCAL_BIN_DIR/$bin"
+      missing=1
+    else
+      echo "  - Binário OK:       $LOCAL_BIN_DIR/$bin"
+    fi
+  done
+
+  # Se faltar algo, tenta compilar tudo com 'go install ./...'
+  if [[ -n "$missing" ]]; then
+    echo "  - Alguns binários estão faltando. Executando 'go install ./...' em $repo_dir"
+    if (cd "$repo_dir" && go install ./...); then
+      echo "  - 'go install ./...' concluído."
+    else
+      echo "  [WARN] 'go install ./...' falhou; os binários podem continuar faltando."
+    fi
+
+    # Re-checa
+    local still_missing=""
+    for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
+      if [[ ! -x "$LOCAL_BIN_DIR/$bin" ]]; then
+        still_missing=1
+      fi
+    done
+    if [[ -n "$still_missing" ]]; then
+      echo "  [ERROR] Binários necessários ainda estão faltando em $LOCAL_BIN_DIR."
+      echo "          O deploy vai continuar, mas discovery/ordering provavelmente vai falhar."
+    else
+      echo "  - Todos os binários necessários agora existem em $LOCAL_BIN_DIR."
+    fi
+  else
+    echo "  - Todos os binários já estavam presentes."
+  fi
+}
+
+# Garante binários antes de subir master/slaves
+ensure_local_binaries
+echo
+
+# --------------------------------------------------------------------
+# 6) Gera master-commands.cmd a partir de deployment.dpl
+# --------------------------------------------------------------------
+
+deployment_file="${exp_data_dir}/deployment.dpl"
+master_cmd_template="${deployment_dir}/master-commands-template.cmd"
+master_cmd_out="${exp_data_dir}/master-commands.cmd"
+
+echo "initialize-deployment.sh: about to generate master commands:"
+echo "  depl_type                     = remote"
+echo "  deployment_file (.dpl)        = $deployment_file"
+echo "  local_master_command_template = $(basename "$master_cmd_template")"
+echo "  output template path          = $master_cmd_out"
+
+python3 "${deployment_dir}/scripts/generate-master-commands.py" \
+  --deployment "$deployment_file" \
+  --template   "$master_cmd_template" \
+  --output     "$master_cmd_out"
+
+echo "initialize-deployment.sh: generate-master-commands.py exit code = $?"
+echo "Master command script written to $master_cmd_out."
+echo
+
+# --------------------------------------------------------------------
+# 7) Reset de estado nas máquinas remotas (mata processos + limpa lixo)
 # --------------------------------------------------------------------
 
 echo "Limpando processos antigos e removendo possíveis limitações de banda nas máquinas remotas..."
 
-# 4a) Kill any tail/fetch scripts, kill discovery/ordering, remove traffic shaping
-while read -r instance_id ctrl_ip data_ip role itag; do
-  [[ -z "$instance_id" ]] && continue
-  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
-
-  echo "  - [reset-proc] $ctrl_ip: matando processos antigos e removendo traffic shaping..."
-  if ssh $ssh_options "$ctrl_ip" " \
-    pkill -f 'tail -F' 2>/dev/null || true; \
-    pkill -f 'fetch-results.sh' 2>/dev/null || true; \
-    pkill -f 'start-slave.sh' 2>/dev/null || true; \
-    pkill -f discoverymaster 2>/dev/null || true; \
-    pkill -f discoveryslave 2>/dev/null || true; \
-    pkill -f orderingpeer 2>/dev/null || true; \
-    pkill -f orderingclient 2>/dev/null || true; \
-    pkill -f 'scp ' 2>/dev/null || true; \
-    pkill -f rsync 2>/dev/null || true; \
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-  "; then
-    echo "  - [reset-proc] $ctrl_ip: OK."
-  else
-    rc=$?
-    echo "  - [reset-proc] $ctrl_ip: WARNING (ssh exit $rc). Continuando mesmo assim."
-  fi
-done < "$instance_info_file"
-
-echo "Killed continuous analysis scripts."
-echo
-
-# 4b) Reset machine state (processes, files, bandwidth) – mais verboso e tolerante a erro
-while read -r instance_id ctrl_ip data_ip role itag; do
-  [[ -z "$instance_id" ]] && continue
-  [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
-
-  echo "  - [reset-state] $ctrl_ip: removendo shaping, matando processos do experimento e limpando arquivos antigos..."
-  if ssh $ssh_options "$ctrl_ip" " \
-    # Remove traffic shaping (ignore errors).
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-    # Kill previous experiment processes (ignore if not running).
-    killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
-    # Remove old experiment-related files.
-    rm -rf $remote_delete_files 2>/dev/null || true; \
-  "; then
-    echo "  - [reset-state] $ctrl_ip: OK."
-  else
-    rc=$?
-    echo "  - [reset-state] $ctrl_ip: WARNING (ssh exit $rc). Continuando mesmo assim."
-  fi
-done < "$instance_info_file"
+"${deployment_dir}/scripts/reset-remote-procs.sh" "$instance_info_file" "$master_ip"
 
 echo
 echo "Estado das máquinas remotas resetado."
 echo
 
 # --------------------------------------------------------------------
-# 5) Start master
+# 8) Start master (discoverymaster + orderingclient) no nó master
 # --------------------------------------------------------------------
 
 echo "Starting master on $master_ip."
-scripts/start-master.sh "$exp_data_dir" "$master_ip"
 
-# The master is now responsible for starting discovery,
-# generating experiment configs, starting peers/clients, etc.
+"${deployment_dir}/scripts/start-master.sh" \
+  "$exp_data_dir" \
+  "$master_ip"
+
+echo
 
 # --------------------------------------------------------------------
-# 6) Start peer and client slaves
+# 9) Start slaves (peers e 1client) usando start-remote-slaves.sh
 # --------------------------------------------------------------------
 
-# Peers: tag "peers"
-peers_tag="peers"
-echo "Starting peer slaves (tag=$peers_tag)."
-scripts/start-remote-slaves.sh "$exp_data_dir" 5 "$peers_tag" "$instance_info_file"
+num_peers=4      # extraído da deployment.dpl, mas aqui mantemos fixo conforme template
+num_clients=1
 
-# Clients: tag "1client" (single client per experiment)
-clients_tag="1client"
-echo "Starting client slaves (tag=$clients_tag)."
-scripts/start-remote-slaves.sh "$exp_data_dir" 1 "$clients_tag" "$instance_info_file"
+echo "Starting peer slaves (tag=peers)."
+"${deployment_dir}/scripts/start-remote-slaves.sh" \
+  "$exp_data_dir" \
+  "$num_peers" \
+  "peers" \
+  "$instance_info_file"
+
+echo "Starting client slaves (tag=1client)."
+"${deployment_dir}/scripts/start-remote-slaves.sh" \
+  "$exp_data_dir" \
+  "$num_clients" \
+  "1client" \
+  "$instance_info_file"
 
 echo "All slaves started. waiting for them to finish."
 echo "Remote slave deployment finished."
 echo
 
 # --------------------------------------------------------------------
-# 7) Wait for result fetching and (external) summarization
+# 10) Espera término + fetch de resultados
 # --------------------------------------------------------------------
 
 echo "Waiting for deployment process and result fetching to finish."
-echo "For progress on experiment result fetching, see $local_result_fetching_log."
+echo "For progress on experiment result fetching, see result-fetching.log."
 echo "Do not forget to cancel the used virtual servers using"
 echo
-echo "    scripts/cancel-cloud-instances.sh $exp_data_dir/cloud-instance-info"
+echo "    scripts/cancel-cloud-instances.sh ${exp_data_dir}/cloud-instance-info"
 echo
+
+# Aqui assumimos que o master-remote (no master) cuida de rodar os experimentos,
+# gerar tar.gz e que depois vamos rodar fetch-results.sh manualmente.
+# Se quiser automatizar o fetch aqui, pode-se chamar:
+#   ${deployment_dir}/scripts/fetch-results.sh "$master_ip" "$exp_data_dir"
+
 echo "Done. Experiment data directory: $exp_data_dir"
 
