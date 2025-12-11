@@ -23,7 +23,7 @@
 #   4) Reset machine state (traffic shaping, processes, files).
 #   5) Start master remotely (using start-master.sh).
 #   6) Start slaves remotely (peers and clients).
-#   7) Wait for finish, fetch results. (Resumo final é chamado fora.)
+#   7) Wait for finish, fetch results, summarize.
 
 set -euo pipefail
 
@@ -165,15 +165,14 @@ echo
 # 4) Kill previous runs and prune state on all machines
 # --------------------------------------------------------------------
 
-echo "Limpando processos antigos e removendo possíveis limitações de banda nas máquinas remotas..."
+echo "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
 # 4a) Kill any tail/fetch scripts, kill discovery/ordering, remove traffic shaping
 while read -r instance_id ctrl_ip data_ip role itag; do
   [[ -z "$instance_id" ]] && continue
   [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
-  echo "  - [reset-proc] $ctrl_ip: matando processos antigos e removendo traffic shaping..."
-  if ssh $ssh_options "$ctrl_ip" " \
+  ssh $ssh_options "$ctrl_ip" " \
     pkill -f 'tail -F' 2>/dev/null || true; \
     pkill -f 'fetch-results.sh' 2>/dev/null || true; \
     pkill -f 'start-slave.sh' 2>/dev/null || true; \
@@ -184,40 +183,31 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     pkill -f 'scp ' 2>/dev/null || true; \
     pkill -f rsync 2>/dev/null || true; \
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-  "; then
-    echo "  - [reset-proc] $ctrl_ip: OK."
-  else
-    rc=$?
-    echo "  - [reset-proc] $ctrl_ip: WARNING (ssh exit $rc). Continuando mesmo assim."
-  fi
+  " &
 done < "$instance_info_file"
+wait
 
 echo "Killed continuous analysis scripts."
 echo
 
-# 4b) Reset machine state (processes, files, bandwidth) – mais verboso e tolerante a erro
+# 4b) Reset machine state (processes, files, bandwidth)
 while read -r instance_id ctrl_ip data_ip role itag; do
   [[ -z "$instance_id" ]] && continue
   [[ "$instance_id" =~ ^[[:space:]]*# ]] && continue
 
-  echo "  - [reset-state] $ctrl_ip: removendo shaping, matando processos do experimento e limpando arquivos antigos..."
-  if ssh $ssh_options "$ctrl_ip" " \
+  ssh $ssh_options "$ctrl_ip" " \
     # Remove traffic shaping (ignore errors).
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
     # Kill previous experiment processes (ignore if not running).
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
     # Remove old experiment-related files.
     rm -rf $remote_delete_files 2>/dev/null || true; \
-  "; then
-    echo "  - [reset-state] $ctrl_ip: OK."
-  else
-    rc=$?
-    echo "  - [reset-state] $ctrl_ip: WARNING (ssh exit $rc). Continuando mesmo assim."
-  fi
+  " &
 done < "$instance_info_file"
+wait
 
 echo
-echo "Estado das máquinas remotas resetado."
+echo " Reset machine state."
 echo
 
 # --------------------------------------------------------------------
@@ -249,7 +239,7 @@ echo "Remote slave deployment finished."
 echo
 
 # --------------------------------------------------------------------
-# 7) Wait for result fetching and (external) summarization
+# 7) Wait for result fetching and summarization
 # --------------------------------------------------------------------
 
 echo "Waiting for deployment process and result fetching to finish."
@@ -258,5 +248,24 @@ echo "Do not forget to cancel the used virtual servers using"
 echo
 echo "    scripts/cancel-cloud-instances.sh $exp_data_dir/cloud-instance-info"
 echo
+
+# --------------------------------------------------------------------
+# 8) Generate result summary (using analyze/summarize.sh)
+# --------------------------------------------------------------------
+
+echo "Generating result summary."
+
+params_file="$exp_data_dir/experiment-parameters.csv"
+root_dir="$exp_data_dir"
+summarize_script="$deployment_dir/scripts/analyze/summarize.sh"
+
+if [[ -f "$summarize_script" && -f "$params_file" ]]; then
+  "$summarize_script" "$params_file" "$root_dir" > "$exp_data_dir/result-summary.csv"
+  # Mostra o resumo no terminal, como acontecia antes
+  cat "$exp_data_dir/result-summary.csv"
+else
+  echo "WARNING: summarize script ($summarize_script) ou parâmetros ($params_file) não encontrados; pulando resumo."
+fi
+
 echo "Done. Experiment data directory: $exp_data_dir"
 
