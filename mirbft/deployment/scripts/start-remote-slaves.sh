@@ -15,11 +15,15 @@ info(){ echo "[INFO  ][$(ts)] $*"; }
 warn(){ echo "[WARN  ][$(ts)] $*"; }
 err(){  echo "[ERRO  ][$(ts)] $*" >&2; }
 
-# SSH 100% non-interactive e sem travar sessão
+# SSH options (evita travar, sem hostkey prompt, sem multiplex)
 ssh_options="${ssh_options:-}"
-ssh_options="${ssh_options} -T -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR"
-# Em ambiente que reseta muito, isso evita prompt de hostkey:
+ssh_options="${ssh_options} -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1"
+ssh_options="${ssh_options} -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR"
 ssh_options="${ssh_options} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+ssh_options="${ssh_options} -o ControlMaster=no -o ControlPath=none -o ControlPersist=no"
+
+# timeout para o SSH de start (pra nunca “ficar preso”)
+SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12}"  # segundos
 
 if [[ $# -ne 4 ]]; then
   echo "Uso: $0 <exp_data_dir> <ignored_num> <tag> <instance_info_file>" >&2
@@ -81,6 +85,7 @@ info "  remote_bin_dir     = ${remote_bin_dir}"
 info "  remote_exp_dir     = ${remote_exp_dir}"
 info "  local_bin_dir      = ${local_bin_dir}"
 info "  ssh_options        = ${ssh_options}"
+info "  SSH_START_TIMEOUT  = ${SSH_START_TIMEOUT}s"
 info ""
 
 master_ip="$(awk 'NF>=4 && $4=="master" {print $2; exit}' "${instance_info_file}" 2>/dev/null || true)"
@@ -97,7 +102,6 @@ remote_mkdirs() {
     </dev/null
 }
 
-# Mata qualquer processo que esteja segurando os binários (evita Text file busy)
 remote_kill_bins() {
   local ip="$1"
   ssh ${ssh_options} "${remote_user}@${ip}" "\
@@ -108,7 +112,6 @@ remote_kill_bins() {
   " </dev/null || true
 }
 
-# Copia binário de forma segura: manda como .new e faz mv atômico
 copy_bin_atomic() {
   local ip="$1"
   local bin="$2"
@@ -121,7 +124,6 @@ copy_bin_atomic() {
     return 0
   fi
 
-  # limpa tmp remoto
   ssh ${ssh_options} "${remote_user}@${ip}" "rm -f '${remote_tmp}'" </dev/null || true
 
   info "[copy] ${ip}: enviando binário ${bin} (atomic)"
@@ -129,7 +131,6 @@ copy_bin_atomic() {
     "${local_path}" \
     "${remote_user}@${ip}:${remote_tmp}"
 
-  # move pra posição final e ajusta permissão
   ssh ${ssh_options} "${remote_user}@${ip}" "\
     mv -f '${remote_tmp}' '${remote_path}' && chmod +x '${remote_path}'
   " </dev/null
@@ -140,7 +141,6 @@ copy_required_assets() {
 
   remote_mkdirs "$ip"
 
-  # scripts
   bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
     "${this_dir}/start-slave.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/start-slave.sh"
@@ -149,21 +149,17 @@ copy_required_assets() {
     "${this_dir}/stubborn-scp.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
 
-  # garante exec nos scripts
   ssh ${ssh_options} "${remote_user}@${ip}" "\
     chmod +x '${remote_work_dir}/scripts/start-slave.sh' '${remote_work_dir}/scripts/stubborn-scp.sh' 2>/dev/null || true
   " </dev/null || true
 
-  # IMPORTANTÍSSIMO: mata processos antes de mexer em binário
   remote_kill_bins "$ip"
 
-  # binários (atomic)
   copy_bin_atomic "$ip" discoverymaster
   copy_bin_atomic "$ip" discoveryslave
   copy_bin_atomic "$ip" orderingpeer
   copy_bin_atomic "$ip" orderingclient
 
-  # diagnóstico curto
   ssh ${ssh_options} "${remote_user}@${ip}" "\
     echo '[remote-check] scripts:'; ls -la '${remote_work_dir}/scripts' | head -n 60; \
     echo '[remote-check] bins:'; ls -la '${remote_bin_dir}' | head -n 60; \
@@ -187,18 +183,28 @@ start_remote_slave() {
     return 0
   fi
 
-  # Inicia e garante retorno 0 (evita “parece travado”)
+  # comando remoto: sobe e sai
+  local remote_cmd
   remote_cmd="cd '${remote_work_dir}/scripts' && \
 /usr/bin/nohup bash ./start-slave.sh \
 '${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \
 > '${remote_work_dir}/logs/slave-${instance_id}.log' 2>&1 < /dev/null & \
-disown || true; echo STARTED; exit 0"
+echo STARTED; exit 0"
 
   info "[ssh] ${ctrl_ip}: ${remote_cmd}"
-  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "${remote_cmd}" </dev/null || {
-    err "SSH falhou ao disparar slave ${instance_id} em ${ctrl_ip}."
+
+  # IMPORTANT: nunca trava aqui. Se timeout acontecer, mas tiver STARTED, consideramos OK.
+  local out=""
+  out="$( (timeout "${SSH_START_TIMEOUT}" ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "${remote_cmd}" </dev/null) 2>&1 || true )"
+
+  if echo "${out}" | grep -q "STARTED"; then
+    echo "${out}"
     return 0
-  }
+  fi
+
+  err "Falha ao disparar slave ${instance_id} em ${ctrl_ip}. Saída:"
+  echo "${out}" >&2
+  return 0
 }
 
 total=0
