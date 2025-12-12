@@ -19,30 +19,79 @@ else
 fi
 
 # --------------------------------------------------------------------
-# Suporte ao modo "new":
-#   ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
-#
-# Aqui:
-#   - Escolhemos um diretório do tipo deployment-data/remote-0000
-#   - Rodamos o generate-config.sh nesse diretório
-#   - Removemos "new <script>" dos argumentos antes de chamar initialize-deployment.sh,
-#     MAS mantendo o exp_data_dir como 3º argumento.
+# Logging helpers
 # --------------------------------------------------------------------
-if [ "$1" = "remote" ] && [ "$3" = "new" ]; then
-  depl_type="$1"
-  instance_info_file="$2"
-  new_flag="$3"
-  config_gen_script="$4"
+ts() { date +"%Y-%m-%d %H:%M:%S"; }
+log_info() { echo "[INFO  ][$(ts)] $*"; }
+log_warn() { echo "[WARN  ][$(ts)] $*" >&2; }
+log_err()  { echo "[ERROR ][$(ts)] $*" >&2; }
 
-  # Se o script não vier no 4º argumento, usa um default.
-  if [ -z "$config_gen_script" ]; then
-    config_gen_script="scripts/experiment-configuration/generate-config.sh"
+# --------------------------------------------------------------------
+# SSH known_hosts preflight (evita "Host key verification failed")
+# - Remove entradas antigas do known_hosts para IPs do instance-info
+# - Faz ssh-keyscan para pré-popular novas chaves
+# --------------------------------------------------------------------
+ssh_known_hosts_preflight() {
+  local inst_file="$1"
+  local known_hosts_file="${HOME}/.ssh/known_hosts"
+
+  if [[ -z "${inst_file:-}" ]]; then
+    log_warn "SSH preflight: instance-info vazio/não definido (pulando)"
+    return 0
   fi
 
-  # Escolhe um diretório deployment-data/remote-XXXX ainda não usado.
+  if [[ ! -f "$inst_file" ]]; then
+    log_warn "SSH preflight: instance-info não encontrado: $inst_file (pulando)"
+    return 0
+  fi
+
+  mkdir -p "${HOME}/.ssh"
+  touch "$known_hosts_file"
+  chmod 600 "$known_hosts_file" 2>/dev/null || true
+
+  log_info "SSH preflight: atualizando known_hosts usando: $inst_file"
+
+  # lista IPs (ctrl_ip e data_ip) únicos
+  local ips
+  ips="$(awk 'NF>=3 {print $2"\n"$3}' "$inst_file" | sort -u | tr '\n' ' ')"
+  log_info "SSH preflight: IPs detectados: ${ips}"
+
+  awk 'NF>=3 {print $2"\n"$3}' "$inst_file" | sort -u | while read -r ip; do
+    [[ -n "$ip" ]] || continue
+
+    # Remove entradas antigas (se houver)
+    ssh-keygen -R "$ip" >/dev/null 2>&1 || true
+
+    # Pré-carrega host key atual (não falha se host ainda não estiver pronto)
+    if ssh-keyscan -T 5 -H "$ip" >> "$known_hosts_file" 2>/dev/null; then
+      log_info "SSH preflight: hostkey registrada para $ip"
+    else
+      log_warn "SSH preflight: não consegui ssh-keyscan em $ip (host pode não estar acessível ainda)."
+    fi
+  done
+
+  log_info "SSH preflight: concluído."
+}
+
+# --------------------------------------------------------------------
+# Suporte ao modo "new":
+#   ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
+# Neste modo, cria automaticamente o próximo deployment-data/<type>-XXXX e gera configs.
+# --------------------------------------------------------------------
+depl_type="$1"
+instance_info_file="$2"
+
+if [ "$3" = "new" ]; then
+  config_gen_script="$4"
+  if [ ! -x "$config_gen_script" ]; then
+    echo "ERROR: script de geração de config não encontrado ou não executável: $config_gen_script"
+    exit 1
+  fi
+
+  # Busca próximo diretório disponível
   exp_index=0
-  while :; do
-    candidate=$(printf "%s/remote-%04d" "$deployment_data_root" "$exp_index")
+  while true; do
+    candidate="$deployment_data_root/${depl_type}-$(printf "%04d" "$exp_index")"
     if [ ! -d "$candidate" ]; then
       exp_data_dir="$candidate"
       break
@@ -52,7 +101,7 @@ if [ "$1" = "remote" ] && [ "$3" = "new" ]; then
 
   mkdir -p "$exp_data_dir"
 
-  echo "Using experiment data directory: $exp_data_dir"
+  log_info "Using experiment data directory: $exp_data_dir"
   # exp_id_offset = 0 (primeiro experimento)
   "$config_gen_script" "$exp_data_dir" 0
   if [ $? -ne 0 ]; then
@@ -75,35 +124,47 @@ fi
 # --------------------------------------------------------------------
 source scripts/initialize-deployment.sh
 
+# Preflight SSH/known_hosts para evitar falhas de verificação de hostkey em ambientes efêmeros (Emulab/cloud)
+ssh_known_hosts_preflight "$instance_info_file"
+
 # --------------------------------------------------------------------
 # Se for só inicialização (-i), sai aqui.
 # --------------------------------------------------------------------
 if $init_only; then
-  echo "Init only. Experiment directory: $exp_data_dir"
   exit 0
 fi
 
 # --------------------------------------------------------------------
-# Inicia de fato o deployment (local / cloud / remote)
+# Reset (remote/local): mata processos antigos e limpa estado.
 # --------------------------------------------------------------------
-if [ "$depl_type" = "local" ]; then
-  source scripts/deploy-local.sh
-elif [ "$depl_type" = "cloud" ]; then
-  source scripts/deploy-cloud.sh
-elif [ "$depl_type" = "remote" ]; then
-  source scripts/deploy-remote.sh
+if [ "$depl_type" = "remote" ]; then
+  echo
+  echo "Limpando processos antigos e removendo possíveis limitações de banda nas máquinas remotas..."
+  scripts/reset-proc-cloud.sh "$instance_info_file" || true
+
+  echo
+  scripts/reset-state-cloud.sh "$instance_info_file"
+
+  echo
+  echo "Estado das máquinas remotas resetado."
+elif [ "$depl_type" = "local" ]; then
+  scripts/reset-state-local.sh
 else
-  >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
+  echo "ERROR: tipo de deployment desconhecido: $depl_type"
+  exit 1
 fi
 
 # --------------------------------------------------------------------
-# Geração do resumo dos resultados
+# Executa deploy remoto/local (start master + start slaves + wait + fetch).
 # --------------------------------------------------------------------
-echo "Generating result summary."
-scripts/analyze/summarize.sh \
-  "$exp_data_dir/$csv_filename" \
-  "$exp_data_dir/experiment-output" 2> /dev/null \
-  | tee "$exp_data_dir/$result_summary_file"
+if [ "$depl_type" = "remote" ]; then
+  scripts/deploy-remote.sh "$instance_info_file" "$exp_data_dir"
+else
+  scripts/deploy-local.sh "$exp_data_dir"
+fi
 
-echo "Done. Experiment data directory: $exp_data_dir"
+# --------------------------------------------------------------------
+# Gera summary no final (caso exista).
+# --------------------------------------------------------------------
+scripts/result-summary.sh "$exp_data_dir"
 
