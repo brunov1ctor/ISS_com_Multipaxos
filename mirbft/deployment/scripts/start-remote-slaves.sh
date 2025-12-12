@@ -10,10 +10,15 @@ if [[ -f "${this_dir}/global-vars.sh" ]]; then
   source "${this_dir}/global-vars.sh"
 fi
 
-# SSH SEM INTERAÇÃO (evita travas)
-ssh_options="${ssh_options:-} -T -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR"
-# Se você quiser manter known_hosts real, remova as duas opções abaixo.
-# Eu mantenho aqui para ambiente “reseta muito”.
+ts() { date +"%Y-%m-%d %H:%M:%S"; }
+info(){ echo "[INFO  ][$(ts)] $*"; }
+warn(){ echo "[WARN  ][$(ts)] $*"; }
+err(){  echo "[ERRO  ][$(ts)] $*" >&2; }
+
+# SSH 100% non-interactive e sem travar sessão
+ssh_options="${ssh_options:-}"
+ssh_options="${ssh_options} -T -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR"
+# Em ambiente que reseta muito, isso evita prompt de hostkey:
 ssh_options="${ssh_options} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 if [[ $# -ne 4 ]]; then
@@ -25,11 +30,6 @@ exp_data_dir_arg="$1"
 ignored_num="$2"
 wanted_tag="$3"
 instance_info_arg="$4"
-
-ts() { date +"%Y-%m-%d %H:%M:%S"; }
-info(){ echo "[INFO  ][$(ts)] $*"; }
-warn(){ echo "[WARN  ][$(ts)] $*"; }
-err(){  echo "[ERRO  ][$(ts)] $*" >&2; }
 
 resolve_exp_dir() {
   local exp_arg="$1"
@@ -97,6 +97,44 @@ remote_mkdirs() {
     </dev/null
 }
 
+# Mata qualquer processo que esteja segurando os binários (evita Text file busy)
+remote_kill_bins() {
+  local ip="$1"
+  ssh ${ssh_options} "${remote_user}@${ip}" "\
+    for p in discoverymaster discoveryslave orderingpeer orderingclient; do
+      pkill -9 -f \"${remote_bin_dir}/\$p\" 2>/dev/null || true
+      pkill -9 -f \"\\b\$p\\b\" 2>/dev/null || true
+    done
+  " </dev/null || true
+}
+
+# Copia binário de forma segura: manda como .new e faz mv atômico
+copy_bin_atomic() {
+  local ip="$1"
+  local bin="$2"
+  local local_path="${local_bin_dir}/${bin}"
+  local remote_path="${remote_bin_dir}/${bin}"
+  local remote_tmp="${remote_bin_dir}/${bin}.new"
+
+  if [[ ! -f "${local_path}" ]]; then
+    warn "[copy] binário NÃO encontrado localmente: ${local_path}"
+    return 0
+  fi
+
+  # limpa tmp remoto
+  ssh ${ssh_options} "${remote_user}@${ip}" "rm -f '${remote_tmp}'" </dev/null || true
+
+  info "[copy] ${ip}: enviando binário ${bin} (atomic)"
+  bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
+    "${local_path}" \
+    "${remote_user}@${ip}:${remote_tmp}"
+
+  # move pra posição final e ajusta permissão
+  ssh ${ssh_options} "${remote_user}@${ip}" "\
+    mv -f '${remote_tmp}' '${remote_path}' && chmod +x '${remote_path}'
+  " </dev/null
+}
+
 copy_required_assets() {
   local ip="$1"
 
@@ -111,34 +149,24 @@ copy_required_assets() {
     "${this_dir}/stubborn-scp.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
 
-  # binários
-  for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
-    if [[ -f "${local_bin_dir}/${bin}" ]]; then
-      info "[copy] ${ip}: enviando binário ${bin}"
-      bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
-        "${local_bin_dir}/${bin}" \
-        "${remote_user}@${ip}:${remote_bin_dir}/${bin}"
-    else
-      warn "[copy] binário NÃO encontrado localmente: ${local_bin_dir}/${bin}"
-    fi
-  done
-
-  # chmod + diagnóstico simples (sem loops remotos)
+  # garante exec nos scripts
   ssh ${ssh_options} "${remote_user}@${ip}" "\
-    chmod +x \
-      '${remote_work_dir}/scripts/start-slave.sh' \
-      '${remote_work_dir}/scripts/stubborn-scp.sh' \
-      '${remote_bin_dir}/discoverymaster' \
-      '${remote_bin_dir}/discoveryslave' \
-      '${remote_bin_dir}/orderingpeer' \
-      '${remote_bin_dir}/orderingclient' \
-    2>/dev/null || true; \
-    echo '[remote-check] scripts:'; ls -la '${remote_work_dir}/scripts' | head -n 50; \
-    echo '[remote-check] bins:'; ls -la '${remote_bin_dir}' | head -n 50; \
-  " </dev/null
+    chmod +x '${remote_work_dir}/scripts/start-slave.sh' '${remote_work_dir}/scripts/stubborn-scp.sh' 2>/dev/null || true
+  " </dev/null || true
 
-  # validação: comando único e direto
+  # IMPORTANTÍSSIMO: mata processos antes de mexer em binário
+  remote_kill_bins "$ip"
+
+  # binários (atomic)
+  copy_bin_atomic "$ip" discoverymaster
+  copy_bin_atomic "$ip" discoveryslave
+  copy_bin_atomic "$ip" orderingpeer
+  copy_bin_atomic "$ip" orderingclient
+
+  # diagnóstico curto
   ssh ${ssh_options} "${remote_user}@${ip}" "\
+    echo '[remote-check] scripts:'; ls -la '${remote_work_dir}/scripts' | head -n 60; \
+    echo '[remote-check] bins:'; ls -la '${remote_bin_dir}' | head -n 60; \
     test -x '${remote_bin_dir}/discoverymaster' && \
     test -x '${remote_bin_dir}/discoveryslave' && \
     test -x '${remote_bin_dir}/orderingpeer' && \
@@ -159,18 +187,18 @@ start_remote_slave() {
     return 0
   fi
 
-  # Comando bem explícito e logável
+  # Inicia e garante retorno 0 (evita “parece travado”)
   remote_cmd="cd '${remote_work_dir}/scripts' && \
 /usr/bin/nohup bash ./start-slave.sh \
 '${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \
-> '${remote_work_dir}/logs/slave-${instance_id}.log' 2>&1 & echo STARTED"
+> '${remote_work_dir}/logs/slave-${instance_id}.log' 2>&1 < /dev/null & \
+disown || true; echo STARTED; exit 0"
 
   info "[ssh] ${ctrl_ip}: ${remote_cmd}"
-
-  if ! ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "${remote_cmd}" </dev/null; then
+  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "${remote_cmd}" </dev/null || {
     err "SSH falhou ao disparar slave ${instance_id} em ${ctrl_ip}."
     return 0
-  fi
+  }
 }
 
 total=0
