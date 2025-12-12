@@ -1,17 +1,10 @@
 #!/bin/bash
-#
-# start-remote-slaves.sh
-#
-# Uso:
-#   scripts/start-remote-slaves.sh <exp_data_dir> <ignored_num> <tag> <instance_info_file>
-#
 set -euo pipefail
 
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 deployment_dir="$(cd "${this_dir}/.." && pwd)"
 repo_dir="$(cd "${deployment_dir}/.." && pwd)"
 
-# global-vars pode definir: ssh_options, remote_user, remote_work_dir, etc.
 if [[ -f "${this_dir}/global-vars.sh" ]]; then
   # shellcheck source=/dev/null
   source "${this_dir}/global-vars.sh"
@@ -27,7 +20,7 @@ if [[ $# -ne 4 ]]; then
 fi
 
 exp_data_dir_arg="$1"
-ignored_num="$2"   # compat, não usado
+ignored_num="$2"
 wanted_tag="$3"
 instance_info_arg="$4"
 
@@ -72,9 +65,7 @@ remote_bin_dir="${remote_bin_dir:-${remote_gopath}/bin}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
 
-# local bin dir correto (onde você compila no node-0)
 local_bin_dir="${LOCAL_BIN_DIR:-${GOBIN:-${GOPATH:-$HOME/go}/bin}}"
-
 scp_retries="${SCP_RETRIES:-10}"
 
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] ==== [start-remote-slaves] Contexto ====="
@@ -88,7 +79,6 @@ echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   remote_exp_dir     = ${remote_exp
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")]   local_bin_dir      = ${local_bin_dir}"
 echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] "
 
-# Descobre master_ip
 master_ip="$(awk 'NF>=4 && $4=="master" {print $2; exit}' "${instance_info_file}" 2>/dev/null || true)"
 if [[ -z "${master_ip:-}" ]]; then
   echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Não consegui detectar master_ip em ${instance_info_file}" >&2
@@ -99,12 +89,11 @@ echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] [start-remote-slaves] master_ip = $
 copy_required_assets() {
   local ctrl_ip="$1"
 
-  # diretórios remotos
   ssh ${ssh_options} "${remote_user}@${ctrl_ip}" \
     "mkdir -p '${remote_work_dir}/scripts' '${remote_work_dir}/logs' '${remote_exp_dir}' '${remote_bin_dir}'" \
     </dev/null || true
 
-  # copia scripts (ARQUIVO A ARQUIVO — evita cair em subdir)
+  # scripts (arquivo a arquivo)
   bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
     "${this_dir}/start-slave.sh" \
     "${remote_user}@${ctrl_ip}:${remote_work_dir}/scripts/start-slave.sh"
@@ -113,9 +102,9 @@ copy_required_assets() {
     "${this_dir}/stubborn-scp.sh" \
     "${remote_user}@${ctrl_ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
 
-  # copia binários (se existirem localmente)
+  # binários
   for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
-    if [[ -x "${local_bin_dir}/${bin}" ]]; then
+    if [[ -f "${local_bin_dir}/${bin}" ]]; then
       echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] [copy] ${ctrl_ip}: enviando binário ${bin}"
       bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
         "${local_bin_dir}/${bin}" \
@@ -125,10 +114,28 @@ copy_required_assets() {
     fi
   done
 
-  # sanity check remoto
-  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" \
-    "ls -la '${remote_work_dir}/scripts' && ls -la '${remote_bin_dir}' | head -n 50" \
-    </dev/null || true
+  # ✅ PATCH CRÍTICO: marcar binários como executáveis no remoto
+  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "\
+    chmod +x \
+      '${remote_work_dir}/scripts/start-slave.sh' \
+      '${remote_work_dir}/scripts/stubborn-scp.sh' \
+      '${remote_bin_dir}/discoverymaster' \
+      '${remote_bin_dir}/discoveryslave' \
+      '${remote_bin_dir}/orderingpeer' \
+      '${remote_bin_dir}/orderingclient' \
+    2>/dev/null || true; \
+    echo '[remote-check] scripts:'; ls -la '${remote_work_dir}/scripts'; \
+    echo '[remote-check] bins:'; ls -la '${remote_bin_dir}' | head -n 50; \
+  " </dev/null || true
+
+  # Se ainda não ficou executável, aborta este host com mensagem clara
+  ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "\
+    for b in discoverymaster discoveryslave orderingpeer orderingclient; do \
+      if [[ ! -x '${remote_bin_dir}/'\$b ]]; then \
+        echo 'ERRO: binário não executável: ${remote_bin_dir}/'\$b; exit 9; \
+      fi; \
+    done \
+  " </dev/null
 }
 
 start_remote_slave() {
@@ -139,14 +146,13 @@ start_remote_slave() {
 
   echo "[INFO  ][$(date +"%Y-%m-%d %H:%M:%S")] [start-remote-slaves] Iniciando ${instance_id} (${tag}) @ ${ctrl_ip}"
 
-  copy_required_assets "${ctrl_ip}"
+  # se falhar aqui, para só esse node com erro claro
+  if ! copy_required_assets "${ctrl_ip}"; then
+    echo "[ERRO  ][$(date +"%Y-%m-%d %H:%M:%S")] Falha ao preparar assets no host ${ctrl_ip} (node ${instance_id})." >&2
+    return 0
+  fi
 
-  # garante executável + roda
   ssh ${ssh_options} "${remote_user}@${ctrl_ip}" " \
-    chmod +x '${remote_work_dir}/scripts/start-slave.sh' '${remote_work_dir}/scripts/stubborn-scp.sh' || true; \
-    if [[ ! -f '${remote_work_dir}/scripts/start-slave.sh' ]]; then \
-      echo 'ERRO: start-slave.sh não existe em ${remote_work_dir}/scripts'; exit 2; \
-    fi; \
     cd '${remote_work_dir}/scripts' && \
     /usr/bin/nohup bash ./start-slave.sh \
       '${tag}' \
@@ -166,7 +172,6 @@ while read -r instance_id ctrl_ip data_ip role tag; do
   [[ -z "${instance_id:-}" ]] && continue
   [[ "${instance_id}" =~ ^# ]] && continue
 
-  # Só inicia os da tag pedida
   if [[ "${tag}" != "${wanted_tag}" ]]; then
     continue
   fi
