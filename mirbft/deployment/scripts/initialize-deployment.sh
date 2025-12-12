@@ -5,6 +5,8 @@
 # Shared deployment initialization logic, reused by deploy.sh for local,
 # cloud, and remote deployments.
 
+set -euo pipefail
+
 # Load global variables shared by all deployment scripts.
 source scripts/global-vars.sh
 
@@ -34,23 +36,29 @@ usage() {
   exit 1
 }
 
+log_info() {
+  echo "[initialize-deployment] $*"
+}
+
 # --------------------------------------------------------------------
 # Parse first argument: deployment type
 # --------------------------------------------------------------------
-if [ -z "$1" ]; then
+if [ -z "${1:-}" ]; then
   usage
 fi
 
 depl_type="$1"
-shift
+shift || true
+
+log_info "depl_type = ${depl_type}"
 
 case "$depl_type" in
   local)
     # Local deployment:
     #   deploy.sh local new <config-generator>
     new_experiment=true
-    if [ "$1" = "new" ]; then
-      shift
+    if [ "${1:-}" = "new" ]; then
+      shift || true
       new_experiment=true
     else
       new_experiment=false
@@ -59,17 +67,17 @@ case "$depl_type" in
     if $new_experiment; then
       exp_data_dir="deployment-data/local-0000"
     else
-      if [ -z "$1" ]; then
+      if [ -z "${1:-}" ]; then
         >&2 echo "initialize-deployment.sh: local deployment requires existing experiment data dir or 'new'"
         exit 1
       fi
       exp_data_dir="$1"
-      shift
+      shift || true
     fi
 
-    if [ -n "$1" ]; then
+    if [ -n "${1:-}" ]; then
       configuration_generator_script="$1"
-      shift
+      shift || true
     fi
 
     instance_info_file=""
@@ -79,30 +87,30 @@ case "$depl_type" in
   cloud)
     # Cloud deployment:
     #   deploy.sh cloud <cloud-instance-info> new <config-generator>
-    if [ -z "$1" ]; then
+    if [ -z "${1:-}" ]; then
       >&2 echo "initialize-deployment.sh: cloud deployment requires cloud-instance-info file path"
       exit 1
     fi
     instance_info_file="$1"
-    shift
+    shift || true
 
-    if [ "$1" = "new" ]; then
-      shift
+    if [ "${1:-}" = "new" ]; then
+      shift || true
       new_experiment=true
       exp_data_dir="deployment-data/cloud-0000"
     else
       new_experiment=false
-      if [ -z "$1" ]; then
+      if [ -z "${1:-}" ]; then
         >&2 echo "initialize-deployment.sh: cloud deployment requires existing experiment data dir or 'new'"
         exit 1
       fi
       exp_data_dir="$1"
-      shift
+      shift || true
     fi
 
-    if [ -n "$1" ]; then
+    if [ -n "${1:-}" ]; then
       configuration_generator_script="$1"
-      shift
+      shift || true
     fi
 
     cancel_instances=true
@@ -111,30 +119,30 @@ case "$depl_type" in
   remote)
     # Remote (Emulab/cluster) deployment:
     #   deploy.sh remote <instance-info> new <config-generator>
-    if [ -z "$1" ]; then
+    if [ -z "${1:-}" ]; then
       >&2 echo "initialize-deployment.sh: remote deployment requires instance-info file path"
       exit 1
     fi
     instance_info_file="$1"
-    shift
+    shift || true
 
-    if [ "$1" = "new" ]; then
-      shift
+    if [ "${1:-}" = "new" ]; then
+      shift || true
       new_experiment=true
       exp_data_dir="deployment-data/remote-0000"
     else
       new_experiment=false
-      if [ -z "$1" ]; then
+      if [ -z "${1:-}" ]; then
         >&2 echo "initialize-deployment.sh: remote deployment requires existing experiment data dir or 'new'"
         exit 1
       fi
       exp_data_dir="$1"
-      shift
+      shift || true
     fi
 
-    if [ -n "$1" ]; then
+    if [ -n "${1:-}" ]; then
       configuration_generator_script="$1"
-      shift
+      shift || true
     fi
 
     cancel_instances=false
@@ -145,6 +153,11 @@ case "$depl_type" in
     exit 1
     ;;
 esac
+
+log_info "instance_info_file = ${instance_info_file:-<none>}"
+log_info "new_experiment      = ${new_experiment}"
+log_info "exp_data_dir        = ${exp_data_dir}"
+log_info "config_gen_script   = ${configuration_generator_script:-<none>}"
 
 # --------------------------------------------------------------------
 # Setup experiment directory
@@ -170,18 +183,19 @@ fi
 # Determine exp_id_offset if old deployment file exists
 # --------------------------------------------------------------------
 if [ -f "$deployment_file" ]; then
-  # Last "run" line in deployment file
-  last_line=$(grep '^run ' "$deployment_file" | tail -n 1)
-  if [ -n "$last_line" ]; then
-    # Format: run <id> ...
+  last_line=$(grep '^run ' "$deployment_file" | tail -n 1 || true)
+  if [ -n "${last_line:-}" ]; then
     expID=$(echo "$last_line" | awk '{print $2}')
-    if [ -n "$expID" ]; then
+    if [ -n "${expID:-}" ]; then
       exp_id_offset=$((expID + 1))
     fi
   fi
 else
   exp_id_offset=0
 fi
+
+log_info "deployment_file     = ${deployment_file}"
+log_info "exp_id_offset       = ${exp_id_offset}"
 
 # --------------------------------------------------------------------
 # Export variables so deploy.sh and other scripts can use them
