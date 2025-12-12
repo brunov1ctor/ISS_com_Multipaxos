@@ -1,15 +1,4 @@
 #!/bin/bash
-
-# scripts/fetch-results.sh (VERSÃO EMULAB / MULTIPAXOS)
-#
-# Uso (execução direta):
-#   scripts/fetch-results.sh <master_ip> <exp_dir>
-#
-# Uso (quando chamado via source pelo deploy.sh):
-#   - usa MASTER_IP (se existir)
-#   - senão tenta inferir master_ip do instance_info_file
-#   - usa exp_data_dir como exp_dir (se existir)
-#
 set -euo pipefail
 
 source scripts/global-vars.sh
@@ -17,16 +6,13 @@ source scripts/global-vars.sh
 master_ip="${1:-${MASTER_IP:-}}"
 exp_dir="${2:-${exp_data_dir:-}}"
 
-# Se não veio master_ip, tenta descobrir via instance-info (linha com role=master)
 if [[ -z "${master_ip}" && -n "${instance_info_file:-}" && -f "${instance_info_file}" ]]; then
   master_ip="$(awk 'NF>=4 && $4=="master" {print $2; exit}' "${instance_info_file}" 2>/dev/null || true)"
 fi
 
 if [[ -z "${master_ip}" || -z "${exp_dir}" ]]; then
   echo "ERRO: fetch-results.sh precisa de master_ip e exp_dir." >&2
-  echo "  - master_ip (arg1 ou MASTER_IP) = '${master_ip:-}'" >&2
-  echo "  - exp_dir   (arg2 ou exp_data_dir) = '${exp_dir:-}'" >&2
-  echo "Uso (execução direta): $0 <master_ip> <exp_dir>" >&2
+  echo "  master_ip='${master_ip:-}' exp_dir='${exp_dir:-}' instance_info_file='${instance_info_file:-}'" >&2
   exit 1
 fi
 
@@ -37,54 +23,82 @@ echo "[INFO] remote_user=${remote_user} remote_work_dir=${remote_work_dir}"
 echo
 
 # --------------------------------------------------------------------
-# 1) Tenta baixar .tar.gz (padrão ISS).
+# 0) Diagnóstico rápido no master (não falha o script)
 # --------------------------------------------------------------------
-
-tar_glob="experiment-output-*.tar.gz"
-found_tar=false
-
-echo "[INFO] Tentando baixar arquivos $tar_glob do master (padrão ISS)..."
-
-if rsync -rtz --progress -e "ssh $ssh_options" \
-  "${remote_user}@${master_ip}:${remote_work_dir}/$tar_glob" \
-  "$exp_dir/"; then
-  found_tar=true
-else
-  echo "[WARN] Não foi possível baixar $tar_glob do master (pode não existir ainda)."
-fi
-
+echo "[INFO] Diagnóstico no master: listando dirs e procurando outputs..."
+ssh $ssh_options "${remote_user}@${master_ip}" "
+  set -e;
+  echo '--- /users/Bruno/iss ---';
+  ls -la '${remote_work_dir}' || true;
+  echo '--- logs ---';
+  ls -la '${remote_work_dir}/logs' 2>/dev/null || true;
+  echo '--- find experiment-output* (depth 4) ---';
+  find '${remote_work_dir}' -maxdepth 4 -type d -name 'experiment-output' -o -type f -name 'experiment-output-*.tar.gz' 2>/dev/null | head -n 80 || true;
+" </dev/null || true
 echo
 
 # --------------------------------------------------------------------
-# 2) Fallback: copia experiment-output direto de cada slave via rsync
+# 1) Busca .tar.gz em múltiplos paths prováveis no master
 # --------------------------------------------------------------------
+tar_paths=(
+  "${remote_work_dir}/experiment-output-*.tar.gz"
+  "${remote_work_dir}/current-deployment-data/experiment-output-*.tar.gz"
+  "${remote_work_dir}/current-deployment-data/**/experiment-output-*.tar.gz"
+)
+
+found_tar=false
+for pat in "${tar_paths[@]}"; do
+  echo "[INFO] Tentando baixar tar(s) do master: ${pat}"
+  if rsync -rtz --progress -e "ssh $ssh_options" \
+      "${remote_user}@${master_ip}:${pat}" \
+      "$exp_dir/" ; then
+    found_tar=true
+  else
+    echo "[WARN] Não encontrei nesse path: ${pat}"
+  fi
+  echo
+done
+
+# --------------------------------------------------------------------
+# 2) Fallback: tenta baixar diretórios experiment-output de master e slaves
+# --------------------------------------------------------------------
+dir_paths=(
+  "${remote_work_dir}/experiment-output/"
+  "${remote_work_dir}/current-deployment-data/experiment-output/"
+  "${remote_work_dir}/current-deployment-data/**/experiment-output/"
+)
 
 if [[ "$found_tar" != "true" ]]; then
-  echo "[INFO] Fallback: baixando ${remote_work_dir}/experiment-output de cada slave via rsync..."
-  echo "[INFO] instance_info_file=${instance_info_file:-<none>}"
+  echo "[INFO] Nenhum tar encontrado. Fallback: tentando rsync de diretórios experiment-output..."
+  echo
+
+  echo "[INFO] Tentando no master primeiro..."
+  for dpat in "${dir_paths[@]}"; do
+    echo "[INFO] - master dir: ${dpat}"
+    rsync -rtz --progress -e "ssh $ssh_options" \
+      "${remote_user}@${master_ip}:${dpat}" \
+      "$exp_dir/experiment-output/" || true
+  done
   echo
 
   if [[ -z "${instance_info_file:-}" || ! -f "${instance_info_file:-}" ]]; then
-    echo "[ERRO] instance_info_file não definido ou não encontrado; não dá para fazer fallback." >&2
+    echo "[ERRO] instance_info_file não definido/encontrado; não dá para varrer slaves." >&2
     exit 1
   fi
 
   while read -r instance_id ctrl_ip data_ip role tag; do
     [[ -z "${instance_id:-}" ]] && continue
     [[ "${instance_id:-}" =~ ^# ]] && continue
+    [[ "${role:-}" != "slave" ]] && continue
 
-    if [[ "${role:-}" != "slave" ]]; then
-      continue
-    fi
-
-    echo "[INFO] - slave ${instance_id} (${tag}) @ ${ctrl_ip}: rsync experiment-output ..."
-    rsync -rtz --progress -e "ssh $ssh_options" \
-      "${remote_user}@${ctrl_ip}:${remote_work_dir}/experiment-output/" \
-      "$exp_dir/experiment-output/" || true
+    echo "[INFO] - slave ${instance_id} (${tag}) @ ${ctrl_ip}: tentando dirs..."
+    for dpat in "${dir_paths[@]}"; do
+      rsync -rtz --progress -e "ssh $ssh_options" \
+        "${remote_user}@${ctrl_ip}:${dpat}" \
+        "$exp_dir/experiment-output/" || true
+    done
+    echo
   done < "${instance_info_file}"
-
-  echo
-  echo "[INFO] Fallback concluído."
 fi
 
 echo "[INFO] fetch-results finalizado."
