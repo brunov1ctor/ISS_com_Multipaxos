@@ -1,97 +1,51 @@
 #!/bin/bash
 
-# --------------------------------------------------------------------
-# Carrega variáveis globais (deployment_data_root, csv_filename, etc.)
-# --------------------------------------------------------------------
+# -------------------------------------------------------------
+# deploy.sh
+#
+# Usage:
+#   ./deploy.sh <local|remote|cloud> <instance-info> <new|reuse> <config-gen-script> [flags]
+#
+# Example:
+#   ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
+# -------------------------------------------------------------
+
+set -euo pipefail
+
+deployment_dir="$(cd "$(dirname "$0")" && pwd)"
+cd "$deployment_dir"
+
 source scripts/global-vars.sh
 
-# Kill all children of this script when exiting
-trap "$trap_exit_command" EXIT
-
-# --------------------------------------------------------------------
-# Trata flag de inicialização apenas (-i / --init-only)
-# --------------------------------------------------------------------
-if [ "$1" = "-i" ] || [ "$1" = "--init-only" ]; then
-  init_only=true
-  shift
-else
-  init_only=false
+if [ $# -lt 4 ]; then
+  echo "Usage: $0 <local|remote|cloud> <instance-info> <new|reuse> <config-gen-script> [flags]"
+  exit 1
 fi
 
-# --------------------------------------------------------------------
-# Logging helpers
-# --------------------------------------------------------------------
-ts() { date +"%Y-%m-%d %H:%M:%S"; }
-log_info() { echo "[INFO  ][$(ts)] $*"; }
-log_warn() { echo "[WARN  ][$(ts)] $*" >&2; }
-log_err()  { echo "[ERROR ][$(ts)] $*" >&2; }
-
-# --------------------------------------------------------------------
-# SSH known_hosts preflight (evita "Host key verification failed")
-# - Remove entradas antigas do known_hosts para IPs do instance-info
-# - Faz ssh-keyscan para pré-popular novas chaves
-# --------------------------------------------------------------------
-ssh_known_hosts_preflight() {
-  local inst_file="$1"
-  local known_hosts_file="${HOME}/.ssh/known_hosts"
-
-  if [[ -z "${inst_file:-}" ]]; then
-    log_warn "SSH preflight: instance-info vazio/não definido (pulando)"
-    return 0
-  fi
-
-  if [[ ! -f "$inst_file" ]]; then
-    log_warn "SSH preflight: instance-info não encontrado: $inst_file (pulando)"
-    return 0
-  fi
-
-  mkdir -p "${HOME}/.ssh"
-  touch "$known_hosts_file"
-  chmod 600 "$known_hosts_file" 2>/dev/null || true
-
-  log_info "SSH preflight: atualizando known_hosts usando: $inst_file"
-
-  # lista IPs (ctrl_ip e data_ip) únicos
-  local ips
-  ips="$(awk 'NF>=3 {print $2"\n"$3}' "$inst_file" | sort -u | tr '\n' ' ')"
-  log_info "SSH preflight: IPs detectados: ${ips}"
-
-  awk 'NF>=3 {print $2"\n"$3}' "$inst_file" | sort -u | while read -r ip; do
-    [[ -n "$ip" ]] || continue
-
-    # Remove entradas antigas (se houver)
-    ssh-keygen -R "$ip" >/dev/null 2>&1 || true
-
-    # Pré-carrega host key atual (não falha se host ainda não estiver pronto)
-    if ssh-keyscan -T 5 -H "$ip" >> "$known_hosts_file" 2>/dev/null; then
-      log_info "SSH preflight: hostkey registrada para $ip"
-    else
-      log_warn "SSH preflight: não consegui ssh-keyscan em $ip (host pode não estar acessível ainda)."
-    fi
-  done
-
-  log_info "SSH preflight: concluído."
-}
-
-# --------------------------------------------------------------------
-# Suporte ao modo "new":
-#   ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
-# Neste modo, cria automaticamente o próximo deployment-data/<type>-XXXX e gera configs.
-# --------------------------------------------------------------------
 depl_type="$1"
 instance_info_file="$2"
+new_or_reuse="$3"
+config_gen_script="$4"
+shift 4
 
-if [ "$3" = "new" ]; then
-  config_gen_script="$4"
-  if [ ! -x "$config_gen_script" ]; then
-    echo "ERROR: script de geração de config não encontrado ou não executável: $config_gen_script"
-    exit 1
-  fi
+init_only=false
+cancel_instances=false
 
-  # Busca próximo diretório disponível
+while getopts "ic" opt; do
+  case "$opt" in
+    i) init_only=true ;;
+    c) cancel_instances=true ;;
+    *) ;;
+  esac
+done
+
+# --------------------------------------------------------------------
+# Determina o diretório de experimento (exp_data_dir)
+# --------------------------------------------------------------------
+if [ "$new_or_reuse" = "new" ]; then
   exp_index=0
   while true; do
-    candidate="$deployment_data_root/${depl_type}-$(printf "%04d" "$exp_index")"
+    candidate=$(printf "%s/remote-%04d" "$deployment_data_root" "$exp_index")
     if [ ! -d "$candidate" ]; then
       exp_data_dir="$candidate"
       break
@@ -101,7 +55,35 @@ if [ "$3" = "new" ]; then
 
   mkdir -p "$exp_data_dir"
 
-  log_info "Using experiment data directory: $exp_data_dir"
+  echo "Using experiment data directory: $exp_data_dir"
+
+  echo
+  echo "=================================================="
+  echo "[SSH] Preflight: atualizando known_hosts para hosts do instance-info"
+  echo "=================================================="
+  if [[ "$depl_type" == "remote" ]]; then
+    known_hosts_file="${DEPLOY_KNOWN_HOSTS_FILE:-$HOME/.ssh/known_hosts}"
+    mkdir -p "$(dirname "$known_hosts_file")"
+    touch "$known_hosts_file"
+    chmod 600 "$known_hosts_file" 2>/dev/null || true
+
+    # Extrai IPs (ctrl_ip e data_ip) do instance-info.
+    mapfile -t _ips < <(awk 'NF>=3 {print $2"\n"$3}' "$instance_info_file" | sed '/^$/d' | sort -u)
+
+    echo "[SSH] known_hosts_file = $known_hosts_file"
+    echo "[SSH] hosts encontrados = ${#_ips[@]}"
+    for ip in "${_ips[@]}"; do
+      echo "[SSH] - refresh $ip"
+      ssh-keygen -R "$ip" -f "$known_hosts_file" >/dev/null 2>&1 || true
+      # Pré-carrega a host key; não falha se o nó ainda não estiver acessível.
+      ssh-keyscan -T 5 -H "$ip" >> "$known_hosts_file" 2>/dev/null || true
+    done
+    echo "[SSH] Preflight concluído."
+  else
+    echo "[SSH] (skipped) depl_type=$depl_type"
+  fi
+  echo
+
   # exp_id_offset = 0 (primeiro experimento)
   "$config_gen_script" "$exp_data_dir" 0
   if [ $? -ne 0 ]; then
@@ -109,62 +91,56 @@ if [ "$3" = "new" ]; then
     exit 1
   fi
 
-  # *** AQUI ESTAVA O BUG ***
-  # Antes: set -- "$depl_type" "$instance_info_file"
-  # Agora: passamos também o exp_data_dir para o initialize-deployment.sh
-  set -- "$depl_type" "$instance_info_file" "$exp_data_dir"
+else
+  # reuse: seleciona o diretório mais recente
+  exp_data_dir=$(ls -1d "$deployment_data_root"/remote-* 2>/dev/null | tail -n 1 || true)
+  if [ -z "${exp_data_dir:-}" ]; then
+    echo "ERROR: nenhum diretório encontrado em $deployment_data_root para reuse."
+    exit 1
+  fi
+  echo "Reusing experiment data directory: $exp_data_dir"
 fi
 
 # --------------------------------------------------------------------
-# Inicializa o deployment (lê args e seta:
-#  - depl_type
-#  - exp_data_dir
-#  - deployment_file (deployment.dpl)
-#  - csv_filename, etc.)
+# Normaliza caminhos e exporta para scripts sourceados
+# --------------------------------------------------------------------
+export exp_data_dir
+export instance_info_file
+export depl_type
+export cancel_instances
+
+# Antes: set -- "$depl_type" "$instance_info_file"
+# Agora passamos exp_data_dir também (caso alguém precise)
+set -- "$depl_type" "$instance_info_file" "$exp_data_dir"
+
+# --------------------------------------------------------------------
+# Inicializa deployment: cria master-commands.cmd, cloud-instance-info, etc.
 # --------------------------------------------------------------------
 source scripts/initialize-deployment.sh
-
-# Preflight SSH/known_hosts para evitar falhas de verificação de hostkey em ambientes efêmeros (Emulab/cloud)
-ssh_known_hosts_preflight "$instance_info_file"
 
 # --------------------------------------------------------------------
 # Se for só inicialização (-i), sai aqui.
 # --------------------------------------------------------------------
 if $init_only; then
+  echo "Init only. Experiment directory: $exp_data_dir"
   exit 0
 fi
 
 # --------------------------------------------------------------------
-# Reset (remote/local): mata processos antigos e limpa estado.
+# Inicia de fato o deployment (local / cloud / remote)
 # --------------------------------------------------------------------
-if [ "$depl_type" = "remote" ]; then
-  echo
-  echo "Limpando processos antigos e removendo possíveis limitações de banda nas máquinas remotas..."
-  scripts/reset-proc-cloud.sh "$instance_info_file" || true
-
-  echo
-  scripts/reset-state-cloud.sh "$instance_info_file"
-
-  echo
-  echo "Estado das máquinas remotas resetado."
-elif [ "$depl_type" = "local" ]; then
-  scripts/reset-state-local.sh
+if [ "$depl_type" = "local" ]; then
+  source scripts/deploy-local.sh
+elif [ "$depl_type" = "cloud" ]; then
+  source scripts/deploy-cloud.sh
+elif [ "$depl_type" = "remote" ]; then
+  source scripts/deploy-remote.sh
 else
-  echo "ERROR: tipo de deployment desconhecido: $depl_type"
+  echo "ERROR: deployment type inválido: $depl_type"
   exit 1
 fi
 
-# --------------------------------------------------------------------
-# Executa deploy remoto/local (start master + start slaves + wait + fetch).
-# --------------------------------------------------------------------
-if [ "$depl_type" = "remote" ]; then
-  scripts/deploy-remote.sh "$instance_info_file" "$exp_data_dir"
-else
-  scripts/deploy-local.sh "$exp_data_dir"
-fi
-
-# --------------------------------------------------------------------
-# Gera summary no final (caso exista).
-# --------------------------------------------------------------------
-scripts/result-summary.sh "$exp_data_dir"
+echo "Done. Experiment data directory: $exp_data_dir"
+echo "Generating result summary."
+source scripts/fetch-results.sh
 
