@@ -111,5 +111,14 @@ ssh $ssh_options "${remote_user}@${master_ip}" " \
   cd '$remote_work_dir'; \
   /usr/bin/nohup bash '$remote_master_cmd' > '$remote_work_dir/logs/master-commands.nohup.log' 2>&1 < /dev/null & \
   echo \$! > .master-commands.pid; \
-  sleep 1;
+  sleep 1; \
+  if ! kill -0 \$(cat .master-commands.pid) 2>/dev/null; then \
+    echo 'ERRO: master-commands morreu ao iniciar. tail nohup log:'; \
+    tail -n 160 '$remote_work_dir/logs/master-commands.nohup.log' 2>/dev/null || true; \
+    exit 4; \
+  fi; \
+  echo 'OK: master-commands pid=' \$(cat .master-commands.pid); \
+" </dev/null
+
+info "start-master.sh finished (discoverymaster + master-commands started)."
 
