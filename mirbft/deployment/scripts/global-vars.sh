@@ -5,7 +5,24 @@
 #############################
 
 # Diretório raiz onde ficam os dados de deployment.
-deployment_data_root=deployment-data
+#
+# IMPORTANTE:
+#   Muitos scripts são executados/sourced a partir de diretórios diferentes.
+#   Se este caminho ficar relativo ao CWD, ele pode virar vazio/errado e gerar
+#   exp_data_dir como "/remote-0000" (raiz do filesystem), causando Permission denied.
+#
+# Portanto, sempre resolvemos o root do deployment baseado na localização deste arquivo.
+
+_gv_this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_gv_deployment_dir="$(cd "${_gv_this_dir}/.." && pwd)"
+
+# Mantém compatibilidade: se o usuário/export já definiu deployment_data_root, respeita.
+deployment_data_root="${deployment_data_root:-${_gv_deployment_dir}/deployment-data}"
+
+# Normaliza: se alguém setou vazio, volta para o default seguro.
+if [[ -z "${deployment_data_root}" ]]; then
+  deployment_data_root="${_gv_deployment_dir}/deployment-data"
+fi
 
 # Nomes dos arquivos gerados pelo generate-config.sh
 dpl_filename=deployment.dpl
@@ -81,7 +98,8 @@ master_port=9999
 #########################################
 
 # Diretório local onde fica o código (este repositório).
-local_code_dir=$(pwd)
+# Usa a raiz do repositório (deployment/..).
+local_code_dir="$(cd "${_gv_deployment_dir}/.." && pwd)"
 
 # Arquivos locais de log/status do deploy.
 local_main_log=main_log.log

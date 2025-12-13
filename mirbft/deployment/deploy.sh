@@ -6,6 +6,13 @@
 # shellcheck source=/dev/null
 source scripts/global-vars.sh
 
+# Safety: se por algum motivo deployment_data_root veio vazio (env/export),
+# evita gerar exp_data_dir como "/remote-0000".
+if [[ -z "${deployment_data_root:-}" ]]; then
+  deploy_dir="$(cd "$(dirname "$0")" && pwd)"
+  deployment_data_root="${deploy_dir}/deployment-data"
+fi
+
 # Kill all children of this script when exiting
 trap "$trap_exit_command" EXIT
 

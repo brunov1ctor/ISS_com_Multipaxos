@@ -145,12 +145,18 @@ copy_required_assets() {
     "${this_dir}/start-slave.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/start-slave.sh"
 
+  # start-slave.sh dá source em global-vars.sh (mesma pasta). Então copie também.
+  bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
+    "${this_dir}/global-vars.sh" \
+    "${remote_user}@${ip}:${remote_work_dir}/scripts/global-vars.sh"
+
   bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
     "${this_dir}/stubborn-scp.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
 
   ssh ${ssh_options} "${remote_user}@${ip}" "\
-    chmod +x '${remote_work_dir}/scripts/start-slave.sh' '${remote_work_dir}/scripts/stubborn-scp.sh' 2>/dev/null || true
+    chmod +x '${remote_work_dir}/scripts/start-slave.sh' '${remote_work_dir}/scripts/stubborn-scp.sh' 2>/dev/null || true; \
+    chmod +x '${remote_work_dir}/scripts/global-vars.sh' 2>/dev/null || true
   " </dev/null || true
 
   remote_kill_bins "$ip"

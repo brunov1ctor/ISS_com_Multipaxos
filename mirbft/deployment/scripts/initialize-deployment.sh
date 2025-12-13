@@ -54,8 +54,6 @@ log_info "depl_type = ${depl_type}"
 
 case "$depl_type" in
   local)
-    # Local deployment:
-    #   deploy.sh local new <config-generator>
     new_experiment=true
     if [ "${1:-}" = "new" ]; then
       shift || true
@@ -65,7 +63,7 @@ case "$depl_type" in
     fi
 
     if $new_experiment; then
-      exp_data_dir="deployment-data/local-0000"
+      exp_data_dir="${deployment_data_root}/local-0000"
     else
       if [ -z "${1:-}" ]; then
         >&2 echo "initialize-deployment.sh: local deployment requires existing experiment data dir or 'new'"
@@ -85,8 +83,6 @@ case "$depl_type" in
     ;;
 
   cloud)
-    # Cloud deployment:
-    #   deploy.sh cloud <cloud-instance-info> new <config-generator>
     if [ -z "${1:-}" ]; then
       >&2 echo "initialize-deployment.sh: cloud deployment requires cloud-instance-info file path"
       exit 1
@@ -97,7 +93,7 @@ case "$depl_type" in
     if [ "${1:-}" = "new" ]; then
       shift || true
       new_experiment=true
-      exp_data_dir="deployment-data/cloud-0000"
+      exp_data_dir="${deployment_data_root}/cloud-0000"
     else
       new_experiment=false
       if [ -z "${1:-}" ]; then
@@ -117,8 +113,6 @@ case "$depl_type" in
     ;;
 
   remote)
-    # Remote (Emulab/cluster) deployment:
-    #   deploy.sh remote <instance-info> new <config-generator>
     if [ -z "${1:-}" ]; then
       >&2 echo "initialize-deployment.sh: remote deployment requires instance-info file path"
       exit 1
@@ -129,7 +123,7 @@ case "$depl_type" in
     if [ "${1:-}" = "new" ]; then
       shift || true
       new_experiment=true
-      exp_data_dir="deployment-data/remote-0000"
+      exp_data_dir="${deployment_data_root}/remote-0000"
     else
       new_experiment=false
       if [ -z "${1:-}" ]; then

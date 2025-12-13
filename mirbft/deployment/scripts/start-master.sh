@@ -47,6 +47,7 @@ echo "Copying master commands and helper scripts to master."
 scp $ssh_options "$local_master_cmd" "${remote_user}@${master_ip}:${remote_master_cmd}"
 scp $ssh_options "$deployment_dir/scripts/start-slave.sh" "${remote_user}@${master_ip}:${remote_work_dir}/scripts/start-slave.sh"
 scp $ssh_options "$deployment_dir/scripts/stubborn-scp.sh" "${remote_user}@${master_ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
+scp $ssh_options "$deployment_dir/scripts/global-vars.sh" "${remote_user}@${master_ip}:${remote_work_dir}/scripts/global-vars.sh"
 
 echo "Copying required binaries to master (if found locally)."
 for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
