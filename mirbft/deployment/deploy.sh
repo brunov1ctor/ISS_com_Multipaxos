@@ -3,6 +3,7 @@
 # --------------------------------------------------------------------
 # Carrega variáveis globais (deployment_data_root, csv_filename, etc.)
 # --------------------------------------------------------------------
+# shellcheck source=/dev/null
 source scripts/global-vars.sh
 
 # Kill all children of this script when exiting
@@ -23,36 +24,21 @@ log_err()  { echo "[ERRO] $*" >&2; }
 
 # --------------------------------------------------------------------
 # Preflight: garante que os binários existem localmente
-#  - não depende de hard-code
-#  - usa go env GOBIN/GOPATH
-#  - compila SOMENTE o que estiver faltando
-#  - pode ser desativado com DEPLOY_SKIP_BUILD=1
 # --------------------------------------------------------------------
 ensure_local_binaries() {
-  # Só faz sentido se for usar remote/cloud/local executáveis
-  # (para local também ajuda, então deixamos geral)
-
   if [ "${DEPLOY_SKIP_BUILD:-0}" = "1" ]; then
     log_warn "DEPLOY_SKIP_BUILD=1 -> pulando build automático."
     return 0
   fi
 
-  # Descobre repo root (deployment/..)
   deploy_dir="$(cd "$(dirname "$0")" && pwd)"
   repo_dir="$(cd "$deploy_dir/.." && pwd)"
 
-  # Verifica go
   if ! command -v go >/dev/null 2>&1; then
     log_err "go não encontrado no PATH. Não dá para compilar binários automaticamente."
     return 1
   fi
 
-  # Resolve bin dir onde o go install vai colocar
-  # Prioridade:
-  #   1) $GOBIN (env do usuário)
-  #   2) go env GOBIN
-  #   3) go env GOPATH + /bin
-  #   4) $HOME/go/bin
   local_bin_dir="${GOBIN:-}"
   if [ -z "$local_bin_dir" ]; then
     local_bin_dir="$(go env GOBIN 2>/dev/null)"
@@ -90,11 +76,9 @@ ensure_local_binaries() {
   log_warn "Binários faltando:${missing}"
   log_info "Compilando apenas os que faltam via 'go install'..."
 
-  # Compila um por um para logar melhor e falhar com mensagem clara
   cd "$repo_dir" || { log_err "não consegui entrar em $repo_dir"; return 1; }
 
   for b in $missing; do
-    # Os comandos existem em ./cmd/<bin>
     if [ ! -d "./cmd/$b" ]; then
       log_err "diretório ./cmd/$b não existe. Não sei compilar '$b'."
       return 1
@@ -125,7 +109,7 @@ ensure_local_binaries() {
 # --------------------------------------------------------------------
 # Trata flag de inicialização apenas (-i / --init-only)
 # --------------------------------------------------------------------
-if [ "$1" = "-i" ] || [ "$1" = "--init-only" ]; then
+if [ "${1:-}" = "-i" ] || [ "${1:-}" = "--init-only" ]; then
   init_only=true
   shift
 else
@@ -135,25 +119,12 @@ fi
 # --------------------------------------------------------------------
 # Suporte ao modo "new":
 #   ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
-#
-# Aqui:
-#   - Escolhemos um diretório do tipo deployment-data/remote-0000
-#   - Rodamos o generate-config.sh nesse diretório
-#   - Removemos "new <script>" dos argumentos antes de chamar initialize-deployment.sh,
-#     MAS mantendo o exp_data_dir como 3º argumento.
 # --------------------------------------------------------------------
-if [ "$1" = "remote" ] && [ "$3" = "new" ]; then
+if [ "${1:-}" = "remote" ] && [ "${3:-}" = "new" ]; then
   depl_type="$1"
   instance_info_file="$2"
-  new_flag="$3"
-  config_gen_script="$4"
+  config_gen_script="${4:-scripts/experiment-configuration/generate-config.sh}"
 
-  # Se o script não vier no 4º argumento, usa um default.
-  if [ -z "$config_gen_script" ]; then
-    config_gen_script="scripts/experiment-configuration/generate-config.sh"
-  fi
-
-  # Escolhe um diretório deployment-data/remote-XXXX ainda não usado.
   exp_index=0
   while :; do
     candidate=$(printf "%s/remote-%04d" "$deployment_data_root" "$exp_index")
@@ -167,29 +138,21 @@ if [ "$1" = "remote" ] && [ "$3" = "new" ]; then
   mkdir -p "$exp_data_dir"
 
   echo "Using experiment data directory: $exp_data_dir"
-  # exp_id_offset = 0 (primeiro experimento)
   "$config_gen_script" "$exp_data_dir" 0
   if [ $? -ne 0 ]; then
     echo "ERROR: $config_gen_script falhou ao gerar configurações em $exp_data_dir"
     exit 1
   fi
 
-  # Passamos também o exp_data_dir para o initialize-deployment.sh
   set -- "$depl_type" "$instance_info_file" "$exp_data_dir"
 fi
 
 # --------------------------------------------------------------------
-# Inicializa o deployment (lê args e seta:
-#  - depl_type
-#  - exp_data_dir
-#  - deployment_file (deployment.dpl)
-#  - csv_filename, etc.)
+# Inicializa o deployment
 # --------------------------------------------------------------------
+# shellcheck source=/dev/null
 source scripts/initialize-deployment.sh
 
-# --------------------------------------------------------------------
-# Se for só inicialização (-i), sai aqui.
-# --------------------------------------------------------------------
 if $init_only; then
   echo "Init only. Experiment directory: $exp_data_dir"
   exit 0
@@ -204,17 +167,40 @@ if ! ensure_local_binaries; then
 fi
 
 # --------------------------------------------------------------------
-# Inicia de fato o deployment (local / cloud / remote)
+# Deploy (local / cloud / remote)
 # --------------------------------------------------------------------
 if [ "$depl_type" = "local" ]; then
+  # shellcheck source=/dev/null
   source scripts/deploy-local.sh
 elif [ "$depl_type" = "cloud" ]; then
+  # shellcheck source=/dev/null
   source scripts/deploy-cloud.sh
 elif [ "$depl_type" = "remote" ]; then
+  # shellcheck source=/dev/null
   source scripts/deploy-remote.sh
 else
   >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
+  exit 2
 fi
+
+# --------------------------------------------------------------------
+# Validação estrutural ANTES do summary (evita 'summary enganoso')
+# --------------------------------------------------------------------
+log_sep "[VERIFY] Checando se existem resultados reais"
+
+if [[ ! -d "$exp_data_dir/experiment-output" ]]; then
+  log_err "Sem experiment-output em $exp_data_dir. Deploy não gerou métricas reais."
+  exit 9
+fi
+
+cnt="$(find "$exp_data_dir/experiment-output" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "$cnt" == "0" ]]; then
+  log_err "experiment-output existe mas está vazio. Deploy inválido (sem métricas)."
+  log_err "Dica: veja $exp_data_dir/result-fetching.log e $exp_data_dir/_debug/master-diag.txt (se existirem)."
+  exit 10
+fi
+
+log_info "OK: experiment-output contém dados ($cnt dirs)."
 
 # --------------------------------------------------------------------
 # Geração do resumo dos resultados
@@ -222,7 +208,7 @@ fi
 echo "Generating result summary."
 scripts/analyze/summarize.sh \
   "$exp_data_dir/$csv_filename" \
-  "$exp_data_dir/experiment-output" 2> /dev/null \
+  "$exp_data_dir/experiment-output" \
   | tee "$exp_data_dir/$result_summary_file"
 
 echo "Done. Experiment data directory: $exp_data_dir"
