@@ -1,40 +1,57 @@
 #!/bin/bash
 set -euo pipefail
+shopt -s nullglob
 
+# shellcheck source=/dev/null
 source scripts/global-vars.sh
+
+ts() { date +"%Y-%m-%d %H:%M:%S"; }
+info(){ echo "[INFO  ][$(ts)] $*"; }
+warn(){ echo "[WARN  ][$(ts)] $*"; }
+err(){  echo "[ERRO  ][$(ts)] $*" >&2; }
 
 master_ip="${1:-${MASTER_IP:-}}"
 exp_dir="${2:-${exp_data_dir:-}}"
 
+# Tenta inferir master_ip pelo instance-info, se necessário.
 if [[ -z "${master_ip}" && -n "${instance_info_file:-}" && -f "${instance_info_file}" ]]; then
   master_ip="$(awk 'NF>=4 && $4=="master" {print $2; exit}' "${instance_info_file}" 2>/dev/null || true)"
 fi
 
 if [[ -z "${master_ip}" || -z "${exp_dir}" ]]; then
-  echo "ERRO: fetch-results.sh precisa de master_ip e exp_dir." >&2
-  echo "  master_ip='${master_ip:-}' exp_dir='${exp_dir:-}' instance_info_file='${instance_info_file:-}'" >&2
+  err "fetch-results.sh precisa de master_ip e exp_dir."
+  err "  master_ip='${master_ip:-}' exp_dir='${exp_dir:-}' instance_info_file='${instance_info_file:-}'"
   exit 1
 fi
 
-mkdir -p "$exp_dir/experiment-output"
+mkdir -p "${exp_dir}/experiment-output" "${exp_dir}/_fetched_tars" "${exp_dir}/_debug"
 
-echo "[INFO] Iniciando fetch de resultados do master ${master_ip} para ${exp_dir}"
-echo "[INFO] remote_user=${remote_user} remote_work_dir=${remote_work_dir}"
+info "Iniciando fetch de resultados do master ${master_ip} para ${exp_dir}"
+info "remote_user=${remote_user} remote_work_dir=${remote_work_dir} remote_exp_dir=${remote_exp_dir}"
+info "ssh_options=${ssh_options}"
 echo
 
 # --------------------------------------------------------------------
-# 0) Diagnóstico rápido no master (não falha o script)
+# 0) Diagnóstico no master (não falha o script)
 # --------------------------------------------------------------------
-echo "[INFO] Diagnóstico no master: listando dirs e procurando outputs..."
+info "Diagnóstico no master: listando dirs e procurando outputs..."
 ssh $ssh_options "${remote_user}@${master_ip}" "
   set -e;
-  echo '--- /users/Bruno/iss ---';
+  echo '--- work dir ---';
   ls -la '${remote_work_dir}' || true;
   echo '--- logs ---';
   ls -la '${remote_work_dir}/logs' 2>/dev/null || true;
-  echo '--- find experiment-output* (depth 4) ---';
-  find '${remote_work_dir}' -maxdepth 4 -type d -name 'experiment-output' -o -type f -name 'experiment-output-*.tar.gz' 2>/dev/null | head -n 80 || true;
-" </dev/null || true
+  echo '--- current-deployment-data ---';
+  ls -la '${remote_work_dir}/current-deployment-data' 2>/dev/null || true;
+  echo '--- raw-results ---';
+  ls -la '${remote_work_dir}/current-deployment-data/raw-results' 2>/dev/null || true;
+  echo '--- find experiment-output* (maxdepth 6) ---';
+  find '${remote_work_dir}' -maxdepth 6 \
+      \( -type d -name 'experiment-output' -o -type f -name 'experiment-output-*.tar.gz' \) \
+      2>/dev/null | head -n 200 || true;
+" </dev/null >"${exp_dir}/_debug/master-diag.txt" 2>&1 || true
+
+info "Salvei diagnóstico do master em: ${exp_dir}/_debug/master-diag.txt"
 echo
 
 # --------------------------------------------------------------------
@@ -43,47 +60,50 @@ echo
 tar_paths=(
   "${remote_work_dir}/experiment-output-*.tar.gz"
   "${remote_work_dir}/current-deployment-data/experiment-output-*.tar.gz"
-  "${remote_work_dir}/current-deployment-data/**/experiment-output-*.tar.gz"
+  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output-*.tar.gz"
+  "${remote_exp_dir}/raw-results/experiment-output-*.tar.gz"
 )
 
 found_tar=false
 for pat in "${tar_paths[@]}"; do
-  echo "[INFO] Tentando baixar tar(s) do master: ${pat}"
+  info "Tentando baixar tar(s) do master: ${pat}"
   if rsync -rtz --progress -e "ssh $ssh_options" \
       "${remote_user}@${master_ip}:${pat}" \
-      "$exp_dir/" ; then
+      "${exp_dir}/_fetched_tars/" ; then
     found_tar=true
   else
-    echo "[WARN] Não encontrei nesse path: ${pat}"
+    warn "Não encontrei nesse path: ${pat}"
   fi
   echo
 done
 
 # --------------------------------------------------------------------
-# 2) Fallback: tenta baixar diretórios experiment-output de master e slaves
+# 2) Fallback: tenta baixar diretórios experiment-output (master e slaves)
 # --------------------------------------------------------------------
 dir_paths=(
   "${remote_work_dir}/experiment-output/"
   "${remote_work_dir}/current-deployment-data/experiment-output/"
-  "${remote_work_dir}/current-deployment-data/**/experiment-output/"
+  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output/"
+  "${remote_exp_dir}/raw-results/experiment-output/"
 )
 
-if [[ "$found_tar" != "true" ]]; then
-  echo "[INFO] Nenhum tar encontrado. Fallback: tentando rsync de diretórios experiment-output..."
+if [[ "${found_tar}" != "true" ]]; then
+  info "Nenhum tar encontrado. Fallback: tentando rsync de diretórios experiment-output..."
   echo
 
-  echo "[INFO] Tentando no master primeiro..."
+  info "Tentando no master primeiro..."
   for dpat in "${dir_paths[@]}"; do
-    echo "[INFO] - master dir: ${dpat}"
+    info "- master dir: ${dpat}"
     rsync -rtz --progress -e "ssh $ssh_options" \
       "${remote_user}@${master_ip}:${dpat}" \
-      "$exp_dir/experiment-output/" || true
+      "${exp_dir}/experiment-output/" || true
   done
   echo
 
   if [[ -z "${instance_info_file:-}" || ! -f "${instance_info_file:-}" ]]; then
-    echo "[ERRO] instance_info_file não definido/encontrado; não dá para varrer slaves." >&2
-    exit 1
+    err "instance_info_file não definido/encontrado; não dá para varrer slaves."
+    err "(sem tar e sem dir -> abortando)"
+    exit 2
   fi
 
   while read -r instance_id ctrl_ip data_ip role tag; do
@@ -91,15 +111,53 @@ if [[ "$found_tar" != "true" ]]; then
     [[ "${instance_id:-}" =~ ^# ]] && continue
     [[ "${role:-}" != "slave" ]] && continue
 
-    echo "[INFO] - slave ${instance_id} (${tag}) @ ${ctrl_ip}: tentando dirs..."
+    info "- slave ${instance_id} (${tag}) @ ${ctrl_ip}: tentando dirs..."
     for dpat in "${dir_paths[@]}"; do
       rsync -rtz --progress -e "ssh $ssh_options" \
         "${remote_user}@${ctrl_ip}:${dpat}" \
-        "$exp_dir/experiment-output/" || true
+        "${exp_dir}/experiment-output/" || true
     done
     echo
   done < "${instance_info_file}"
 fi
 
-echo "[INFO] fetch-results finalizado."
+# --------------------------------------------------------------------
+# 3) Se baixamos tars, descompactar para exp_dir/experiment-output
+# --------------------------------------------------------------------
+local_tars=("${exp_dir}/_fetched_tars"/experiment-output-*.tar.gz)
+if [[ ${#local_tars[@]} -gt 0 ]]; then
+  info "Descompactando ${#local_tars[@]} tar(s) em ${exp_dir}/experiment-output/ ..."
+  for t in "${local_tars[@]}"; do
+    bn="$(basename "$t")"
+    exp="$(echo "$bn" | sed -n 's/^experiment-output-\([0-9][0-9][0-9][0-9]\)-.*$/\1/p')"
+    if [[ -n "${exp}" ]]; then
+      mkdir -p "${exp_dir}/experiment-output/${exp}"
+      tar -xzf "$t" -C "${exp_dir}/experiment-output/${exp}"
+    else
+      warn "Não consegui inferir expID de '${bn}'. Extraindo no root de experiment-output."
+      tar -xzf "$t" -C "${exp_dir}/experiment-output"
+    fi
+  done
+fi
+
+# --------------------------------------------------------------------
+# 4) Verificação final (sem isso, o pipeline vira 'sucesso falso')
+# --------------------------------------------------------------------
+if [[ ! -d "${exp_dir}/experiment-output" ]]; then
+  err "experiment-output não existe após fetch."
+  exit 10
+fi
+
+count_dirs="$(find "${exp_dir}/experiment-output" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "${count_dirs}" == "0" ]]; then
+  err "experiment-output está vazio após fetch."
+  err "Veja: ${exp_dir}/_debug/master-diag.txt"
+  exit 11
+fi
+
+info "OK: experiment-output contém dados (${count_dirs} dirs)."
+info "Exemplos de arquivos (head):"
+find "${exp_dir}/experiment-output" -maxdepth 4 -type f | head -n 120 || true
+
+info "fetch-results finalizado."
 
