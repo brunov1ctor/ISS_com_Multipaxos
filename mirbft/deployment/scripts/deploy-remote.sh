@@ -128,7 +128,7 @@ while read -r instance_id ctrl_ip data_ip role itag; do
   [[ "${instance_id}" =~ ^[[:space:]]*# ]] && continue
 
   info "[reset-proc] ${ctrl_ip}: matando processos antigos..."
-  if ssh $ssh_options "${ctrl_ip}" "\
+  if ssh $ssh_options "${remote_user}@${ctrl_ip}" "\
     pkill -f 'tail -F' 2>/dev/null || true; \
     pkill -f 'fetch-results.sh' 2>/dev/null || true; \
     pkill -f 'start-slave.sh' 2>/dev/null || true; \
@@ -155,7 +155,7 @@ while read -r instance_id ctrl_ip data_ip role itag; do
   [[ "${instance_id}" =~ ^[[:space:]]*# ]] && continue
 
   info "[reset-state] ${ctrl_ip}: limpando..."
-  if ssh $ssh_options "${ctrl_ip}" "\
+  if ssh $ssh_options "${remote_user}@${ctrl_ip}" "\
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
     rm -rf $remote_delete_files 2>/dev/null || true; \
@@ -176,7 +176,8 @@ echo
 # --------------------------------------------------------------------
 
 info "Starting master on $master_ip"
-scripts/start-master.sh "$exp_data_dir" "$master_ip"
+scripts/start-master.sh "$master_ip" "$exp_data_dir"
+
 
 echo
 
