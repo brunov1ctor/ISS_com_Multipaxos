@@ -35,6 +35,9 @@ remote_user="${remote_user:-${REMOTE_USER:-${USER}}}"
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
 
+# Porta do discovery/master. Não confie em env no SSH remoto (não herda).
+master_port="${DISCOVERY_PORT:-${master_port:-9999}}"
+
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"
@@ -173,7 +176,7 @@ start_remote_slave() {
 
   # comando remoto: sobe e sai
   local remote_cmd
-  remote_cmd="cd '${remote_work_dir}/scripts' && \
+  remote_cmd="cd '${remote_work_dir}/scripts' && DISCOVERY_PORT='${master_port}' && \
 /usr/bin/nohup bash ./start-slave.sh \
 '${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \
 > '${remote_work_dir}/logs/slave-${instance_id}.log' 2>&1 < /dev/null & \
