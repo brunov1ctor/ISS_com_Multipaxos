@@ -52,52 +52,40 @@ ssh ${ssh_options} "${remote_user}@${master_ip}" "\
 log "Copying master-commands.cmd to remote..."
 scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd" >/dev/null
 
-# Copiar configs gerados localmente (exp_data_dir/config/*) para o master, em:
+# ------------------------------------------------------------------
+# Copiar configs gerados localmente (exp_data_dir/config/*) para:
 #   ${remote_work_dir}/experiment-config/
-# Isso é necessário porque o master-commands manda os slaves fazerem SCP
-# a partir de "experiment-config/config-XXXX.yml" no master.
+#
+# Motivo: master-commands manda os slaves fazerem scp do MASTER:
+#   master:experiment-config/config-XXXX.yml
+#
+# Evitamos tar pipe via ssh porque login scripts podem sujar STDIN/STDOUT
+# e quebrar o stream ("This does not look like a tar archive").
+# ------------------------------------------------------------------
 if [[ -d "${exp_data_dir}/config" ]]; then
-  log "Copying generated configs to master (experiment-config/)..."
-  tar -C "${exp_data_dir}/config" -cf - . \
-    | ssh ${ssh_options} "${remote_user}@${master_ip}" "\
-        mkdir -p '${remote_work_dir}/experiment-config' && \
-        tar -C '${remote_work_dir}/experiment-config' -xf - \
-      " </dev/null
+  if compgen -G "${exp_data_dir}/config/*" > /dev/null; then
+    log "Copying generated configs to master (experiment-config/) via scp..."
+    # mkdir já feito acima, mas reforça:
+    ssh ${ssh_options} "${remote_user}@${master_ip}" "mkdir -p '${remote_work_dir}/experiment-config'" </dev/null
+
+    # Copia todos os arquivos do diretório local/config para o master.
+    # (Se tiver muitos, scp ainda é ok aqui — e é determinístico.)
+    scp ${ssh_options} ${exp_data_dir}/config/* \
+      "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" >/dev/null
+
+    # Checagem rápida:
+    ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+      echo '[start-master] remote experiment-config:'; \
+      ls -la '${remote_work_dir}/experiment-config' | head -n 80 \
+    " </dev/null
+  else
+    warn "Diretório ${exp_data_dir}/config existe, mas está vazio. Isso vai quebrar o scp dos slaves."
+  fi
 else
   warn "Diretório local de configs não encontrado: ${exp_data_dir}/config (isso pode quebrar o scp dos slaves)."
 fi
 
 log "Killing previous discoverymaster (if any)..."
 set +e
-ssh ${ssh_options} "${remote_user}@${master_ip}" "\
-  pkill -9 -f '${remote_bin_dir}/discoverymaster' 2>/dev/null || true
-  pkill -9 -f 'discoverymaster ' 2>/dev/null || true
-  sleep 0.2
-  pgrep -af discoverymaster 2>/dev/null || true
-" </dev/null
-rc=$?
-set -e
-if [[ $rc -ne 0 ]]; then
-  warn "Kill step returned rc=$rc (continuando)"
-fi
-
-log "Starting discoverymaster in MASTER mode (file-based commands)..."
-ssh ${ssh_options} "${remote_user}@${master_ip}" "\
-  cd '${remote_work_dir}' && \
-  rm -f '${remote_status_file}' '${remote_ready_file}' 2>/dev/null || true; \
-  /usr/bin/nohup '${remote_bin_dir}/discoverymaster' master ':${DISCOVERY_PORT}' '${remote_work_dir}/master-commands.cmd' \
-    > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null & \
-  echo PID=\$!; \
-  sleep 0.2; \
-  pgrep -af discoverymaster 2>/dev/null || true; \
-  tail -n 20 '${remote_work_dir}/logs/discoverymaster.log' 2>/dev/null || true; \
-" </dev/null
-
-log "Verificando se o master está vivo e escutando na porta ${DISCOVERY_PORT}..."
-# checagem simples: gRPC port listening
-ssh ${ssh_options} "${remote_user}@${master_ip}" "\
-  (ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true) | grep -q ':${DISCOVERY_PORT}' && echo OK || (echo FAIL; exit 1)
-" </dev/null
-
-log "Master started successfully."
+ssh ${ssh_opti_
 
