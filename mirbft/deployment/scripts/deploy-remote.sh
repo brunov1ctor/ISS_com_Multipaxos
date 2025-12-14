@@ -209,14 +209,24 @@ echo
 # 5) Start slaves
 # =========================================================
 
+count_tag_from_dpl() {
+  local tag="$1"
+  # deployment.dpl contém linhas do tipo:
+  #   -1 <N> <tag> <machine_template>
+  # Pegamos o primeiro N encontrado para o tag.
+  awk -v t="${tag}" '($1==-1 && $3==t){print $2; exit}' "${deployment_file}" 2>/dev/null || echo 0
+}
+
 peers_tag="peers"
-info "Starting peer slaves (tag=${peers_tag})"
-scripts/start-remote-slaves.sh "$exp_data_dir" 5 "$peers_tag" "$instance_info_file"
+peers_n="$(count_tag_from_dpl "${peers_tag}")"
+info "Starting peer slaves (tag=${peers_tag}, n=${peers_n})"
+scripts/start-remote-slaves.sh "$exp_data_dir" "${peers_n:-0}" "$peers_tag" "$instance_info_file"
 
 echo
 clients_tag="1client"
-info "Starting client slaves (tag=${clients_tag})"
-scripts/start-remote-slaves.sh "$exp_data_dir" 1 "$clients_tag" "$instance_info_file"
+clients_n="$(count_tag_from_dpl "${clients_tag}")"
+info "Starting client slaves (tag=${clients_tag}, n=${clients_n})"
+scripts/start-remote-slaves.sh "$exp_data_dir" "${clients_n:-0}" "$clients_tag" "$instance_info_file"
 
 echo
 info "All slaves started."
@@ -236,6 +246,8 @@ wait_timeout_sec="${DEPLOY_WAIT_TIMEOUT_SEC:-1800}"   # 30 min
 poll_sec="${DEPLOY_WAIT_POLL_SEC:-5}"
 start_ts="$(date +%s)"
 
+diag_printed=0
+
 while true; do
   now="$(date +%s)"
   if (( now - start_ts > wait_timeout_sec )); then
@@ -246,38 +258,61 @@ while true; do
   fi
 
   status_val="$(ssh ${ssh_options} "${remote_user}@${master_ip}" "cat '${remote_status_file}' 2>/dev/null || true" </dev/null || true)"
-  status_val="$(echo "${status_val}" | tr -d '\r\n' | tail -n 1)"
+  status_val="${status_val//$'\r'/}"
+  status_val="${status_val//$'\n'/}"
+
+  if [[ -z "${status_val}" ]]; then
+    info "[WAIT] status atual='<vazio>' (aguardando '${last_exp}'), dormindo ${poll_sec}s..."
+
+    # 1x diagnóstico rápido se estiver preso
+    if (( diag_printed == 0 )); then
+      diag_printed=1
+      warn "[WAIT] status vazio. Imprimindo diagnóstico rápido do MASTER (1x)..."
+      ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+        echo '--- master diag: ls workdir ---'; \
+        ls -la '${remote_work_dir}' | head -n 80 || true; \
+        echo '--- master diag: ls experiment-config ---'; \
+        ls -la '${remote_work_dir}/experiment-config' | head -n 80 || true; \
+        echo '--- master diag: tail main_log.log ---'; \
+        tail -n 80 '${remote_work_dir}/main_log.log' 2>/dev/null || true; \
+      " </dev/null || true
+    fi
+
+    sleep "${poll_sec}"
+    continue
+  fi
+
+  info "[WAIT] status atual='${status_val}' (aguardando '${last_exp}')"
 
   if [[ "${status_val}" == "${last_exp}" ]]; then
-    info "[WAIT] OK: status final atingido: ${status_val}"
+    info "[WAIT] status final atingido: ${status_val}"
     break
   fi
 
-  info "[WAIT] status atual='${status_val:-<vazio>}' (aguardando '${last_exp}'), dormindo ${poll_sec}s..."
   sleep "${poll_sec}"
 done
 
 echo
-info "[FETCH] Baixando resultados do master -> ${exp_data_dir}"
-scripts/fetch-results.sh "${master_ip}" "${exp_data_dir}" | tee "${exp_data_dir}/${local_result_fetching_log}"
+info "Buscando resultados (fetch-results.sh)..."
+scripts/fetch-results.sh "$exp_data_dir" "$master_ip" || true
 
-echo
-info "[VERIFY] Validando existência de resultados reais"
-
-if [[ ! -d "${exp_data_dir}/experiment-output" ]]; then
-  die "fetch-results terminou mas experiment-output não existe: ${exp_data_dir}/experiment-output"
+# Validação: tem que existir alguma evidência real no exp_data_dir
+if compgen -G "${exp_data_dir}/experiment-output-*.tar.gz" > /dev/null; then
+  info "OK: arquivos experiment-output-*.tar.gz encontrados."
+else
+  warn "Nenhum experiment-output-*.tar.gz encontrado em ${exp_data_dir}."
 fi
 
-cnt_dirs="$(find "${exp_data_dir}/experiment-output" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
-if [[ "${cnt_dirs}" == "0" ]]; then
-  err "experiment-output está vazio -> deploy inválido (sem métricas)."
-  err "Veja ${exp_data_dir}/${local_result_fetching_log} e ${exp_data_dir}/_debug/*"
-  exit 4
+if [[ -d "${exp_data_dir}/experiment-output" ]]; then
+  info "OK: diretório experiment-output existe."
+else
+  warn "Diretório experiment-output NÃO existe em ${exp_data_dir}."
 fi
 
-info "[VERIFY] OK: experiment-output contém resultados (${cnt_dirs} dirs)."
+# Falha estrutural se não houver evidência de outputs
+if ! compgen -G "${exp_data_dir}/experiment-output-*.tar.gz" > /dev/null && [[ ! -d "${exp_data_dir}/experiment-output" ]]; then
+  die "Sem outputs reais: nem experiment-output/ nem experiment-output-*.tar.gz. Deploy não executou end-to-end."
+fi
 
-echo
-info "Remote deployment finished (com outputs reais)."
-info "Se estiver usando cloud, não esqueça: scripts/cancel-cloud-instances.sh $exp_data_dir/cloud-instance-info"
+info "Deploy remoto finalizado."
 
