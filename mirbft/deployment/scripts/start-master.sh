@@ -87,5 +87,34 @@ fi
 
 log "Killing previous discoverymaster (if any)..."
 set +e
-ssh ${ssh_opti_
+ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+  pkill -9 -f '${remote_bin_dir}/discoverymaster' 2>/dev/null || true
+  pkill -9 -f 'discoverymaster ' 2>/dev/null || true
+  sleep 0.2
+  pgrep -af discoverymaster 2>/dev/null || true
+" </dev/null
+rc=$?
+set -e
+if [[ $rc -ne 0 ]]; then
+  warn "Kill step returned rc=$rc (continuando)"
+fi
+
+log "Starting discoverymaster in MASTER mode (file-based commands)..."
+ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+  cd '${remote_work_dir}' && \
+  rm -f '${remote_status_file}' '${remote_ready_file}' 2>/dev/null || true; \
+  /usr/bin/nohup '${remote_bin_dir}/discoverymaster' master ':${DISCOVERY_PORT}' '${remote_work_dir}/master-commands.cmd' \
+    > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null & \
+  echo PID=\$!; \
+  sleep 0.2; \
+  pgrep -af discoverymaster 2>/dev/null || true; \
+  tail -n 30 '${remote_work_dir}/logs/discoverymaster.log' 2>/dev/null || true; \
+" </dev/null
+
+log "Verificando se o master está vivo e escutando na porta ${DISCOVERY_PORT}..."
+ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+  (ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true) | grep -q ':${DISCOVERY_PORT}' && echo OK || (echo FAIL; exit 1)
+" </dev/null
+
+log "Master started successfully."
 
