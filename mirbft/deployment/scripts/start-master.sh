@@ -1,124 +1,113 @@
-#!/bin/bash
-# scripts/start-master.sh
+#!/usr/bin/env bash
 set -euo pipefail
 
-this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-deployment_dir="$(cd "$this_dir/.." && pwd)"
+ts(){ date '+%Y-%m-%d %H:%M:%S'; }
+log(){ echo "[start-master][$(ts)] $*"; }
 
-# shellcheck source=/dev/null
-. "$deployment_dir/scripts/global-vars.sh"
+# Esperado do ambiente / global-vars.sh
+: "${remote_user:?}"
+: "${master_ip:?}"
+: "${ssh_options:?}"
+: "${remote_work_dir:?}"     # ex: /users/Bruno/iss
+: "${remote_bin_dir:?}"      # ex: /users/Bruno/go/bin
+: "${exp_data_dir:?}"        # local exp data dir
+: "${DISCOVERY_PORT:=9999}"  # default
 
-exp_data_dir="$1"
-master_ip="$2"
+local_master_cmd="${exp_data_dir}/master-commands.cmd"
+remote_master_cmd="${remote_work_dir}/master-commands.cmd"
+remote_log="${remote_work_dir}/main_log.log"
+remote_pid="${remote_work_dir}/.discoverymaster.pid"
 
-local_master_cmd="$exp_data_dir/master-commands.cmd"
-remote_master_cmd="$remote_work_dir/master-commands.cmd"
+log "Master IP: ${master_ip}"
+log "Remote work dir: ${remote_work_dir}"
+log "Remote bin dir: ${remote_bin_dir}"
+log "Discovery port: ${DISCOVERY_PORT}"
+log "Local master-commands: ${local_master_cmd}"
+log "Remote master-commands: ${remote_master_cmd}"
 
-ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}"
-remote_user="${remote_user:-$USER}"
-
-local_bin_dir="${LOCAL_BIN_DIR:-${GOBIN:-${GOPATH:-$HOME/go}/bin}}"
-DISCOVERY_PORT="${master_port:-9999}"
-
-ts(){ date +"%Y-%m-%d %H:%M:%S"; }
-info(){ echo "[start-master][$(ts)] $*"; }
-err(){  echo "[start-master][$(ts)][ERRO] $*" >&2; }
-
-info "Using experiment data directory: $exp_data_dir"
-info "Using master IP: $master_ip"
-info "Local master command script: $local_master_cmd"
-info "Remote work dir: $remote_work_dir"
-info "Remote master command path: $remote_master_cmd"
-info "Local bin dir: $local_bin_dir"
-info "Discovery port: $DISCOVERY_PORT"
-echo
-
-info "Ensuring remote directories on master ($master_ip)."
-ssh $ssh_options "${remote_user}@${master_ip}" " \
-  mkdir -p \
-    '$remote_work_dir' \
-    '$remote_work_dir/config' \
-    '$remote_work_dir/logs' \
-    '$remote_work_dir/scripts' \
-    '$remote_work_dir/tls-data' \
-    '$remote_exp_dir' \
-    '$remote_exp_dir/raw-results' \
-    '$remote_work_dir/experiment-config' \
-    '$remote_bin_dir' \
-" </dev/null
-
-info "Copying master commands and helper scripts to master."
-scp $ssh_options "$local_master_cmd" "${remote_user}@${master_ip}:${remote_master_cmd}"
-scp $ssh_options "$deployment_dir/scripts/start-slave.sh" "${remote_user}@${master_ip}:${remote_work_dir}/scripts/start-slave.sh"
-scp $ssh_options "$deployment_dir/scripts/stubborn-scp.sh" "${remote_user}@${master_ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
-scp $ssh_options "$deployment_dir/scripts/global-vars.sh" "${remote_user}@${master_ip}:${remote_work_dir}/scripts/global-vars.sh"
-
-info "Copying required binaries to master (if found locally)."
-for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
-  if [[ -x "${local_bin_dir}/${bin}" ]]; then
-    info "  - sending ${bin} -> ${remote_bin_dir}/${bin}"
-    scp $ssh_options "${local_bin_dir}/${bin}" "${remote_user}@${master_ip}:${remote_bin_dir}/${bin}"
-  else
-    info "  [WARN] local bin not found: ${local_bin_dir}/${bin}"
-  fi
-done
-
-info "Copying experiment config files to master."
-local_config_src_dir="$exp_data_dir/config"
-if ls "$local_config_src_dir"/config-*.yml >/dev/null 2>&1; then
-  scp $ssh_options "$local_config_src_dir"/config-*.yml "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/"
-else
-  info "WARNING: nenhum arquivo config-XXXX.yml encontrado em $local_config_src_dir; configs não foram copiadas."
+if [[ ! -f "${local_master_cmd}" ]]; then
+  echo "ERRO: local master-commands.cmd não existe em: ${local_master_cmd}" >&2
+  exit 2
 fi
-echo
 
-# ---------------------------------------------------------------------
-# 1) Inicia discoverymaster em modo LEGACY (porta como argumento)
-#    e valida que ele fica vivo.
-# ---------------------------------------------------------------------
-info "Starting discoverymaster LEGACY on remote master ($master_ip)."
+# Copia o master-commands pro master (se você já faz isso fora, pode remover)
+log "Copiando master-commands.cmd para o master..."
+scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_master_cmd}" >/dev/null
 
-ssh $ssh_options "${remote_user}@${master_ip}" " \
-  set -e; \
-  chmod +x '$remote_bin_dir/discoverymaster' 2>/dev/null || true; \
-  if [[ ! -x '$remote_bin_dir/discoverymaster' ]]; then \
-    echo 'ERRO: discoverymaster não existe ou não é executável em $remote_bin_dir/discoverymaster'; \
-    ls -la '$remote_bin_dir' | head -n 80; \
-    exit 2; \
-  fi; \
-  pkill -9 -f '$remote_bin_dir/discoverymaster' 2>/dev/null || true; \
-  cd '$remote_work_dir'; \
-  /usr/bin/nohup '$remote_bin_dir/discoverymaster' '$DISCOVERY_PORT' > main_log.log 2>&1 < /dev/null & \
-  echo \$! > .discoverymaster.pid; \
-  sleep 1; \
-  if ! kill -0 \$(cat .discoverymaster.pid) 2>/dev/null; then \
-    echo 'ERRO: discoverymaster morreu ao iniciar. main_log:'; \
-    tail -n 120 '$remote_work_dir/main_log.log' 2>/dev/null || true; \
-    exit 3; \
-  fi; \
-  echo 'OK: discoverymaster pid=' \$(cat .discoverymaster.pid); \
-" </dev/null
+log "Subindo discoverymaster em MASTER mode (file-based commands)..."
+ssh ${ssh_options} "${remote_user}@${master_ip}" bash -lc "'
+set -euo pipefail
 
-# ---------------------------------------------------------------------
-# 2) Inicia a execução real dos experimentos chamando master-commands.cmd
-#    diretamente (não depende do discoverymaster suportar -commands).
-# ---------------------------------------------------------------------
-info "Starting master-commands.cmd directly on master (nohup)."
+ts(){ date \"+%Y-%m-%d %H:%M:%S\"; }
+log(){ echo \"[MASTER-REMOTE][\$(ts)] \$*\"; }
 
-ssh $ssh_options "${remote_user}@${master_ip}" " \
-  set -e; \
-  chmod +x '$remote_master_cmd' '$remote_work_dir/scripts/start-slave.sh' '$remote_work_dir/scripts/stubborn-scp.sh' 2>/dev/null || true; \
-  cd '$remote_work_dir'; \
-  /usr/bin/nohup bash '$remote_master_cmd' > '$remote_work_dir/logs/master-commands.nohup.log' 2>&1 < /dev/null & \
-  echo \$! > .master-commands.pid; \
-  sleep 1; \
-  if ! kill -0 \$(cat .master-commands.pid) 2>/dev/null; then \
-    echo 'ERRO: master-commands morreu ao iniciar. tail nohup log:'; \
-    tail -n 160 '$remote_work_dir/logs/master-commands.nohup.log' 2>/dev/null || true; \
-    exit 4; \
-  fi; \
-  echo 'OK: master-commands pid=' \$(cat .master-commands.pid); \
-" </dev/null
+REMOTE_WORK_DIR=\"${remote_work_dir}\"
+BIN_DIR=\"${remote_bin_dir}\"
+PORT=\"${DISCOVERY_PORT}\"
+MASTER_IP=\"${master_ip}\"
+CMD_FILE=\"${remote_master_cmd}\"
+LOG_FILE=\"${remote_log}\"
+PID_FILE=\"${remote_pid}\"
 
-info "start-master.sh finished (discoverymaster + master-commands started)."
+cd \"\$REMOTE_WORK_DIR\"
+
+log \"PWD=\$(pwd) HOST=\$(hostname) WHOAMI=\$(whoami)\"
+log \"Bin: \$BIN_DIR/discoverymaster\"
+log \"Cmd file: \$CMD_FILE\"
+log \"Port: \$PORT\"
+
+# valida binário
+if [[ ! -x \"\$BIN_DIR/discoverymaster\" ]]; then
+  log \"ERRO: discoverymaster não é executável em \$BIN_DIR/discoverymaster\"
+  ls -la \"\$BIN_DIR\" | head -n 120 || true
+  exit 10
+fi
+
+# valida arquivo de comandos
+if [[ ! -f \"\$CMD_FILE\" ]]; then
+  log \"ERRO: master-commands.cmd não existe no master: \$CMD_FILE\"
+  ls -la \"\$REMOTE_WORK_DIR\" | head -n 120 || true
+  exit 11
+fi
+
+log \"Head do master-commands.cmd:\"
+head -n 60 \"\$CMD_FILE\" || true
+
+# mata instância anterior (se houver)
+pkill -9 -f \"\$BIN_DIR/discoverymaster\" 2>/dev/null || true
+
+# checa porta ocupada (sem depender de ss/lsof estarem presentes)
+log \"Checando se a porta \$PORT já está em uso...\"
+( command -v ss >/dev/null 2>&1 && ss -ltnp | grep -E \":\$PORT\\b\" ) || true
+( command -v netstat >/dev/null 2>&1 && netstat -ltnp 2>/dev/null | grep -E \":\$PORT\\b\" ) || true
+
+# IMPORTANTe:
+# MASTER mode (file-based) = mantém o server ativo enquanto consome CMD_FILE e aguarda slaves.
+# Sintaxe (conforme usage do binário):
+#   discoverymaster master addr:port master-commands.cmd
+#
+# addr:port aqui deve ser o endpoint do próprio master.
+MASTER_ADDR=\"\$MASTER_IP:\$PORT\"
+
+log \"Iniciando: nohup discoverymaster master \$MASTER_ADDR \$CMD_FILE\"
+nohup \"\$BIN_DIR/discoverymaster\" master \"\$MASTER_ADDR\" \"\$CMD_FILE\" > \"\$LOG_FILE\" 2>&1 < /dev/null &
+echo \$! > \"\$PID_FILE\"
+
+sleep 1
+
+if ! kill -0 \$(cat \"\$PID_FILE\") 2>/dev/null; then
+  log \"ERRO: discoverymaster morreu ao iniciar.\"
+  log \"Tail do log:\"
+  tail -n 200 \"\$LOG_FILE\" || true
+  exit 12
+fi
+
+log \"OK: discoverymaster pid=\$(cat \"\$PID_FILE\")\"
+log \"Estado da porta:\"
+( command -v ss >/dev/null 2>&1 && ss -ltnp | grep -E \":\$PORT\\b\" ) || true
+'"
+
+log "Discoverymaster iniciado. Verificando rapidamente o log..."
+ssh ${ssh_options} "${remote_user}@${master_ip}" "tail -n 60 '${remote_log}' || true"
+log "Done."
 
