@@ -1,48 +1,61 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ==============================================================================
-# start-master.sh
-#
-# Responsável por:
-#  - Garantir workdir no master
-#  - Patchar o master-commands.cmd para NÃO depender de PATH (caminhos absolutos)
-#  - Copiar master-commands.cmd e configs gerados para o master
-#  - Subir discoverymaster no master
-#
-# Compatibilidade:
-#  - Lê variáveis de ambiente (preferencial) ou argumentos (fallback).
-# ==============================================================================
-
 ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
 log() { echo "[start-master][$(ts)] $*"; }
 
-# -------------------------
-# Entrada (env > args)
-# -------------------------
-remote_user="${remote_user:-${1:-Bruno}}"
-master_ip="${master_ip:-${2:-}}"
-remote_work_dir="${remote_work_dir:-${3:-/users/Bruno/iss}}"
-remote_bin_dir="${remote_bin_dir:-${4:-/users/Bruno/go/bin}}"
-exp_data_dir="${exp_data_dir:-${5:-}}"
-local_master_cmd="${local_master_cmd:-${6:-}}"
-DISCOVERY_PORT="${DISCOVERY_PORT:-${7:-9999}}"
-ssh_options="${ssh_options:-"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"}"
+# ------------------------------------------------------------------------------
+# Entrada: tenta env primeiro; se não tiver, tenta args; se não tiver, faz fallback
+# ------------------------------------------------------------------------------
+remote_user="${remote_user:-${REMOTE_USER:-${1:-Bruno}}}"
+master_ip="${master_ip:-${MASTER_IP:-${2:-}}}"
+remote_work_dir="${remote_work_dir:-${REMOTE_WORK_DIR:-${3:-/users/Bruno/iss}}}"
+remote_bin_dir="${remote_bin_dir:-${REMOTE_BIN_DIR:-${4:-/users/Bruno/go/bin}}}"
 
+# O deploy.sh DO SEU PROJETO já imprime exp_data_dir no initialize-deployment,
+# então normalmente ele existe no ambiente. Mesmo assim, adiciono fallback por args.
+exp_data_dir="${exp_data_dir:-${EXP_DATA_DIR:-${5:-}}}"
+
+# local_master_cmd às vezes não é exportado pelo deploy.sh
+local_master_cmd="${local_master_cmd:-${LOCAL_MASTER_CMD:-${6:-}}}"
+
+DISCOVERY_PORT="${DISCOVERY_PORT:-${master_port:-${MASTER_PORT:-9999}}}"
+ssh_options="${ssh_options:-${SSH_OPTIONS:-"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"}}"
+
+# ------------------------------------------------------------------------------
+# Fallbacks robustos (para não quebrar o deploy)
+# ------------------------------------------------------------------------------
 if [[ -z "${master_ip}" ]]; then
-  echo "FATAL: master_ip vazio. Passe via env master_ip=... ou args." >&2
+  # Alguns fluxos setam MASTER_IP no env e passam args vazios. Se ainda assim está vazio, falha.
+  echo "FATAL: master_ip vazio. O deploy.sh precisa fornecer MASTER_IP/master_ip." >&2
   exit 1
 fi
+
 if [[ -z "${exp_data_dir}" ]]; then
-  echo "FATAL: exp_data_dir vazio. Passe via env exp_data_dir=... ou args." >&2
+  # Tenta deduzir por estar rodando dentro de deployment-data/remote-xxxx
+  # (não é perfeito, mas ajuda)
+  if [[ "${PWD}" =~ deployment-data/remote-[0-9]{4}$ ]]; then
+    exp_data_dir="${PWD}"
+  fi
+fi
+
+if [[ -z "${exp_data_dir}" ]]; then
+  echo "FATAL: exp_data_dir vazio. O deploy.sh precisa fornecer EXP_DATA_DIR/exp_data_dir." >&2
   exit 1
 fi
+
+# Se local_master_cmd não veio, assume o caminho padrão gerado pelo pipeline
 if [[ -z "${local_master_cmd}" ]]; then
-  echo "FATAL: local_master_cmd vazio. Passe via env local_master_cmd=... ou args." >&2
-  exit 1
+  if [[ -f "${exp_data_dir}/master-commands.cmd" ]]; then
+    local_master_cmd="${exp_data_dir}/master-commands.cmd"
+  fi
 fi
-if [[ ! -f "${local_master_cmd}" ]]; then
-  echo "FATAL: local_master_cmd não existe: ${local_master_cmd}" >&2
+
+if [[ -z "${local_master_cmd}" || ! -f "${local_master_cmd}" ]]; then
+  echo "FATAL: não consegui localizar master-commands.cmd." >&2
+  echo "  exp_data_dir=${exp_data_dir}" >&2
+  echo "  tentei: ${exp_data_dir}/master-commands.cmd" >&2
+  echo "  local_master_cmd=${local_master_cmd:-<vazio>}" >&2
   exit 1
 fi
 
@@ -61,36 +74,32 @@ log "DISCOVERY_PORT=${DISCOVERY_PORT}"
 log "local_master_cmd=${local_master_cmd}"
 log "debug_log=${debug_log}"
 
-# -------------------------
-# Patch do master-commands
-# -------------------------
+# ------------------------------------------------------------------------------
+# Patch do master-commands.cmd para NÃO depender de PATH e para usar config absoluto
+# ------------------------------------------------------------------------------
 patch_master_commands() {
   local f="$1"
   local bak="${f}.bak.$(date +%s)"
 
-  log "Patching master-commands.cmd para caminhos absolutos (PATH-proof)..."
+  log "Patching master-commands.cmd (PATH-proof + config absoluto)..."
   cp -f "$f" "$bak"
-  log "Backup criado em: $bak"
+  log "Backup: $bak"
 
-  # 1) scripts/bins sem PATH -> absolutos
-  # stubborn-scp.sh
+  # 1) Comandos que não podem depender de PATH
   sed -i \
     -e 's#\bstubborn-scp\.sh\b#/users/Bruno/iss/scripts/stubborn-scp.sh#g' \
     -e 's#\borderingpeer\b#/users/Bruno/go/bin/orderingpeer#g' \
     -e 's#\borderingclient\b#/users/Bruno/go/bin/orderingclient#g' \
     "$f"
 
-  # 2) config relativo -> absoluto
+  # 2) Caminho de config absoluto (evita cwd / resolve bug original)
   sed -i \
     -e 's#\bconfig/config\.yml\b#/users/Bruno/iss/config/config.yml#g' \
     "$f"
 
-  # 3) Garantir mkdir do CFGDIR antes do PRIMEIRO fetch de config
-  #    (insere antes da primeira ocorrência do stubborn-scp, já absolutizada)
+  # 3) Garantir mkdir do /users/Bruno/iss/config antes do PRIMEIRO fetch de config
   if grep -q "/users/Bruno/iss/scripts/stubborn-scp.sh" "$f"; then
-    # Insere só uma vez (evitar duplicar se script rodar mais de uma vez)
     if ! grep -q "mkdir -p /users/Bruno/iss/config" "$f"; then
-      # Inserção robusta: antes da primeira linha que contém stubborn-scp
       awk '
         BEGIN{inserted=0}
         {
@@ -107,21 +116,16 @@ patch_master_commands() {
       log "mkdir -p /users/Bruno/iss/config já presente (não duplicando)."
     fi
   else
-    log "WARN: não achei stubborn-scp no master-commands.cmd (nada a inserir de mkdir)."
+    log "WARN: não achei stubborn-scp no master-commands.cmd (não inseri mkdir)."
   fi
 
-  # 4) Diagnóstico: mostrar as linhas críticas
   log "Trechos críticos (grep):"
-  egrep -n "stubborn-scp|orderingpeer|orderingclient|config\.yml|mkdir -p /users/Bruno/iss/config" "$f" | head -n 120 || true
-
-  log "Patch concluído."
+  egrep -n "stubborn-scp|orderingpeer|orderingclient|config\.yml|mkdir -p /users/Bruno/iss/config" "$f" | head -n 200 || true
+  log "Patch OK."
 }
 
 patch_master_commands "${local_master_cmd}"
 
-# -------------------------
-# Ações no master remoto
-# -------------------------
 remote_exec() {
   ssh ${ssh_options} "${remote_user}@${master_ip}" "$@" < /dev/null
 }
@@ -133,17 +137,17 @@ log "Copying master-commands.cmd to remote..."
 scp ${ssh_options} -q "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd"
 
 log "Copying generated configs to master (experiment-config/) via scp..."
-# Copia configs gerados no exp_data_dir/configs (ou config/), tenta ambos.
+# Tenta caminhos comuns do seu pipeline
 if [[ -d "${exp_data_dir}/experiment-config" ]]; then
-  scp ${ssh_options} -q "${exp_data_dir}/experiment-config/"*.yml "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" || true
+  scp ${ssh_options} -q "${exp_data_dir}/experiment-config/"*.yml "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" 2>/dev/null || true
 fi
 if [[ -d "${exp_data_dir}/config" ]]; then
-  scp ${ssh_options} -q "${exp_data_dir}/config/"*.yml "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" || true
+  scp ${ssh_options} -q "${exp_data_dir}/config/"*.yml "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" 2>/dev/null || true
 fi
-# fallback: tenta achar configs no exp_data_dir
-found_cfgs="$(find "${exp_data_dir}" -maxdepth 2 -type f -name 'config-*.yml' 2>/dev/null | head -n 1 || true)"
-if [[ -n "${found_cfgs}" ]]; then
-  scp ${ssh_options} -q "${exp_data_dir}"/config-*.yml "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" 2>/dev/null || true
+# fallback: qualquer config-*.yml no exp_data_dir (maxdepth 2)
+mapfile -t cfgs < <(find "${exp_data_dir}" -maxdepth 2 -type f -name 'config-*.yml' 2>/dev/null || true)
+if [[ ${#cfgs[@]} -gt 0 ]]; then
+  scp ${ssh_options} -q "${cfgs[@]}" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" 2>/dev/null || true
 fi
 
 log "remote experiment-config:"
@@ -163,7 +167,7 @@ if [[ $rc -ne 0 ]]; then
   log "WARN: Kill step returned rc=${rc} (continuando)"
 fi
 
-log "Starting discoverymaster in MASTER mode (file-based commands)..."
+log "Starting discoverymaster on :${DISCOVERY_PORT} ..."
 remote_exec "
   set -e
   cd '${remote_work_dir}'
@@ -176,7 +180,7 @@ remote_exec "
   tail -n 30 '${remote_work_dir}/logs/discoverymaster.log' 2>/dev/null || true
 "
 
-log "Verificando se o master está vivo e escutando na porta ${DISCOVERY_PORT}..."
+log "Verificando se o master está escutando na porta ${DISCOVERY_PORT}..."
 remote_exec "ss -lntp | grep ':${DISCOVERY_PORT} ' >/dev/null && echo OK || (echo FAIL; ss -lntp | grep ':${DISCOVERY_PORT} ' || true; exit 1)"
 
 log "Master started successfully."
