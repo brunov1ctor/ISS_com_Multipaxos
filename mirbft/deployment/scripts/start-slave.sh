@@ -16,31 +16,42 @@ fi
 # shellcheck source=/dev/null
 source "$(dirname "$0")/global-vars.sh"
 
-# ------------------------------------------------------------------
-# Ensure DISCOVERY_PORT is always defined
-# ------------------------------------------------------------------
 DISCOVERY_PORT="${DISCOVERY_PORT:-${master_port:-9999}}"
 export DISCOVERY_PORT
 
-# ------------------------------------------------------------------
-# Kill any previous discoveryslave on this node (CRITICAL FIX)
-# ------------------------------------------------------------------
-echo "[start-slave] Killing any existing discoveryslave processes..."
-pkill -9 -f "${remote_bin_dir}/discoveryslave" 2>/dev/null || true
-sleep 0.5
+echo "[start-slave] tag=${tag} master=${master_ip}:${DISCOVERY_PORT} pub=${own_public_ip} priv=${own_private_ip}"
 
 # ------------------------------------------------------------------
-# Prepare directories
+# Kill anything old that could interfere (IMPORTANT)
 # ------------------------------------------------------------------
-mkdir -p "${remote_work_dir}/logs"
-mkdir -p "${remote_work_dir}/bin"
-mkdir -p "${remote_work_dir}/config"
-mkdir -p "${remote_work_dir}/tls-data"
+echo "[start-slave] Killing old processes..."
+pkill -9 -f "${remote_bin_dir}/discoveryslave" 2>/dev/null || true
+pkill -9 -f "discoveryslave ${tag} " 2>/dev/null || true
+pkill -9 -f "${remote_bin_dir}/orderingpeer" 2>/dev/null || true
+pkill -9 -f "${remote_bin_dir}/orderingclient" 2>/dev/null || true
+sleep 0.3
+
+# ------------------------------------------------------------------
+# Wipe any persisted discovery/slave state (IMPORTANT)
+# (these patterns are conservative; harmless if nothing exists)
+# ------------------------------------------------------------------
+echo "[start-slave] Wiping stale state files..."
+rm -f "${remote_work_dir}"/.discovery* 2>/dev/null || true
+rm -f "${remote_work_dir}"/.discoveryslave* 2>/dev/null || true
+rm -f "${remote_work_dir}"/discoveryslave*.pid 2>/dev/null || true
+rm -f "${remote_work_dir}"/slave*.pid 2>/dev/null || true
+rm -f "${remote_work_dir}"/status 2>/dev/null || true
+
+# (opcional, mas ajuda muito quando estado fica no exp_dir)
+rm -rf "${remote_exp_dir}/state" 2>/dev/null || true
+rm -rf "${remote_exp_dir}/slave-state" 2>/dev/null || true
+
+# ------------------------------------------------------------------
+# Prepare dirs
+# ------------------------------------------------------------------
+mkdir -p "${remote_work_dir}/logs" "${remote_work_dir}/bin" "${remote_work_dir}/config" "${remote_work_dir}/tls-data"
 mkdir -p "${remote_exp_dir}"
 
-# ------------------------------------------------------------------
-# PATH must include scripts and bin (execve, no shell)
-# ------------------------------------------------------------------
 remote_scripts_dir="${remote_work_dir}/scripts"
 export PATH="${remote_scripts_dir}:${remote_bin_dir}:${PATH}"
 
@@ -50,10 +61,7 @@ export own_private_ip="${own_private_ip}"
 
 cd "${remote_work_dir}"
 
-# ------------------------------------------------------------------
-# Start discoveryslave (ONE AND ONLY ONE)
-# ------------------------------------------------------------------
-echo "[start-slave] Starting discoveryslave tag=${tag}"
+echo "[start-slave] Starting discoveryslave (fresh)..."
 exec /usr/bin/nohup \
   "${remote_bin_dir}/discoveryslave" \
   "${tag}" \
