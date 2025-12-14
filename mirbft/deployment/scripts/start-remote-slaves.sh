@@ -1,79 +1,47 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+#
+# start-remote-slaves.sh
+#
+# Uso:
+#   start-remote-slaves.sh <exp_data_dir> <desired_count> <wanted_tag> <instance_info_file>
+#
+# - Lê o instance-info (id ctrl_ip data_ip role tag)
+# - Inicia APENAS 'desired_count' instâncias com tag = wanted_tag
+# - Copia scripts e binários para o remoto (atomic)
+# - Dispara start-slave.sh via nohup (não pode travar)
+#
+
 set -euo pipefail
 
-this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-deployment_dir="$(cd "${this_dir}/.." && pwd)"
-repo_dir="$(cd "${deployment_dir}/.." && pwd)"
-
-if [[ -f "${this_dir}/global-vars.sh" ]]; then
-  # shellcheck source=/dev/null
-  source "${this_dir}/global-vars.sh"
-fi
-
-ts() { date +"%Y-%m-%d %H:%M:%S"; }
+ts(){ date +"%Y-%m-%d %H:%M:%S"; }
 info(){ echo "[INFO  ][$(ts)] $*"; }
 warn(){ echo "[WARN  ][$(ts)] $*"; }
 err(){  echo "[ERRO  ][$(ts)] $*" >&2; }
 
-# SSH options (evita travar, sem hostkey prompt, sem multiplex)
-ssh_options="${ssh_options:-}"
-ssh_options="${ssh_options} -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1"
-ssh_options="${ssh_options} -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR"
-ssh_options="${ssh_options} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-ssh_options="${ssh_options} -o ControlMaster=no -o ControlPath=none -o ControlPersist=no"
-
-# timeout para o SSH de start (pra nunca “ficar preso”)
-SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12}"  # segundos
-
-if [[ $# -ne 4 ]]; then
-  echo "Uso: $0 <exp_data_dir> <ignored_num> <tag> <instance_info_file>" >&2
-  exit 1
+if [[ $# -lt 4 ]]; then
+  echo "Uso: $0 <exp_data_dir> <desired_count> <wanted_tag> <instance_info_file>" >&2
+  exit 2
 fi
 
-exp_data_dir_arg="$1"
-ignored_num="$2"
+exp_data_dir="$1"
+desired_count="$2"
 wanted_tag="$3"
-instance_info_arg="$4"
+instance_info_file="$4"
 
-resolve_exp_dir() {
-  local exp_arg="$1"
-  if [[ "$exp_arg" = /* && -d "$exp_arg" ]]; then echo "$exp_arg"; return 0; fi
-  local cand1="${deployment_dir}/${exp_arg}"
-  local cand2="${repo_dir}/${exp_arg}"
-  [[ -d "$cand1" ]] && { echo "$cand1"; return 0; }
-  [[ -d "$cand2" ]] && { echo "$cand2"; return 0; }
-  return 1
-}
+this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-resolve_instance_info() {
-  local info_arg="$1"
-  if [[ "$info_arg" = /* && -f "$info_arg" ]]; then echo "$info_arg"; return 0; fi
-  local cand1="${deployment_dir}/${info_arg}"
-  local cand2="${repo_dir}/${info_arg}"
-  [[ -f "$cand1" ]] && { echo "$cand1"; return 0; }
-  [[ -f "$cand2" ]] && { echo "$cand2"; return 0; }
-  [[ -f "$info_arg" ]] && { echo "$info_arg"; return 0; }
-  return 1
-}
+remote_user="${remote_user:-${REMOTE_USER:-${USER}}}"
+ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
 
-if ! exp_data_dir="$(resolve_exp_dir "$exp_data_dir_arg")"; then
-  err "exp_data_dir não encontrado: '$exp_data_dir_arg'"
-  exit 1
-fi
-
-if ! instance_info_file="$(resolve_instance_info "$instance_info_arg")"; then
-  err "instance-info não encontrado: '$instance_info_arg'"
-  exit 1
-fi
-
-remote_user="${remote_user:-${DEPL_REMOTE_USER:-$USER}}"
-remote_gopath="${remote_gopath:-/users/${remote_user}/go}"
-remote_bin_dir="${remote_bin_dir:-${remote_gopath}/bin}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
+local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"
+
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
 
-local_bin_dir="${LOCAL_BIN_DIR:-${GOBIN:-${GOPATH:-$HOME/go}/bin}}"
-scp_retries="${SCP_RETRIES:-10}"
+scp_retries="${scp_retries:-10}"
 
 info "==== [start-remote-slaves] Contexto ====="
 info "  exp_data_dir       = ${exp_data_dir}"
@@ -85,21 +53,35 @@ info "  remote_bin_dir     = ${remote_bin_dir}"
 info "  remote_exp_dir     = ${remote_exp_dir}"
 info "  local_bin_dir      = ${local_bin_dir}"
 info "  ssh_options        = ${ssh_options}"
-info "  SSH_START_TIMEOUT  = ${SSH_START_TIMEOUT}s"
+info "  SSH_START_TIMEOUT  = ${SSH_START_TIMEOUT}"
 info ""
 
-master_ip="$(awk 'NF>=4 && $4=="master" {print $2; exit}' "${instance_info_file}" 2>/dev/null || true)"
-if [[ -z "${master_ip:-}" ]]; then
-  err "Não consegui detectar master_ip em ${instance_info_file}"
-  exit 1
-fi
+# determinar master ip (primeira linha role=master ou id=master ou id=-1)
+master_ip=""
+while read -r instance_id ctrl_ip data_ip role tag; do
+  [[ -z "${instance_id:-}" ]] && continue
+  [[ "${instance_id}" =~ ^# ]] && continue
+  if [[ "${role}" == "master" || "${instance_id}" == "master" || "${instance_id}" == "-1" ]]; then
+    master_ip="$ctrl_ip"
+    break
+  fi
+done < "${instance_info_file}"
+
+[[ -n "${master_ip}" ]] || { err "Não consegui detectar master_ip pelo instance-info"; exit 3; }
+
 info "[start-remote-slaves] master_ip = ${master_ip}"
 
 remote_mkdirs() {
   local ip="$1"
-  ssh ${ssh_options} "${remote_user}@${ip}" \
-    "mkdir -p '${remote_work_dir}/scripts' '${remote_work_dir}/logs' '${remote_exp_dir}' '${remote_bin_dir}'" \
-    </dev/null
+  ssh ${ssh_options} "${remote_user}@${ip}" "\
+    mkdir -p '${remote_work_dir}' \
+             '${remote_work_dir}/scripts' \
+             '${remote_work_dir}/logs' \
+             '${remote_work_dir}/config' \
+             '${remote_exp_dir}' \
+             '${remote_bin_dir}' \
+    2>/dev/null || true
+  " </dev/null
 }
 
 remote_kill_bins() {
@@ -215,6 +197,7 @@ echo STARTED; exit 0"
 
 total=0
 matched=0
+started=0
 
 while read -r instance_id ctrl_ip data_ip role tag; do
   ((total++)) || true
@@ -226,8 +209,26 @@ while read -r instance_id ctrl_ip data_ip role tag; do
   fi
 
   ((matched++)) || true
+
+  # O 2o argumento do script era "ignored_num" no legado.
+  # Aqui ele vira LIMIT REAL: quantos nós iniciar para essa tag.
+  # Isso evita inconsistências entre instance-info (pode ter mais linhas)
+  # e deployment.dpl (quantos slaves o master espera).
+  if [[ "${desired_count}" -gt 0 ]] && (( started >= desired_count )); then
+    continue
+  fi
+
+  ((started++)) || true
   start_remote_slave "${instance_id}" "${ctrl_ip}" "${data_ip}" "${tag}"
 done < "${instance_info_file}"
+
+if [[ "${desired_count}" -gt 0 ]]; then
+  if (( matched > desired_count )); then
+    warn "[start-remote-slaves] instance-info tem ${matched} entradas tag='${wanted_tag}', mas limite=${desired_count}. Iniciei ${started}."
+  elif (( matched < desired_count )); then
+    warn "[start-remote-slaves] instance-info tem APENAS ${matched} entradas tag='${wanted_tag}', mas esperado=${desired_count}. Iniciei ${started}."
+  fi
+fi
 
 info "[start-remote-slaves] Linhas processadas: ${total}, matches(tag=${wanted_tag}): ${matched}"
 info "==== [start-remote-slaves] FIM ===="

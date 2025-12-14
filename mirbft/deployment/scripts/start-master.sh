@@ -12,22 +12,24 @@ warn(){ echo "[start-master][$(ts)] WARN: $*" >&2; }
 #   remote_user, ssh_options, remote_work_dir, remote_bin_dir
 #   DISCOVERY_PORT (ou master_port), remote_status_file, remote_ready_file
 
-exp_data_dir="${1:?missing exp_data_dir}"
-master_ip="${2:?missing master_ip}"
+exp_data_dir="${1:?exp_data_dir required}"
+master_ip="${2:?master_ip required}"
 
-remote_user="${remote_user:-${USER}}"
+remote_user="${remote_user:-${REMOTE_USER:-${USER}}}"
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
-DISCOVERY_PORT="${DISCOVERY_PORT:-${master_port:-9999}}"
 
-local_master_cmd="${exp_data_dir}/master-commands.cmd"
-remote_master_cmd="${remote_work_dir}/master-commands.cmd"
-remote_log="${remote_work_dir}/main_log.log"
-remote_pid="${remote_work_dir}/.discoverymaster.pid"
+DISCOVERY_PORT="${DISCOVERY_PORT:-${master_port:-9999}}"
 
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 remote_ready_file="${remote_ready_file:-${remote_work_dir}/master-ready}"
+
+local_master_cmd="${exp_data_dir}/master-commands.cmd"
+if [[ ! -f "$local_master_cmd" ]]; then
+  echo "master-commands.cmd não encontrado: $local_master_cmd" >&2
+  exit 2
+fi
 
 log "remote_user=${remote_user}"
 log "master_ip=${master_ip}"
@@ -38,97 +40,63 @@ log "exp_data_dir=${exp_data_dir}"
 log "DISCOVERY_PORT=${DISCOVERY_PORT}"
 log "local_master_cmd=${local_master_cmd}"
 
-if [[ ! -s "${local_master_cmd}" ]]; then
-  echo "[start-master][$(ts)] ERROR: local master-commands.cmd missing/empty: ${local_master_cmd}" >&2
-  exit 2
-fi
-
 log "Ensuring remote workdir exists..."
-ssh ${ssh_options} "${remote_user}@${master_ip}" "mkdir -p '${remote_work_dir}'"
+ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+  mkdir -p '${remote_work_dir}' \
+           '${remote_work_dir}/logs' \
+           '${remote_work_dir}/scripts' \
+           '${remote_work_dir}/experiment-config' \
+           '${remote_work_dir}/current-deployment-data' \
+" </dev/null
 
 log "Copying master-commands.cmd to remote..."
-scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_master_cmd}"
+scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd" >/dev/null
 
-# -------------------------------------------------------------------
-# Kill antigo (ROBUSTO): não deixa falha de ssh/pkill derrubar o script
-# -------------------------------------------------------------------
+# Copiar configs gerados localmente (exp_data_dir/config/*) para o master, em:
+#   ${remote_work_dir}/experiment-config/
+# Isso é necessário porque o master-commands manda os slaves fazerem SCP
+# a partir de "experiment-config/config-XXXX.yml" no master.
+if [[ -d "${exp_data_dir}/config" ]]; then
+  log "Copying generated configs to master (experiment-config/)..."
+  tar -C "${exp_data_dir}/config" -cf - . \
+    | ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+        mkdir -p '${remote_work_dir}/experiment-config' && \
+        tar -C '${remote_work_dir}/experiment-config' -xf - \
+      " </dev/null
+else
+  warn "Diretório local de configs não encontrado: ${exp_data_dir}/config (isso pode quebrar o scp dos slaves)."
+fi
+
 log "Killing previous discoverymaster (if any)..."
 set +e
-ssh_rc=0
-ssh ${ssh_options} "${remote_user}@${master_ip}" "
+ssh ${ssh_options} "${remote_user}@${master_ip}" "\
   pkill -9 -f '${remote_bin_dir}/discoverymaster' 2>/dev/null || true
   pkill -9 -f 'discoverymaster ' 2>/dev/null || true
   sleep 0.2
   pgrep -af discoverymaster 2>/dev/null || true
 " </dev/null
-ssh_rc=$?
+rc=$?
 set -e
-if [[ $ssh_rc -ne 0 ]]; then
-  warn "Kill step returned rc=${ssh_rc} (continuando)"
-else
-  log "Kill step OK"
+if [[ $rc -ne 0 ]]; then
+  warn "Kill step returned rc=$rc (continuando)"
 fi
 
-# -------------------------------------------------------------------
-# Start MASTER mode (file-based commands) - não depende de stdin
-# -------------------------------------------------------------------
 log "Starting discoverymaster in MASTER mode (file-based commands)..."
-
-# Observação:
-#   discoverymaster master :PORT /path/master-commands.cmd
-#   (Se teu binário exigir "addr:port" diferente, ajuste só a linha abaixo.)
-set +e
-ssh ${ssh_options} "${remote_user}@${master_ip}" "
-  set -euo pipefail
-  cd '${remote_work_dir}'
-
-  # limpa arquivos antigos
-  rm -f '${remote_pid}' '${remote_log}' '${remote_status_file}' '${remote_ready_file}' 2>/dev/null || true
-
-  # sobe
-  nohup '${remote_bin_dir}/discoverymaster' master :${DISCOVERY_PORT} '${remote_master_cmd}' \
-    > '${remote_log}' 2>&1 < /dev/null &
-
-  echo \$! > '${remote_pid}'
-  sleep 1
-
-  echo 'PID='\"\$(cat '${remote_pid}' 2>/dev/null || echo '?')\"
-  ps -p \"\$(cat '${remote_pid}' 2>/dev/null || echo 0)\" -o pid,cmd --no-headers 2>/dev/null || echo 'NOT RUNNING'
-  tail -n 60 '${remote_log}' 2>/dev/null || true
+ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+  cd '${remote_work_dir}' && \
+  rm -f '${remote_status_file}' '${remote_ready_file}' 2>/dev/null || true; \
+  /usr/bin/nohup '${remote_bin_dir}/discoverymaster' master ':${DISCOVERY_PORT}' '${remote_work_dir}/master-commands.cmd' \
+    > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null & \
+  echo PID=\$!; \
+  sleep 0.2; \
+  pgrep -af discoverymaster 2>/dev/null || true; \
+  tail -n 20 '${remote_work_dir}/logs/discoverymaster.log' 2>/dev/null || true; \
 " </dev/null
-start_rc=$?
-set -e
 
-if [[ $start_rc -ne 0 ]]; then
-  warn "Start step returned rc=${start_rc}. Vou coletar diagnóstico do master e falhar."
-  ssh ${ssh_options} "${remote_user}@${master_ip}" "
-    echo '--- PID FILE ---'
-    ls -la '${remote_pid}' 2>/dev/null || true
-    echo '--- LOG ---'
-    tail -n 200 '${remote_log}' 2>/dev/null || true
-    echo '--- LISTEN ---'
-    (ss -lntp 2>/dev/null || netstat -lntp 2>/dev/null || true) | egrep -n '(:${DISCOVERY_PORT}\b|discoverymaster)' || true
-  " </dev/null || true
-  exit 3
-fi
-
-# Confirma que subiu e está escutando
 log "Verificando se o master está vivo e escutando na porta ${DISCOVERY_PORT}..."
-ssh ${ssh_options} "${remote_user}@${master_ip}" "
-  set -euo pipefail
-  pid=\$(cat '${remote_pid}' 2>/dev/null || echo '')
-  if [[ -z \"\$pid\" ]]; then
-    echo 'PID missing'
-    exit 10
-  fi
-  if ! kill -0 \"\$pid\" 2>/dev/null; then
-    echo 'master process is not running'
-    tail -n 200 '${remote_log}' 2>/dev/null || true
-    exit 11
-  fi
-  # porta (best-effort)
-  (ss -lntp 2>/dev/null || netstat -lntp 2>/dev/null || true) | egrep '(:${DISCOVERY_PORT}\b|discoverymaster)' >/dev/null || true
-  echo 'OK'
+# checagem simples: gRPC port listening
+ssh ${ssh_options} "${remote_user}@${master_ip}" "\
+  (ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true) | grep -q ':${DISCOVERY_PORT}' && echo OK || (echo FAIL; exit 1)
 " </dev/null
 
 log "Master started successfully."

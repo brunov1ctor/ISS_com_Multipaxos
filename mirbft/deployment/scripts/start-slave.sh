@@ -81,19 +81,27 @@ fi
 
 # ---------------------------------------------------------------------------
 # 1) Inicia o discoveryslave localmente
+#
+# IMPORTANT (2025-12):
+#   O binário cmd/discoveryslave (Go) usa argumentos POSICIONAIS:
+#     discoveryslave <tag> <masterAddr> <publicIP> <privateIP>
+#   (e NÃO flags -master/-public/-private).
+#   Se chamar com flags, ele não registra no master e o deploy fica preso em
+#   "wait for slaves".
 # ---------------------------------------------------------------------------
 
 {
   log "Iniciando discoveryslave..."
-  log "Comando: discoveryslave -master ${master_ip}:${master_port} -public ${public_ip} -private ${private_ip}"
+  log "Comando: discoveryslave '${tag}' '${master_ip}:${master_port}' '${public_ip}' '${private_ip}'"
 } >> "${log_file}"
 
 cd "${remote_work_dir}" 2>/dev/null || true
 
 /usr/bin/nohup "${remote_bin_dir}/discoveryslave" \
-  -master "${master_ip}:${master_port}" \
-  -public "${public_ip}" \
-  -private "${private_ip}" \
+  "${tag}" \
+  "${master_ip}:${master_port}" \
+  "${public_ip}" \
+  "${private_ip}" \
   >> "${remote_work_dir}/logs/discoveryslave-${tag}.log" 2>&1 < /dev/null &
 
 disc_pid=$!
