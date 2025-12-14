@@ -9,12 +9,13 @@
 #   - run scripts/initialize-deployment.sh
 #   - fez preflight de build (binários locais)
 #
-# Objetivos desta versão:
-#   - garantir que master-commands.cmd existe e foi enviado
-#   - garantir que os slaves foram disparados
-#   - garantir execução ponta-a-ponta: esperar status final no master
-#   - chamar fetch-results.sh e FALHAR se não houver outputs reais
-#   - logs claros (sem "sucesso" falso)
+# Objetivos:
+#   - gerar master-commands.cmd (template -> envsubst)
+#   - reset remoto (com logs reais)
+#   - start master em MASTER mode (file-based commands) => não morre no EOF
+#   - start slaves
+#   - esperar status final e baixar resultados
+#   - falhar se não houver outputs reais
 
 set -euo pipefail
 shopt -s nullglob
@@ -29,19 +30,36 @@ err(){  echo "[ERRO  ][$(ts)] $*" >&2; }
 
 die(){ err "$*"; exit 1; }
 
-############################################
-# Helper: resolve instance-info path
-############################################
-resolve_instance_info() {
-  local base_dir="$1"   # e.g. $exp_data_dir
-  local info_arg="$2"   # e.g. scripts/instance-info
+# --------- defaults essenciais p/ não explodir com set -u ----------
+remote_user="${remote_user:-${REMOTE_USER:-${USER}}}"
+export remote_user
 
-  # absolute
+ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}"
+export ssh_options
+
+# Port do discovery master (master_port é usado no envsubst e nos slaves)
+master_port="${master_port:-${DISCOVERY_PORT:-9999}}"
+export master_port
+export DISCOVERY_PORT="${DISCOVERY_PORT:-${master_port}}"
+
+# Onde o master escreve status/ready no remoto (usados pelo deploy + master-commands)
+remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
+remote_ready_file="${remote_ready_file:-${remote_work_dir}/master-ready}"
+export remote_status_file
+export remote_ready_file
+
+# ---------------------------------------------------------
+# Helper: resolve instance-info path
+# ---------------------------------------------------------
+resolve_instance_info() {
+  local base_dir="$1"
+  local info_arg="$2"
+
   if [[ "$info_arg" = /* ]] && [[ -f "$info_arg" ]]; then
     echo "$info_arg"; return 0
   fi
 
-  # repo root + deployment dir
   local repo_dir
   repo_dir="$(cd "$deployment_dir/.." && pwd)"
 
@@ -55,9 +73,9 @@ resolve_instance_info() {
   return 1
 }
 
-############################################
+# =========================================================
 # 1) Determine master IP from instance-info
-############################################
+# =========================================================
 
 deployment_file="$exp_data_dir/deployment.dpl"
 [[ -f "$deployment_file" ]] || die "Deployment file not found: $deployment_file"
@@ -79,11 +97,14 @@ done < "$instance_info_file"
 
 info "Using instance info file: $instance_info_file"
 info "Master IP address      : $master_ip"
+info "remote_user            : $remote_user"
+info "remote_work_dir        : $remote_work_dir"
+info "master_port            : $master_port"
 echo
 
-# --------------------------------------------------------------------
-# 2) Generate master commands (template -> envsubst -> master-commands.cmd)
-# --------------------------------------------------------------------
+# =========================================================
+# 2) Generate master commands (template -> envsubst -> cmd)
+# =========================================================
 
 local_master_command_template="master-commands-template.cmd"
 local_master_command_file="master-commands.cmd"
@@ -100,14 +121,16 @@ python3 scripts/generate-master-commands.py \
 
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
-export master_port
+
+# IMPORTANTE: ambos precisam existir para write-file $ready_file/$status_file
 export status_file="$remote_status_file"
+export ready_file="$remote_ready_file"
 
 local_template_path="$exp_data_dir/$local_master_command_template"
 local_cmd_path="$exp_data_dir/$local_master_command_file"
 
 if [[ -f "$local_template_path" ]]; then
-  envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
+  envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
     < "$local_template_path" > "$local_cmd_path"
 else
   die "Template não existe: $local_template_path"
@@ -117,9 +140,12 @@ fi
 info "Master command script escrito em: $local_cmd_path"
 echo
 
-# --------------------------------------------------------------------
-# 3) Reset remoto (tolerante a erros, mas loga)
-# --------------------------------------------------------------------
+# =========================================================
+# 3) Reset remoto (tolerante a erros, mas com logs reais)
+# =========================================================
+
+debug_dir="$exp_data_dir/_debug"
+mkdir -p "$debug_dir"
 
 info "Limpando processos antigos e removendo traffic shaping nas máquinas remotas..."
 
@@ -138,13 +164,12 @@ while read -r instance_id ctrl_ip data_ip role itag; do
     pkill -f orderingclient 2>/dev/null || true; \
     pkill -f 'scp ' 2>/dev/null || true; \
     pkill -f rsync 2>/dev/null || true; \
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
-  "; then
+    tc qdisc del dev eth0 root tbf 2>/dev/null || true; \
+  " 2> "$debug_dir/reset-proc-${ctrl_ip}.stderr"; then
     info "[reset-proc] ${ctrl_ip}: OK"
   else
-    warn "[reset-proc] ${ctrl_ip}: ssh falhou (continuando)"
+    warn "[reset-proc] ${ctrl_ip}: ssh falhou (continuando). stderr em $debug_dir/reset-proc-${ctrl_ip}.stderr"
   fi
-
 done < "$instance_info_file"
 
 echo
@@ -156,34 +181,33 @@ while read -r instance_id ctrl_ip data_ip role itag; do
 
   info "[reset-state] ${ctrl_ip}: limpando..."
   if ssh $ssh_options "${remote_user}@${ctrl_ip}" "\
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true; \
+    tc qdisc del dev eth0 root tbf 2>/dev/null || true; \
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true; \
     rm -rf $remote_delete_files 2>/dev/null || true; \
-  "; then
+    mkdir -p '${remote_work_dir}' 2>/dev/null || true; \
+  " 2> "$debug_dir/reset-state-${ctrl_ip}.stderr"; then
     info "[reset-state] ${ctrl_ip}: OK"
   else
-    warn "[reset-state] ${ctrl_ip}: ssh falhou (continuando)"
+    warn "[reset-state] ${ctrl_ip}: ssh falhou (continuando). stderr em $debug_dir/reset-state-${ctrl_ip}.stderr"
   fi
-
 done < "$instance_info_file"
 
 echo
 info "Estado das máquinas remotas resetado."
 echo
 
-# --------------------------------------------------------------------
-# 4) Start master
-# --------------------------------------------------------------------
+# =========================================================
+# 4) Start master  (CORRIGIDO: ordem args)
+# =========================================================
 
 info "Starting master on $master_ip"
-scripts/start-master.sh "$master_ip" "$exp_data_dir"
-
-
+# start-master.sh deve ser: start-master.sh <exp_data_dir> <master_ip>
+scripts/start-master.sh "$exp_data_dir" "$master_ip"
 echo
 
-# --------------------------------------------------------------------
+# =========================================================
 # 5) Start slaves
-# --------------------------------------------------------------------
+# =========================================================
 
 peers_tag="peers"
 info "Starting peer slaves (tag=${peers_tag})"
@@ -197,9 +221,9 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 1 "$clients_tag" "$instance_info_
 echo
 info "All slaves started."
 
-# --------------------------------------------------------------------
+# =========================================================
 # 6) Esperar término REAL (status_file) + fetch + validação
-# --------------------------------------------------------------------
+# =========================================================
 
 csv_file="$exp_data_dir/deployment.csv"
 [[ -f "$csv_file" ]] || die "deployment.csv não encontrado em $csv_file"
@@ -217,7 +241,7 @@ while true; do
   if (( now - start_ts > wait_timeout_sec )); then
     err "Timeout aguardando status final no master."
     err "master=${master_ip} status_file=${remote_status_file} last_exp=${last_exp}"
-    err "Dica: verifique no master: ${remote_work_dir}/main_log.log e ${remote_status_file}"
+    err "Dica: no master: ${remote_work_dir}/main_log.log ; ${remote_status_file} ; ${remote_ready_file}"
     exit 3
   fi
 
@@ -235,7 +259,6 @@ done
 
 echo
 info "[FETCH] Baixando resultados do master -> ${exp_data_dir}"
-
 scripts/fetch-results.sh "${master_ip}" "${exp_data_dir}" | tee "${exp_data_dir}/${local_result_fetching_log}"
 
 echo
@@ -248,7 +271,7 @@ fi
 cnt_dirs="$(find "${exp_data_dir}/experiment-output" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
 if [[ "${cnt_dirs}" == "0" ]]; then
   err "experiment-output está vazio -> deploy inválido (sem métricas)."
-  err "Veja ${exp_data_dir}/${local_result_fetching_log} e ${exp_data_dir}/_debug/master-diag.txt"
+  err "Veja ${exp_data_dir}/${local_result_fetching_log} e ${exp_data_dir}/_debug/*"
   exit 4
 fi
 
