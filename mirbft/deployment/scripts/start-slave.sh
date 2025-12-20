@@ -20,10 +20,11 @@ DISCOVERY_PORT="${DISCOVERY_PORT:-${master_port:-9999}}"
 export DISCOVERY_PORT
 
 echo "[start-slave] tag=${tag} master=${master_ip}:${DISCOVERY_PORT} pub=${own_public_ip} priv=${own_private_ip}"
+echo "[start-slave] remote_work_dir=${remote_work_dir} remote_exp_dir=${remote_exp_dir}"
 
-# ------------------------------------------------------------------
-# Kill anything old that could interfere (IMPORTANT)
-# ------------------------------------------------------------------
+########################################
+# Mata processos antigos
+########################################
 echo "[start-slave] Killing old processes..."
 pkill -9 -f "${remote_bin_dir}/discoveryslave" 2>/dev/null || true
 pkill -9 -f "discoveryslave ${tag} " 2>/dev/null || true
@@ -31,37 +32,55 @@ pkill -9 -f "${remote_bin_dir}/orderingpeer" 2>/dev/null || true
 pkill -9 -f "${remote_bin_dir}/orderingclient" 2>/dev/null || true
 sleep 0.3
 
-# ------------------------------------------------------------------
-# Wipe any persisted discovery/slave state (IMPORTANT)
-# (these patterns are conservative; harmless if nothing exists)
-# ------------------------------------------------------------------
+########################################
+# Limpa estado antigo
+########################################
 echo "[start-slave] Wiping stale state files..."
-rm -f "${remote_work_dir}"/.discovery* 2>/dev/null || true
-rm -f "${remote_work_dir}"/.discoveryslave* 2>/dev/null || true
+
+# estado “global” antigo no work_dir
+rm -f "${remote_work_dir}"/.discovery*        2>/dev/null || true
+rm -f "${remote_work_dir}"/.discoveryslave*   2>/dev/null || true
 rm -f "${remote_work_dir}"/discoveryslave*.pid 2>/dev/null || true
-rm -f "${remote_work_dir}"/slave*.pid 2>/dev/null || true
-rm -f "${remote_work_dir}"/status 2>/dev/null || true
+rm -f "${remote_work_dir}"/slave*.pid         2>/dev/null || true
+rm -f "${remote_work_dir}"/status             2>/dev/null || true
 
-# (opcional, mas ajuda muito quando estado fica no exp_dir)
-rm -rf "${remote_exp_dir}/state" 2>/dev/null || true
-rm -rf "${remote_exp_dir}/slave-state" 2>/dev/null || true
+# estado de experimento no exp_dir
+rm -rf "${remote_exp_dir}/state"        2>/dev/null || true
+rm -rf "${remote_exp_dir}/slave-state"  2>/dev/null || true
 
-# ------------------------------------------------------------------
-# Prepare dirs
-# ------------------------------------------------------------------
-mkdir -p "${remote_work_dir}/logs" "${remote_work_dir}/bin" "${remote_work_dir}/config" "${remote_work_dir}/tls-data"
+########################################
+# Prepara diretórios
+########################################
+mkdir -p \
+  "${remote_work_dir}/logs" \
+  "${remote_work_dir}/bin" \
+  "${remote_work_dir}/config" \
+  "${remote_work_dir}/tls-data"
+
+# Aqui é onde os dados de experimento vão viver
 mkdir -p "${remote_exp_dir}"
+# (não criamos experiment-output/* aqui; o próprio discovery/peers fazem isso)
 
 remote_scripts_dir="${remote_work_dir}/scripts"
 export PATH="${remote_scripts_dir}:${remote_bin_dir}:${PATH}"
+
+# Exporta dicas de diretório para os binários Go (caso usem)
+export MIR_REMOTE_EXP_DIR="${remote_exp_dir}"
+export MIR_REMOTE_WORK_DIR="${remote_work_dir}"
 
 export master_port="${DISCOVERY_PORT}"
 export own_public_ip="${own_public_ip}"
 export own_private_ip="${own_private_ip}"
 
-cd "${remote_work_dir}"
+########################################
+# Importante: rodar discoveryslave a partir do remote_exp_dir
+# para que paths relativos (experiment-output/...) caiam aqui.
+########################################
+cd "${remote_exp_dir}"
 
+echo "[start-slave] PWD=$(pwd)"
 echo "[start-slave] Starting discoveryslave (fresh)..."
+
 exec /usr/bin/nohup \
   "${remote_bin_dir}/discoveryslave" \
   "${tag}" \
