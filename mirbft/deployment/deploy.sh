@@ -9,9 +9,9 @@ ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
 
 log_sep() {
   echo
-  echo "==================================================
-$1
-=================================================="
+  echo "=================================================="
+  echo "$1"
+  echo "=================================================="
 }
 
 log_info() { echo "[INFO ][$(ts)] $*"; }
@@ -19,10 +19,14 @@ log_warn() { echo "[WARN ][$(ts)] $*"; }
 log_err()  { echo "[ERRO ][$(ts)] $*" >&2; }
 
 ########################################
-# Diretórios base
+# Diretórios base / variáveis globais
 ########################################
 
 deploy_dir="$(cd "$(dirname "$0")" && pwd)"
+
+# Carrega variáveis globais compartilhadas (remote_user, remote_work_dir, etc.)
+# shellcheck source=/dev/null
+source "$deploy_dir/scripts/global-vars.sh"
 
 # Raiz dos dados de deployment (onde ficam remote-0000, local-0000, etc.)
 : "${deployment_data_root:="$deploy_dir/deployment-data"}"
@@ -86,6 +90,7 @@ ensure_local_binaries() {
   log_sep "[BUILD] Preflight: garantindo binários locais"
   log_info "Repo dir       : $repo_dir"
   log_info "Bin dir (GOBIN): $local_bin_dir"
+  log_info "go version     : $(go version 2>/dev/null || true)"
   log_warn "Binários faltando: ${missing[*]}"
   log_info "Compilando apenas os binários faltantes via 'go install ./cmd/<bin>'..."
 
@@ -247,8 +252,11 @@ mkdir -p \
   "$exp_data_dir/_debug"
 
 log_info "Garantidos diretórios locais em $exp_data_dir:"
-$new_experiment && log_info "  - raiz do experimento (config/ ficará a cargo do generate-config.sh)"
-$new_experiment || log_info "  - config/ (já existente ou criado agora)"
+if $new_experiment; then
+  log_info "  - raiz do experimento (config/ ficará a cargo do generate-config.sh)"
+else
+  log_info "  - config/ (já existente ou criado agora)"
+fi
 log_info "  - logs/"
 log_info "  - _debug/"
 
@@ -313,8 +321,9 @@ export deployment_data_root
 export dpl_filename
 export csv_filename
 
-# Executa o deploy remoto
-if ! "$deploy_dir/scripts/deploy-remote.sh"; then
+# Executa o deploy remoto (sourced para compartilhar shell/variáveis do global-vars.sh)
+# shellcheck source=/dev/null
+if ! source "$deploy_dir/scripts/deploy-remote.sh"; then
   log_err "scripts/deploy-remote.sh retornou erro."
   exit 1
 fi
