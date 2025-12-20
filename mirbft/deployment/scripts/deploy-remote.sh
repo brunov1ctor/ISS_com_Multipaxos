@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 
-# Versão próxima do original, só com:
-# - logs extras
-# - uso de $remote_user em vez de root
-# - geração automática do master-commands-template.cmd se estiver faltando
+# deploy-remote.sh (versão corrigida)
 
 set -e
 
@@ -16,19 +13,22 @@ log_e() { echo "[ERRO  ][$(ts)] $*" >&2; }
 : "${cancel_instances:=false}"
 
 # =====================================================================
-# 1) Descobrir IP do master
+# 1) Variáveis esperadas do ambiente (de deploy.sh + global-vars.sh)
 # =====================================================================
-
-# Variáveis esperadas do ambiente (de deploy.sh + global-vars.sh):
+# Esperados:
 #   - exp_data_dir
 #   - instance_info_file
 #   - deployment_data_root
-#   - remote_user, ssh_options, remote_work_dir, remote_bin_dir
-#   - local_master_command_template_file, local_master_command_file
+#   - local_master_command_template_file
+#   - local_master_command_file
 #   - remote_status_file
+#   - remote_private_key_file
 #   - master_port
 #   - local_result_fetching_log
-#   - instance_info_file_name
+#   - remote_user
+#   - ssh_options
+#   - remote_work_dir
+#   - remote_bin_dir
 
 if [[ -z "${exp_data_dir:-}" || -z "${instance_info_file:-}" ]]; then
   log_e "deploy-remote.sh: exp_data_dir ou instance_info_file vazio."
@@ -37,6 +37,21 @@ if [[ -z "${exp_data_dir:-}" || -z "${instance_info_file:-}" ]]; then
 fi
 
 instance_info_file_name="$(basename "$instance_info_file")"
+
+# defaults “seguros” se não vierem setados de fora
+local_master_command_template_file="${local_master_command_template_file:-master-commands-template.cmd}"
+local_master_command_file="${local_master_command_file:-master-commands.cmd}"
+local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
+
+remote_user="${remote_user:-${USER}}"
+remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
+ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
+
+# =====================================================================
+# 2) Descobrir IP do master e copiar instance-info para o diretório do experimento
+# =====================================================================
 
 master_ip=$(awk '$4 == "master" {print $2}' "$instance_info_file" | head -n1)
 
@@ -51,7 +66,7 @@ log_i "Using instance info file: $instance_info_file"
 log_i "Master IP address      : $master_ip"
 
 # =====================================================================
-# 2) Garantir master-commands-template.cmd
+# 3) Garantir master-commands-template.cmd
 # =====================================================================
 
 template_path="$exp_data_dir/$local_master_command_template_file"
@@ -67,7 +82,6 @@ if [ ! -f "$template_path" ]; then
     exit 1
   fi
 
-  # Python que gera o template a partir do .dpl
   # Uso correto: generate-master-commands.py <deplType> <deployment.dpl> <outFile> <local_exp_data>
   if ! python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir"; then
     log_e "Falha ao gerar master-commands-template.cmd via generate-master-commands.py"
@@ -78,9 +92,10 @@ else
 fi
 
 # =====================================================================
-# 3) Gerar master-commands.cmd final com envsubst
+# 4) Gerar master-commands.cmd final com envsubst
 # =====================================================================
 
+# Variáveis que o template usa
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
 export master_port
@@ -96,21 +111,22 @@ echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command
 log_i "Master command file pronto: $exp_data_dir/$local_master_command_file"
 
 # =====================================================================
-# 4) Reset remoto: matar processos antigos + limpar estado
+# 5) Reset remoto: matar processos antigos + limpar estado
 # =====================================================================
 
 log_i "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
+# Mata analyze-continuously (se estiver rodando)
 for ip in $(awk '{print $2}' "$instance_info_file"); do
-  # o grep -v $$ impede matar o próprio script
   ssh $ssh_options "${remote_user}@${ip}" \
     "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}')" \
     >/dev/null 2>&1 || log_w "$ip: could not kill analyze-continuously (continuando)."
-  sleep 0.1 # abrir muitas conexões ssh de uma vez dá erro em algumas
+  sleep 0.1
 done
 
 log_i "Killed continuous analysis scripts."
 
+# Limpa estado, mata binários velhos, reseta status
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   remote_delete_files="$remote_work_dir"
   remote_status_file="$remote_work_dir/status"
@@ -131,31 +147,43 @@ log_i "Reset machine state."
 echo
 
 # =====================================================================
-# 5) Start master
+# 6) Start master (AGORA COM ARGUMENTOS CORRETOS)
 # =====================================================================
 
 log_i "Starting master on $master_ip..."
-# start-master.sh usa remote_user, master_ip, remote_work_dir e remote_bin_dir do ambiente.
-# Não passamos exp_data_dir como argumento para não sobrescrever remote_user.
-scripts/start-master.sh &
-log_i "start-master.sh disparado em background."
+
+# Passamos explicitamente os parâmetros esperados por start-master.sh
+#   $1 = remote_user
+#   $2 = master_ip
+#   $3 = remote_work_dir
+#   $4 = remote_bin_dir
+#   $5 = exp_data_dir
+#   $6 = caminho local do master-commands.cmd
+scripts/start-master.sh \
+  "$remote_user" \
+  "$master_ip" \
+  "$remote_work_dir" \
+  "$remote_bin_dir" \
+  "$exp_data_dir" \
+  "$exp_data_dir/$local_master_command_file" &
+
+log_i "start-master.sh disparado em background (remote_user=$remote_user, master_ip=$master_ip)."
 
 # =====================================================================
-# 6) Start slaves (peers + 1client)
+# 7) Start slaves (peers + 1client)
 # =====================================================================
 
 log_i "Starting peer slaves (tag=peers)..."
-# desired_count=0 => inicia todos os slaves com a tag solicitada.
+# desired_count=0 => inicia todos os nós com a tag especificada
 scripts/start-remote-slaves.sh "$exp_data_dir" 0 peers "$instance_info_file"
 
 log_i "Starting client slaves (tag=1client)..."
-# desired_count=0 => inicia todos os slaves com a tag solicitada.
 scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 
 log_i "All slaves started."
 
 # =====================================================================
-# 7) Fetch de resultados em background
+# 8) Fetch de resultados em background
 # =====================================================================
 
 log_i "Starting result fetching in the background..."
@@ -172,7 +200,7 @@ echo
 wait "$fetch_pid" || log_w "fetch-results.sh terminou com código $? (veja o log acima)."
 
 # =====================================================================
-# 8) Cancelar instâncias (se configurado)
+# 9) Cancelar instâncias (se configurado)
 # =====================================================================
 
 if $cancel_instances; then
