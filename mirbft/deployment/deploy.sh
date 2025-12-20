@@ -300,6 +300,25 @@ if $new_experiment; then
   fi
 fi
 
+########################################
+# Preparar experiment-config/ para o start-master.sh
+########################################
+
+if [ -d "$exp_data_dir/config" ] || ls "$exp_data_dir"/config-*.yml >/dev/null 2>&1; then
+  log_sep "[CONFIG] Preparando experiment-config/ para deploy remoto"
+  rm -rf "$exp_data_dir/experiment-config"
+  mkdir -p "$exp_data_dir/experiment-config"
+
+  # Copia configs tanto da raiz quanto de config/
+  cp "$exp_data_dir"/config-*.yml "$exp_data_dir/experiment-config/" 2>/dev/null || true
+  cp "$exp_data_dir"/config/config-*.yml "$exp_data_dir/experiment-config/" 2>/dev/null || true
+
+  log_info "Configs copiados para $exp_data_dir/experiment-config:"
+  ls "$exp_data_dir/experiment-config" || true
+else
+  log_warn "Nenhum config-*.yml encontrado em $exp_data_dir ou $exp_data_dir/config; experiment-config/ não foi montado."
+fi
+
 if $init_only; then
   log_info "Init only solicitado. Diretório do experimento: $exp_data_dir"
   exit 0
