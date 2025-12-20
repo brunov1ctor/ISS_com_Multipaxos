@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-ts(){ date +"%Y-%m-%d %H:%M:%S"; }
+ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
 info(){ echo "[INFO  ][$(ts)] $*"; }
 warn(){ echo "[WARN  ][$(ts)] $*"; }
 err(){  echo "[ERRO  ][$(ts)] $*" >&2; }
@@ -34,9 +34,6 @@ this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 remote_user="${remote_user:-${REMOTE_USER:-${USER}}}"
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
-
-# Porta do discovery/master. Não confie em env no SSH remoto (não herda).
-master_port="${DISCOVERY_PORT:-${master_port:-9999}}"
 
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
@@ -59,13 +56,13 @@ info "  ssh_options        = ${ssh_options}"
 info "  SSH_START_TIMEOUT  = ${SSH_START_TIMEOUT}"
 info ""
 
-# determinar master ip (primeira linha role=master ou id=master ou id=-1)
+# Descobre master_ip (primeira linha com role=master)
 master_ip=""
 while read -r instance_id ctrl_ip data_ip role tag; do
   [[ -z "${instance_id:-}" ]] && continue
   [[ "${instance_id}" =~ ^# ]] && continue
-  if [[ "${role}" == "master" || "${instance_id}" == "master" || "${instance_id}" == "-1" ]]; then
-    master_ip="$ctrl_ip"
+  if [[ "${role}" == "master" ]]; then
+    master_ip="${ctrl_ip}"
     break
   fi
 done < "${instance_info_file}"
@@ -100,9 +97,10 @@ remote_kill_bins() {
 copy_bin_atomic() {
   local ip="$1"
   local bin="$2"
+
   local local_path="${local_bin_dir}/${bin}"
+  local remote_tmp="${remote_bin_dir}/${bin}.tmp.$$"
   local remote_path="${remote_bin_dir}/${bin}"
-  local remote_tmp="${remote_bin_dir}/${bin}.new"
 
   if [[ ! -f "${local_path}" ]]; then
     warn "[copy] binário NÃO encontrado localmente: ${local_path}"
@@ -165,24 +163,22 @@ start_remote_slave() {
   local instance_id="$1"
   local ctrl_ip="$2"
   local data_ip="$3"
-  local tag="$4"
+  local role="$4"
+  local tag="$5"
 
-  info "[start-remote-slaves] Iniciando ${instance_id} (${tag}) @ ${ctrl_ip}"
+  info "Preparando slave ${instance_id} @ ${ctrl_ip} (role=${role}, tag=${tag})"
 
-  if ! copy_required_assets "${ctrl_ip}"; then
-    err "Falha ao preparar assets no host ${ctrl_ip} (node ${instance_id})."
-    return 0
-  fi
+  copy_required_assets "$ctrl_ip"
 
-  # comando remoto: sobe e sai
-  local remote_cmd
-  remote_cmd="cd '${remote_work_dir}/scripts' && DISCOVERY_PORT='${master_port}' && \
-/usr/bin/nohup bash ./start-slave.sh \
-'${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \
-> '${remote_work_dir}/logs/slave-${instance_id}.log' 2>&1 < /dev/null & \
-echo STARTED; exit 0"
+  local remote_cmd="
+    cd '${remote_work_dir}'
+    echo '[start-remote-slaves] Disparando slave ${instance_id} (${tag})...' >> '${remote_work_dir}/logs/start-remote-slaves-${instance_id}.log'
+    /usr/bin/nohup '${remote_work_dir}/scripts/start-slave.sh' '${tag}' '${master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \
+      >> '${remote_work_dir}/logs/start-slave-${instance_id}.log' 2>&1 < /dev/null &
+    echo STARTED
+  "
 
-  info "[ssh] ${ctrl_ip}: ${remote_cmd}"
+  info "SSH para ${ctrl_ip} (disparar slave ${instance_id})..."
 
   # IMPORTANT: nunca trava aqui. Se timeout acontecer, mas tiver STARTED, consideramos OK.
   local out=""
@@ -218,21 +214,15 @@ while read -r instance_id ctrl_ip data_ip role tag; do
   # Isso evita inconsistências entre instance-info (pode ter mais linhas)
   # e deployment.dpl (quantos slaves o master espera).
   if [[ "${desired_count}" -gt 0 ]] && (( started >= desired_count )); then
-    continue
+    break
   fi
 
+  start_remote_slave "${instance_id}" "${ctrl_ip}" "${data_ip}" "${role}" "${tag}"
   ((started++)) || true
-  start_remote_slave "${instance_id}" "${ctrl_ip}" "${data_ip}" "${tag}"
 done < "${instance_info_file}"
 
-if [[ "${desired_count}" -gt 0 ]]; then
-  if (( matched > desired_count )); then
-    warn "[start-remote-slaves] instance-info tem ${matched} entradas tag='${wanted_tag}', mas limite=${desired_count}. Iniciei ${started}."
-  elif (( matched < desired_count )); then
-    warn "[start-remote-slaves] instance-info tem APENAS ${matched} entradas tag='${wanted_tag}', mas esperado=${desired_count}. Iniciei ${started}."
-  fi
-fi
-
-info "[start-remote-slaves] Linhas processadas: ${total}, matches(tag=${wanted_tag}): ${matched}"
-info "==== [start-remote-slaves] FIM ===="
+info "Resumo start-remote-slaves:"
+info "  total linhas lidas   = ${total}"
+info "  com tag=${wanted_tag} = ${matched}"
+info "  efetivamente startados = ${started}"
 

@@ -12,11 +12,33 @@ log_i() { echo "[INFO  ][$(ts)] $*"; }
 log_w() { echo "[WARN  ][$(ts)] $*" >&2; }
 log_e() { echo "[ERRO  ][$(ts)] $*" >&2; }
 
+# Flag de cancelamento de instâncias (padrão: false)
+: "${cancel_instances:=false}"
+
 # =====================================================================
 # 1) Descobrir IP do master
 # =====================================================================
 
-master_ip=$(cat "$instance_info_file" | awk '$4 == "master" {print $2}' | head -n1)
+# Variáveis esperadas do ambiente (de deploy.sh + global-vars.sh):
+#   - exp_data_dir
+#   - instance_info_file
+#   - deployment_data_root
+#   - remote_user, ssh_options, remote_work_dir, remote_bin_dir
+#   - local_master_command_template_file, local_master_command_file
+#   - remote_status_file
+#   - master_port
+#   - local_result_fetching_log
+#   - instance_info_file_name
+
+if [[ -z "${exp_data_dir:-}" || -z "${instance_info_file:-}" ]]; then
+  log_e "deploy-remote.sh: exp_data_dir ou instance_info_file vazio."
+  log_e "  exp_data_dir='${exp_data_dir:-}' instance_info_file='${instance_info_file:-}'"
+  exit 1
+fi
+
+instance_info_file_name="$(basename "$instance_info_file")"
+
+master_ip=$(awk '$4 == "master" {print $2}' "$instance_info_file" | head -n1)
 
 if [ -z "$master_ip" ]; then
   log_e "deploy-remote.sh: could not obtain master ip from instance info file: $instance_info_file"
@@ -46,7 +68,11 @@ if [ ! -f "$template_path" ]; then
   fi
 
   # Python que gera o template a partir do .dpl
-  python3 scripts/generate-master-commands.py "$deployment_file" "$template_path"
+  # Uso correto: generate-master-commands.py <deplType> <deployment.dpl> <outFile> <local_exp_data>
+  if ! python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir"; then
+    log_e "Falha ao gerar master-commands-template.cmd via generate-master-commands.py"
+    exit 1
+  fi
 else
   log_i "master-commands-template.cmd já existe em: $template_path"
 fi
@@ -75,20 +101,20 @@ log_i "Master command file pronto: $exp_data_dir/$local_master_command_file"
 
 log_i "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
-for ip in $(cat "$instance_info_file" | awk '{print $2}'); do
+for ip in $(awk '{print $2}' "$instance_info_file"); do
   # o grep -v $$ impede matar o próprio script
   ssh $ssh_options "${remote_user}@${ip}" \
     "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}')" \
     >/dev/null 2>&1 || log_w "$ip: could not kill analyze-continuously (continuando)."
   sleep 0.1 # abrir muitas conexões ssh de uma vez dá erro em algumas
 done
-wait
 
-echo
 log_i "Killed continuous analysis scripts."
-echo
 
-for ip in $(cat "$instance_info_file" | awk '{print $2}'); do
+for ip in $(awk '{print $2}' "$instance_info_file"); do
+  remote_delete_files="$remote_work_dir"
+  remote_status_file="$remote_work_dir/status"
+
   ssh $ssh_options "${remote_user}@${ip}" "
     tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
     killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
@@ -109,7 +135,9 @@ echo
 # =====================================================================
 
 log_i "Starting master on $master_ip..."
-scripts/start-master.sh "$exp_data_dir" "$master_ip" &
+# start-master.sh usa remote_user, master_ip, remote_work_dir e remote_bin_dir do ambiente.
+# Não passamos exp_data_dir como argumento para não sobrescrever remote_user.
+scripts/start-master.sh &
 log_i "start-master.sh disparado em background."
 
 # =====================================================================
@@ -117,10 +145,12 @@ log_i "start-master.sh disparado em background."
 # =====================================================================
 
 log_i "Starting peer slaves (tag=peers)..."
-scripts/start-remote-slaves.sh "$exp_data_dir" "$instance_info_file" peers "$master_ip"
+# desired_count=0 => inicia todos os slaves com a tag solicitada.
+scripts/start-remote-slaves.sh "$exp_data_dir" 0 peers "$instance_info_file"
 
 log_i "Starting client slaves (tag=1client)..."
-scripts/start-remote-slaves.sh "$exp_data_dir" "$instance_info_file" 1client "$master_ip"
+# desired_count=0 => inicia todos os slaves com a tag solicitada.
+scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 
 log_i "All slaves started."
 
@@ -134,7 +164,6 @@ scripts/fetch-results.sh "$master_ip" "$exp_data_dir" \
 
 fetch_pid=$!
 
-echo
 log_i "Waiting for deployment process and result fetching to finish."
 log_i "For progress on experiment result fetching, see:"
 log_i "  $exp_data_dir/$local_result_fetching_log"
@@ -150,7 +179,7 @@ if $cancel_instances; then
   log_i "Canceling cloud machines as requested..."
   scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"
 else
-  echo -e "Do not forget to cancel the used virtual servers using\n\n    scripts/cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name \n"
+  echo -e "Do not forget to cancel the used virtual servers using cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name \n"
 fi
 
 log_i "deploy-remote.sh finished."
