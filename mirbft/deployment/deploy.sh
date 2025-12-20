@@ -9,9 +9,9 @@ ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
 
 log_sep() {
   echo
-  echo "=================================================="
-  echo "$1"
-  echo "=================================================="
+  echo "==================================================
+$1
+=================================================="
 }
 
 log_info() { echo "[INFO ][$(ts)] $*"; }
@@ -34,8 +34,7 @@ deploy_dir="$(cd "$(dirname "$0")" && pwd)"
 
 ########################################
 # Preflight: garante que os binários existem localmente
-########################################
-# - NÃO muda o cwd do script (usa subshell)
+# (não muda o cwd do script)
 ########################################
 
 ensure_local_binaries() {
@@ -85,7 +84,7 @@ ensure_local_binaries() {
   fi
 
   log_sep "[BUILD] Preflight: garantindo binários locais"
-  log_info "Repo dir      : $repo_dir"
+  log_info "Repo dir       : $repo_dir"
   log_info "Bin dir (GOBIN): $local_bin_dir"
   log_warn "Binários faltando: ${missing[*]}"
   log_info "Compilando apenas os binários faltantes via 'go install ./cmd/<bin>'..."
@@ -189,6 +188,7 @@ fi
 
 new_experiment=false
 config_generator_script=""
+exp_data_dir=""
 
 if [ "${1:-}" = "new" ]; then
   # remote <instance-info> new [config_generator]
@@ -233,16 +233,24 @@ fi
 ########################################
 
 if $new_experiment; then
+  # Para experimento novo, criamos apenas o diretório raiz.
+  # O generate-config.sh é responsável por criar config/.
   mkdir -p "$exp_data_dir"
+else
+  # Para experimento existente, garantimos que config/ exista.
+  mkdir -p "$exp_data_dir/config"
 fi
 
-# Diretórios mínimos que queremos garantir SEMPRE
+# Em ambos os casos, garantimos logs/ e _debug/
 mkdir -p \
-  "$exp_data_dir/config" \
   "$exp_data_dir/logs" \
   "$exp_data_dir/_debug"
 
-log_info "Garantidos diretórios locais: config/, logs/, _debug/ dentro de $exp_data_dir"
+log_info "Garantidos diretórios locais em $exp_data_dir:"
+$new_experiment && log_info "  - raiz do experimento (config/ ficará a cargo do generate-config.sh)"
+$new_experiment || log_info "  - config/ (já existente ou criado agora)"
+log_info "  - logs/"
+log_info "  - _debug/"
 
 ########################################
 # Preflight de build
