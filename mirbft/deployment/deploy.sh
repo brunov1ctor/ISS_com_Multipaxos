@@ -1,44 +1,51 @@
 #!/bin/bash
+set -euo pipefail
 
-# --------------------------------------------------------------------
-# Carrega variáveis globais (deployment_data_root, csv_filename, etc.)
-# --------------------------------------------------------------------
-# shellcheck source=/dev/null
-source scripts/global-vars.sh
+########################################
+# Helpers de log
+########################################
 
-# Safety: se por algum motivo deployment_data_root veio vazio (env/export),
-# evita gerar exp_data_dir como "/remote-0000".
-if [[ -z "${deployment_data_root:-}" ]]; then
-  deploy_dir="$(cd "$(dirname "$0")" && pwd)"
-  deployment_data_root="${deploy_dir}/deployment-data"
-fi
+ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
 
-# Kill all children of this script when exiting
-trap "$trap_exit_command" EXIT
-
-# --------------------------------------------------------------------
-# Helpers: logs
-# --------------------------------------------------------------------
 log_sep() {
   echo
   echo "=================================================="
   echo "$1"
   echo "=================================================="
 }
-log_info() { echo "[INFO] $*"; }
-log_warn() { echo "[WARN] $*"; }
-log_err()  { echo "[ERRO] $*" >&2; }
 
-# --------------------------------------------------------------------
+log_info() { echo "[INFO ][$(ts)] $*"; }
+log_warn() { echo "[WARN ][$(ts)] $*"; }
+log_err()  { echo "[ERRO ][$(ts)] $*" >&2; }
+
+########################################
+# Diretórios base
+########################################
+
+deploy_dir="$(cd "$(dirname "$0")" && pwd)"
+
+# Raiz dos dados de deployment (onde ficam remote-0000, local-0000, etc.)
+: "${deployment_data_root:="$deploy_dir/deployment-data"}"
+
+# Arquivos padrão dentro de cada experimento
+: "${dpl_filename:=deployment.dpl}"
+: "${csv_filename:=deployment.csv}"
+: "${result_summary_file:=result-summary.csv}"
+
+########################################
 # Preflight: garante que os binários existem localmente
-# --------------------------------------------------------------------
+########################################
+# - NÃO muda o cwd do script (usa subshell)
+########################################
+
 ensure_local_binaries() {
   if [ "${DEPLOY_SKIP_BUILD:-0}" = "1" ]; then
     log_warn "DEPLOY_SKIP_BUILD=1 -> pulando build automático."
     return 0
   fi
 
-  deploy_dir="$(cd "$(dirname "$0")" && pwd)"
+  # Diretório do repositório (mirbft/)
+  local repo_dir
   repo_dir="$(cd "$deploy_dir/.." && pwd)"
 
   if ! command -v go >/dev/null 2>&1; then
@@ -46,12 +53,15 @@ ensure_local_binaries() {
     return 1
   fi
 
+  # Onde o go install joga os binários
+  local local_bin_dir
   local_bin_dir="${GOBIN:-}"
   if [ -z "$local_bin_dir" ]; then
-    local_bin_dir="$(go env GOBIN 2>/dev/null)"
+    local_bin_dir="$(go env GOBIN 2>/dev/null || true)"
   fi
   if [ -z "$local_bin_dir" ]; then
-    gp="$(go env GOPATH 2>/dev/null)"
+    local gp
+    gp="$(go env GOPATH 2>/dev/null || true)"
     if [ -n "$gp" ]; then
       local_bin_dir="${gp%/}/bin"
     fi
@@ -60,43 +70,41 @@ ensure_local_binaries() {
     local_bin_dir="$HOME/go/bin"
   fi
 
-  req_bins="discoverymaster discoveryslave orderingpeer orderingclient"
+  local req_bins="discoverymaster discoveryslave orderingpeer orderingclient"
+  local missing=()
 
-  log_sep "[BUILD] Preflight: garantindo binários locais"
-  log_info "repo_dir      = $repo_dir"
-  log_info "local_bin_dir = $local_bin_dir"
-  log_info "go version    = $(go version 2>/dev/null || true)"
-  echo
-
-  missing=""
   for b in $req_bins; do
     if [ ! -x "$local_bin_dir/$b" ]; then
-      missing="$missing $b"
+      missing+=("$b")
     fi
   done
 
-  if [ -z "$missing" ]; then
-    log_info "OK: todos os binários necessários já existem."
+  if [ "${#missing[@]}" -eq 0 ]; then
+    log_info "Todos os binários necessários já existem em $local_bin_dir."
     return 0
   fi
 
-  log_warn "Binários faltando:${missing}"
-  log_info "Compilando apenas os que faltam via 'go install'..."
+  log_sep "[BUILD] Preflight: garantindo binários locais"
+  log_info "Repo dir      : $repo_dir"
+  log_info "Bin dir (GOBIN): $local_bin_dir"
+  log_warn "Binários faltando: ${missing[*]}"
+  log_info "Compilando apenas os binários faltantes via 'go install ./cmd/<bin>'..."
 
-  cd "$repo_dir" || { log_err "não consegui entrar em $repo_dir"; return 1; }
+  # *** IMPORTANTE: tudo dentro de subshell, NÃO altera cwd do deploy.sh ***
+  (
+    cd "$repo_dir" || {
+      log_err "Não consegui entrar em $repo_dir"
+      exit 1
+    }
 
-  for b in $missing; do
-    if [ ! -d "./cmd/$b" ]; then
-      log_err "diretório ./cmd/$b não existe. Não sei compilar '$b'."
-      return 1
-    fi
-
-    log_info "go install ./cmd/$b"
-    if ! go install "./cmd/$b"; then
-      log_err "Falha ao compilar $b. Rode 'go install ./cmd/$b' manualmente para ver o erro completo."
-      return 1
-    fi
-  done
+    for b in "${missing[@]}"; do
+      log_info "go install ./cmd/$b"
+      if ! go install "./cmd/$b"; then
+        log_err "Falha ao compilar $b. Rode 'go install ./cmd/$b' manualmente para ver o erro completo."
+        exit 1
+      fi
+    done
+  ) || return 1
 
   echo
   log_info "Verificando binários após build..."
@@ -113,86 +121,200 @@ ensure_local_binaries() {
   return 0
 }
 
-# --------------------------------------------------------------------
-# Trata flag de inicialização apenas (-i / --init-only)
-# --------------------------------------------------------------------
+########################################
+# Uso
+########################################
+
+usage() {
+  cat >&2 <<EOF
+Uso:
+  $0 remote <instance-info> new [config_generator]
+  $0 remote <instance-info> <exp_data_dir>
+
+Exemplos:
+  $0 remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
+EOF
+  exit 1
+}
+
+########################################
+# Parse de argumentos (apenas modo remote customizado)
+########################################
+
+init_only=false
 if [ "${1:-}" = "-i" ] || [ "${1:-}" = "--init-only" ]; then
   init_only=true
   shift
-else
-  init_only=false
 fi
 
-# --------------------------------------------------------------------
-# Suporte ao modo "new":
-#   ./deploy.sh remote scripts/instance-info new scripts/experiment-configuration/generate-config.sh
-# --------------------------------------------------------------------
-if [ "${1:-}" = "remote" ] && [ "${3:-}" = "new" ]; then
-  depl_type="$1"
-  instance_info_file="$2"
-  config_gen_script="${4:-scripts/experiment-configuration/generate-config.sh}"
+if [ "$#" -lt 1 ]; then
+  usage
+fi
 
-  exp_index=0
+depl_type="$1"
+shift
+
+if [ "$depl_type" != "remote" ]; then
+  log_err "Este deploy.sh customizado suporta apenas 'remote' (por enquanto)."
+  log_err "Chamada recebida: depl_type='$depl_type'"
+  exit 2
+fi
+
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+
+# 1º argumento após 'remote' = instance-info
+instance_info_file="$1"
+shift || true
+
+# Resolve instance-info em relação ao diretório de deployment, se precisar
+if [[ ! -f "$instance_info_file" ]]; then
+  if [[ -f "$deploy_dir/$instance_info_file" ]]; then
+    instance_info_file="$deploy_dir/$instance_info_file"
+  elif [[ -f "$deploy_dir/scripts/$instance_info_file" ]]; then
+    instance_info_file="$deploy_dir/scripts/$instance_info_file"
+  else
+    log_err "Arquivo de instance-info não encontrado: $instance_info_file"
+    exit 1
+  fi
+fi
+
+log_info "Using instance-info file: $instance_info_file"
+
+# 2º argumento: "new" ou diretório do experimento
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+
+new_experiment=false
+config_generator_script=""
+
+if [ "${1:-}" = "new" ]; then
+  # remote <instance-info> new [config_generator]
+  new_experiment=true
+  shift || true
+
+  # Escolhe automaticamente o próximo remote-XXXX
+  idx=0
   while :; do
-    candidate=$(printf "%s/remote-%04d" "$deployment_data_root" "$exp_index")
+    candidate=$(printf "%s/remote-%04d" "$deployment_data_root" "$idx")
     if [ ! -d "$candidate" ]; then
       exp_data_dir="$candidate"
       break
     fi
-    exp_index=$((exp_index + 1))
+    idx=$((idx + 1))
   done
 
-  mkdir -p "$exp_data_dir"
+  # Script gerador de config (padrão, se não passado)
+  config_generator_script="${1:-scripts/experiment-configuration/generate-config.sh}"
 
-  echo "Using experiment data directory: $exp_data_dir"
-  "$config_gen_script" "$exp_data_dir" 0
-  if [ $? -ne 0 ]; then
-    echo "ERROR: $config_gen_script falhou ao gerar configurações em $exp_data_dir"
+  log_info "Novo experimento. Diretório escolhido: $exp_data_dir"
+else
+  # remote <instance-info> <exp_data_dir>
+  exp_data_dir="$1"
+  shift || true
+
+  # Se for relativo, considere em relação a deployment_data_root
+  if [[ "$exp_data_dir" != /* ]]; then
+    exp_data_dir="$deployment_data_root/$exp_data_dir"
+  fi
+
+  if [ ! -d "$exp_data_dir" ]; then
+    log_err "Diretório de experimento não existe: $exp_data_dir"
     exit 1
   fi
 
-  set -- "$depl_type" "$instance_info_file" "$exp_data_dir"
+  log_info "Usando experimento existente: $exp_data_dir"
 fi
 
-# --------------------------------------------------------------------
-# Inicializa o deployment
-# --------------------------------------------------------------------
-# shellcheck source=/dev/null
-source scripts/initialize-deployment.sh
+########################################
+# Criação de diretórios locais do experimento
+########################################
 
-if $init_only; then
-  echo "Init only. Experiment directory: $exp_data_dir"
-  exit 0
+if $new_experiment; then
+  mkdir -p "$exp_data_dir"
 fi
 
-# --------------------------------------------------------------------
-# PRE-FLIGHT BUILD (ANTES de qualquer deploy)
-# --------------------------------------------------------------------
+# Diretórios mínimos que queremos garantir SEMPRE
+mkdir -p \
+  "$exp_data_dir/config" \
+  "$exp_data_dir/logs" \
+  "$exp_data_dir/_debug"
+
+log_info "Garantidos diretórios locais: config/, logs/, _debug/ dentro de $exp_data_dir"
+
+########################################
+# Preflight de build
+########################################
+
+log_sep "[BUILD] Preflight: garantindo binários locais"
 if ! ensure_local_binaries; then
   log_err "Preflight de build falhou. Abortando deploy."
   exit 1
 fi
 
-# --------------------------------------------------------------------
-# Deploy (local / cloud / remote)
-# --------------------------------------------------------------------
-if [ "$depl_type" = "local" ]; then
-  # shellcheck source=/dev/null
-  source scripts/deploy-local.sh
-elif [ "$depl_type" = "cloud" ]; then
-  # shellcheck source=/dev/null
-  source scripts/deploy-cloud.sh
-elif [ "$depl_type" = "remote" ]; then
-  # shellcheck source=/dev/null
-  source scripts/deploy-remote.sh
-else
-  >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
-  exit 2
+########################################
+# Geração de configurações (apenas para 'new')
+########################################
+
+if $new_experiment; then
+  if [ -n "$config_generator_script" ]; then
+    # Resolver path do script: relativo ao deployment_dir se não for absoluto
+    if [[ "$config_generator_script" != /* ]]; then
+      config_generator_script="$deploy_dir/$config_generator_script"
+    fi
+
+    if [ ! -x "$config_generator_script" ]; then
+      log_err "Script de geração de config não é executável ou não existe: $config_generator_script"
+      exit 1
+    fi
+
+    log_sep "[CONFIG] Gerando configurações de experimento"
+    log_info "Script: $config_generator_script"
+    log_info "Exp dir: $exp_data_dir"
+    log_info "exp_id_offset: 0"
+
+    if ! "$config_generator_script" "$exp_data_dir" 0; then
+      log_err "Geração de config falhou para $exp_data_dir"
+      exit 1
+    fi
+  else
+    log_warn "Novo experimento, mas nenhum script de config informado. Assumindo que configs já existem."
+  fi
 fi
 
-# --------------------------------------------------------------------
-# Validação estrutural ANTES do summary (evita 'summary enganoso')
-# --------------------------------------------------------------------
+if $init_only; then
+  log_info "Init only solicitado. Diretório do experimento: $exp_data_dir"
+  exit 0
+fi
+
+########################################
+# Deploy remoto
+########################################
+
+log_sep "[DEPLOY] Iniciando deploy remoto"
+log_info "Exp dir        : $exp_data_dir"
+log_info "Instance-info  : $instance_info_file"
+log_info "Data root      : $deployment_data_root"
+
+# Variáveis que scripts/deploy-remote.sh esperam encontrar
+export exp_data_dir
+export instance_info_file
+export deployment_data_root
+export dpl_filename
+export csv_filename
+
+# Executa o deploy remoto
+if ! "$deploy_dir/scripts/deploy-remote.sh"; then
+  log_err "scripts/deploy-remote.sh retornou erro."
+  exit 1
+fi
+
+########################################
+# Verificação de resultados reais
+########################################
+
 log_sep "[VERIFY] Checando se existem resultados reais"
 
 if [[ ! -d "$exp_data_dir/experiment-output" ]]; then
@@ -201,6 +323,7 @@ if [[ ! -d "$exp_data_dir/experiment-output" ]]; then
 fi
 
 cnt="$(find "$exp_data_dir/experiment-output" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
+
 if [[ "$cnt" == "0" ]]; then
   log_err "experiment-output existe mas está vazio. Deploy inválido (sem métricas)."
   log_err "Dica: veja $exp_data_dir/result-fetching.log e $exp_data_dir/_debug/master-diag.txt (se existirem)."
@@ -209,14 +332,24 @@ fi
 
 log_info "OK: experiment-output contém dados ($cnt dirs)."
 
-# --------------------------------------------------------------------
-# Geração do resumo dos resultados
-# --------------------------------------------------------------------
-echo "Generating result summary."
-scripts/analyze/summarize.sh \
+########################################
+# Geração de resumo dos resultados
+########################################
+
+log_sep "[SUMMARY] Gerando result-summary.csv"
+
+result_summary_path="$exp_data_dir/$result_summary_file"
+if ! "$deploy_dir/scripts/analyze/summarize.sh" \
   "$exp_data_dir/$csv_filename" \
   "$exp_data_dir/experiment-output" \
-  | tee "$exp_data_dir/$result_summary_file"
+  | tee "$result_summary_path"
+then
+  log_err "Falha ao gerar resumo em $result_summary_path"
+  exit 11
+fi
 
+echo
 echo "Done. Experiment data directory: $exp_data_dir"
+
+exit 0
 
