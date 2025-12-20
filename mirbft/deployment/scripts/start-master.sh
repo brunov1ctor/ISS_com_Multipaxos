@@ -81,7 +81,7 @@ log "local_master_cmd=${local_master_cmd}"
 log "debug_log=${debug_log}"
 
 # ---------------------------------------------------------------------------
-# 3) Patch do master-commands.cmd (não depender de PATH + config absoluto)
+# 3) Patch do master-commands.cmd (não depender de PATH + caminhos absolutos)
 # ---------------------------------------------------------------------------
 
 patch_master_commands() {
@@ -92,17 +92,17 @@ patch_master_commands() {
   cp -f "$f" "$bak"
   log "Backup: $bak"
 
-  # 1) Forçar caminhos absolutos de scripts e binários no master
+  # 1) Forçar caminhos absolutos de scripts e binários no master/slaves
   sed -i \
-    -e 's#\bstubborn-scp\.sh\b#'"${remote_work_dir}"'/scripts/stubborn-scp.sh#g' \
-    -e 's#\borderingpeer\b#'"${remote_bin_dir}"'/orderingpeer#g' \
-    -e 's#\borderingclient\b#'"${remote_bin_dir}"'/orderingclient#g' \
+    -e "s#\bstubborn-scp\.sh\b#${remote_work_dir}/scripts/stubborn-scp.sh#g" \
+    -e "s#\borderingpeer\b#${remote_bin_dir}/orderingpeer#g" \
+    -e "s#\borderingclient\b#${remote_bin_dir}/orderingclient#g" \
     "$f"
 
   # 2) Caminhos absolutos de config/experiment-config
   sed -i \
-    -e 's#\bconfig/config.yml\b#'"${remote_work_dir}"'/config/config.yml#g' \
-    -e 's#\bexperiment-config/config-#'"${remote_work_dir}"'/experiment-config/config-#g' \
+    -e "s#config/config.yml#${remote_work_dir}/config/config.yml#g" \
+    -e "s#experiment-config/config-#${remote_work_dir}/experiment-config/config-#g" \
     "$f"
 
   # 3) Garante mkdir -p do diretório de config no início do arquivo
@@ -129,7 +129,13 @@ remote_exec() {
 }
 
 log "Ensuring remote workdir exists..."
-remote_exec "mkdir -p '${remote_work_dir}' '${remote_work_dir}/logs' '${remote_work_dir}/config' '${remote_work_dir}/scripts' '${remote_work_dir}/experiment-output'"
+remote_exec "mkdir -p \
+  '${remote_work_dir}' \
+  '${remote_work_dir}/logs' \
+  '${remote_work_dir}/config' \
+  '${remote_work_dir}/scripts' \
+  '${remote_work_dir}/experiment-output' \
+  '${remote_work_dir}/experiment-config'"
 
 log "Copying master-commands.cmd to remote..."
 scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd"
@@ -140,21 +146,17 @@ scp ${ssh_options} "${this_dir}/global-vars.sh"   "${remote_user}@${master_ip}:$
 remote_exec "chmod +x '${remote_work_dir}/scripts/'*.sh || true"
 
 # ---------------------------------------------------------------------------
-# 5) Copiar experiment-config para o master
+# 5) Copiar experiment-config para o master (fonte = exp_data_dir/experiment-config)
 # ---------------------------------------------------------------------------
 
-# generate-config.sh tem escrito em /users/<user>/iss/experiment-config/config-000X.yml
-# então tentamos primeiro esse caminho, depois um fallback em exp_data_dir/experiment-config
-local_config_dir="/users/${remote_user}/iss/experiment-config"
+local_config_dir="${exp_data_dir}/experiment-config"
 
 if [[ -d "${local_config_dir}" ]]; then
-  log "Copying generated configs to master from ${local_config_dir} ..."
-  scp ${ssh_options} -r "${local_config_dir}" "${remote_user}@${master_ip}:${remote_work_dir}/"
-elif [[ -d "${exp_data_dir}/experiment-config" ]]; then
-  log "Copying generated configs to master from ${exp_data_dir}/experiment-config ..."
-  scp ${ssh_options} -r "${exp_data_dir}/experiment-config" "${remote_user}@${master_ip}:${remote_work_dir}/"
+  log "Copying generated configs to master from ${local_config_dir} to ${remote_work_dir}/experiment-config ..."
+  scp ${ssh_options} -r "${local_config_dir}/"*.yml \
+    "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/"
 else
-  log "WARN: nenhum diretório experiment-config/ encontrado em ${local_config_dir} ou ${exp_data_dir}/experiment-config"
+  log "WARN: diretório ${local_config_dir} não existe; nenhum config-XXXX.yml será copiado para o master."
 fi
 
 # ---------------------------------------------------------------------------
@@ -170,8 +172,7 @@ remote_exec "
 "
 
 log "Verificando se o master está escutando na porta ${DISCOVERY_PORT}..."
-# Não mata o script se o grep não achar nada, só loga
-if ! remote_exec "ss -lntp | grep ':${DISCOVERY_PORT} '" >/dev/null 2>&1; then
+if ! remote_exec \"ss -lntp | grep ':${DISCOVERY_PORT} '\" >/dev/null 2>&1; then
   log "Master parece não estar escutando na porta ${DISCOVERY_PORT} (verifique discoverymaster.log)."
 else
   log "Master started successfully e está escutando em ${master_ip}:${DISCOVERY_PORT}."
