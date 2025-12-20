@@ -12,8 +12,8 @@ master_ip="${master_ip:-${MASTER_IP:-${2:-}}}"
 remote_work_dir="${remote_work_dir:-${REMOTE_WORK_DIR:-${3:-/users/Bruno/iss}}}"
 remote_bin_dir="${remote_bin_dir:-${REMOTE_BIN_DIR:-${4:-/users/Bruno/go/bin}}}"
 
-# O deploy.sh DO SEU PROJETO já imprime exp_data_dir no initialize-deployment,
-# então normalmente ele existe no ambiente. Mesmo assim, adiciono fallback por args.
+# O deploy.sh DO SEU PROJETO já fornece exp_data_dir no ambiente,
+# mas deixamos fallback por args se necessário.
 exp_data_dir="${exp_data_dir:-${EXP_DATA_DIR:-${5:-}}}"
 
 # local_master_cmd às vezes não é exportado pelo deploy.sh
@@ -26,7 +26,6 @@ ssh_options="${ssh_options:-${SSH_OPTIONS:-"-o StrictHostKeyChecking=no -o UserK
 # Fallbacks robustos (para não quebrar o deploy)
 # ------------------------------------------------------------------------------
 if [[ -z "${master_ip}" ]]; then
-  # Alguns fluxos setam MASTER_IP no env e passam args vazios. Se ainda assim está vazio, falha.
   echo "FATAL: master_ip vazio. O deploy.sh precisa fornecer MASTER_IP/master_ip." >&2
   exit 1
 fi
@@ -94,33 +93,20 @@ patch_master_commands() {
 
   # 2) Caminho de config absoluto (evita cwd / resolve bug original)
   sed -i \
-    -e 's#\bconfig/config\.yml\b#/users/Bruno/iss/config/config.yml#g' \
+    -e "s#\bconfig/config.yml\b#${remote_work_dir}/config/config.yml#g" \
+    -e "s#\bexperiment-config/config-#${remote_work_dir}/experiment-config/config-#g" \
     "$f"
 
-  # 3) Garantir mkdir do /users/Bruno/iss/config antes do PRIMEIRO fetch de config
-  if grep -q "/users/Bruno/iss/scripts/stubborn-scp.sh" "$f"; then
-    if ! grep -q "mkdir -p /users/Bruno/iss/config" "$f"; then
-      awk '
-        BEGIN{inserted=0}
-        {
-          if(!inserted && $0 ~ /\/users\/Bruno\/iss\/scripts\/stubborn-scp\.sh/) {
-            print "exec-start __all__ /dev/null mkdir -p /users/Bruno/iss/config"
-            print "exec-wait __all__ 2000"
-            inserted=1
-          }
-          print $0
-        }
-      ' "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
-      log "Inserido mkdir -p /users/Bruno/iss/config antes do 1º fetch de config."
-    else
-      log "mkdir -p /users/Bruno/iss/config já presente (não duplicando)."
-    fi
+  # 3) Garante mkdir -p do config no master
+  if ! grep -q "mkdir -p /users/Bruno/iss/config" "$f"; then
+    log "Inserindo mkdir -p /users/Bruno/iss/config no master-commands..."
+    sed -i "1i mkdir -p /users/Bruno/iss/config" "$f"
   else
-    log "WARN: não achei stubborn-scp no master-commands.cmd (não inseri mkdir)."
+    log "mkdir -p /users/Bruno/iss/config já presente (não duplicando)."
   fi
 
   log "Trechos críticos (grep):"
-  egrep -n "stubborn-scp|orderingpeer|orderingclient|config\.yml|mkdir -p /users/Bruno/iss/config" "$f" | head -n 200 || true
+  egrep -n "stubborn-scp|orderingpeer|orderingclient|config/config.yml|mkdir -p /users/Bruno/iss/config" "$f" | head -n 200 || true
   log "Patch OK."
 }
 
@@ -131,57 +117,36 @@ remote_exec() {
 }
 
 log "Ensuring remote workdir exists..."
-remote_exec "mkdir -p '${remote_work_dir}' '${remote_work_dir}/logs' '${remote_work_dir}/experiment-config' '${remote_work_dir}/config' '${remote_work_dir}/scripts'"
+remote_exec "mkdir -p '${remote_work_dir}' '${remote_work_dir}/logs' '${remote_work_dir}/config' '${remote_work_dir}/scripts'"
 
 log "Copying master-commands.cmd to remote..."
 scp ${ssh_options} -q "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd"
 
 log "Copying generated configs to master (experiment-config/) via scp..."
 # Tenta caminhos comuns do seu pipeline
-if [[ -d "${exp_data_dir}/experiment-config" ]]; then
-  scp ${ssh_options} -q "${exp_data_dir}/experiment-config/"*.yml "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" 2>/dev/null || true
-fi
-if [[ -d "${exp_data_dir}/config" ]]; then
-  scp ${ssh_options} -q "${exp_data_dir}/config/"*.yml "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" 2>/dev/null || true
-fi
-# fallback: qualquer config-*.yml no exp_data_dir (maxdepth 2)
-mapfile -t cfgs < <(find "${exp_data_dir}" -maxdepth 2 -type f -name 'config-*.yml' 2>/dev/null || true)
-if [[ ${#cfgs[@]} -gt 0 ]]; then
-  scp ${ssh_options} -q "${cfgs[@]}" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" 2>/dev/null || true
+if [[ -d \"${exp_data_dir}/experiment-config\" ]]; then
+  scp -r ${ssh_options} \"${exp_data_dir}/experiment-config\" \"${remote_user}@${master_ip}:${remote_work_dir}/\"
+elif [[ -d \"${exp_data_dir}/config\" ]]; then
+  scp -r ${ssh_options} \"${exp_data_dir}/config\" \"${remote_user}@${master_ip}:${remote_work_dir}/config\"
+else
+  log \"WARN: nenhum diretório experiment-config/ ou config/ encontrado em ${exp_data_dir}\"
 fi
 
-log "remote experiment-config:"
-remote_exec "ls -la '${remote_work_dir}/experiment-config' || true"
-
-log "Killing previous discoverymaster (if any)..."
-set +e
-remote_exec "
-  pkill -9 -f '${remote_bin_dir}/discoverymaster' 2>/dev/null || true
-  pkill -9 -f 'discoverymaster ' 2>/dev/null || true
-  sleep 0.2
-  pgrep -af discoverymaster 2>/dev/null || true
-"
-rc=$?
-set -e
-if [[ $rc -ne 0 ]]; then
-  log "WARN: Kill step returned rc=${rc} (continuando)"
-fi
-
-log "Starting discoverymaster on :${DISCOVERY_PORT} ..."
-remote_exec "
-  set -e
+log \"Iniciando discoverymaster no master (nohup)...\"
+remote_exec \"\
+  mkdir -p '${remote_work_dir}/logs' '${remote_work_dir}/experiment-output'; \
   cd '${remote_work_dir}'
   rm -f '${remote_work_dir}/status' '${remote_work_dir}/master-ready' 2>/dev/null || true
-  /usr/bin/nohup '${remote_bin_dir}/discoverymaster' master ':${DISCOVERY_PORT}' '${remote_work_dir}/master-commands.cmd' \
+  /usr/bin/nohup '${remote_bin_dir}/discoverymaster' master '${master_ip}:${DISCOVERY_PORT}' '${remote_work_dir}/master-commands.cmd' \
     > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null &
   echo PID=\$!
   sleep 0.2
   pgrep -af discoverymaster 2>/dev/null || true
   tail -n 30 '${remote_work_dir}/logs/discoverymaster.log' 2>/dev/null || true
-"
+\"
 
-log "Verificando se o master está escutando na porta ${DISCOVERY_PORT}..."
-remote_exec "ss -lntp | grep ':${DISCOVERY_PORT} ' >/dev/null && echo OK || (echo FAIL; ss -lntp | grep ':${DISCOVERY_PORT} ' || true; exit 1)"
+log \"Verificando se o master está escutando na porta ${DISCOVERY_PORT}...\"
+remote_exec \"ss -lntp | grep ':${DISCOVERY_PORT} ' >/dev/null 2>&1 || (echo 'Master parece não estar escutando na porta ${DISCOVERY_PORT}' && echo FAIL; ss -lntp | grep ':${DISCOVERY_PORT} ' || true; exit 1)\"
 
-log "Master started successfully."
+log \"Master started successfully.\"
 
