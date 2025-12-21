@@ -1,40 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MAX_RETRIES="${1:-5}"
-SRC="${2:-}"
-DST="${3:-}"
-
-if [[ -z "${SRC}" || -z "${DST}" ]]; then
-  echo "[stubborn-scp] Uso: $0 <tentativas> <src> <dst>" >&2
-  exit 2
-fi
+MAX_RETRIES="$1"
+SRC="$2"
+DST="$3"
 
 attempt=1
-last_status=1
+status=1
 
-while (( attempt <= MAX_RETRIES )); do
-  if (( attempt == 1 )); then
-    echo "[stubborn-scp] Iniciando cópia (máx ${MAX_RETRIES} tentativas)."
-    echo "[stubborn-scp]   origem : ${SRC}"
-    echo "[stubborn-scp]   destino: ${DST}"
-  else
-    echo "[stubborn-scp] Nova tentativa ${attempt}/${MAX_RETRIES} para copiar '${SRC}' (último status: ${last_status})."
-  fi
+while [[ $attempt -le $MAX_RETRIES ]]; do
 
-  # tentativa de cópia
-  if scp "${SRC}" "${DST}"; then
-    echo "[stubborn-scp] Sucesso ao copiar '${SRC}' na tentativa ${attempt}/${MAX_RETRIES}."
+  # Log mais limpo e útil
+  echo "[scp] Enviando arquivo '${SRC}' -> '${DST}' (tentativa ${attempt}/${MAX_RETRIES})"
+
+  if scp -q "$SRC" "$DST"; then
+    echo "[scp] Arquivo '${SRC}' enviado com sucesso."
     exit 0
   else
-    last_status=$?
-    echo "[stubborn-scp] Falha na tentativa ${attempt}/${MAX_RETRIES} para copiar '${SRC}' (status ${last_status})."
+    status=$?
+    echo "[scp] Falha ao enviar '${SRC}' (tentativa ${attempt}/${MAX_RETRIES}, status=${status})."
   fi
 
-  attempt=$((attempt + 1))
-  sleep 1
+  attempt=$((attempt+1))
+  sleep 0.3
 done
 
-echo "[stubborn-scp] Desisti de copiar '${SRC}' após ${MAX_RETRIES} tentativas. Último status: ${last_status}" >&2
-exit "${last_status}"
+echo "[scp] Erro: falha definitiva após ${MAX_RETRIES} tentativas ao enviar '${SRC}'." >&2
+exit $status
 
