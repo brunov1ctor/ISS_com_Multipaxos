@@ -8,7 +8,7 @@ SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 MASTER_CONFIG_DIR = "experiment-config"
-MASTER_EXP_DIR="current-deployment-data"
+MASTER_EXP_DIR = "current-deployment-data"
 SLAVE_CONFIG_FILE = "config/config.yml"
 OLDMIR_SERVER_CONFIG = "config/oldmir-config-server.yml"
 OLDMIR_CLIENT_CONFIG = "config/oldmir-config-client.yml"
@@ -32,7 +32,7 @@ def waitForSlaves(slaves):
     for s in slaves:
         output("wait for slaves {0} {1}".format(s, numSlaves[s]))
     output("")
-    
+
 
 def createLogDir(expID):
     output("# Create log directory.")
@@ -52,11 +52,13 @@ def pushConfigFiles(expID, slaves):
     output("# Push config files.")
     for s, configFile in slaves.items():
         if deplType == "remote":
+            # Sem -i, caminho relativo em relação ao $HOME do master.
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-config.log stubborn-scp.sh {5} "
                 "$own_public_ip:{2}/{3} {4}"
             )
         else:
+            # Original (cloud/local) com -i $ssh_key_file
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-config.log stubborn-scp.sh {5} "
                 "-i $ssh_key_file $own_public_ip:{2}/{3} {4}"
@@ -306,6 +308,7 @@ def submitLogs(expID, slaves):
                "exec-wait {0} 2000".format(s, expID))
     for s in slaves:
         if deplType == "remote":
+            # Sem -i, caminho relativo ao $HOME do master (iss/current-deployment-data/...).
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
                 "experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
@@ -324,7 +327,8 @@ def submitLogs(expID, slaves):
             )
         )
         output("exec-wait {0} 60000 "
-               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not submit logs; "
+               "exec-start {0} experiment-output/{1}/slave-__
+id__/FAILED echo Could not submit logs; "
                "exec-wait {0} 2000".format(s, expID))
     for s in slaves:
         output("sync {0}".format(s))
@@ -570,9 +574,11 @@ deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
     sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
 
-# ajustar diretórios vistos pelos slaves quando estamos em modo "remote"
+# Ajuste especial para o modo "remote":
+# - configs: "experiment-config" (o start-master patcha pra /users/Bruno/iss/experiment-config)
+# - raw-results: relativo ao HOME => iss/current-deployment-data/raw-results
 if deplType == "remote":
-    MASTER_CONFIG_DIR = "iss/experiment-config"
+    MASTER_CONFIG_DIR = "experiment-config"
     MASTER_EXP_DIR = "iss/current-deployment-data"
 
 inFileName = sys.argv[2]
