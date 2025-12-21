@@ -299,16 +299,23 @@ def saveConfig(expID, slaves):
 def submitLogs(expID, slaves):
     output("# Submit logs to master node")
     for s in slaves:
+        # Compressa logs locais do slave em um tar.gz
         output(
             "exec-start {0} /dev/null tar czf experiment-output-{1}-slave-__id__.tar.gz "
             "experiment-output/{1}/slave-__id__".format(
-                s, expID))
-        output("exec-wait {0} 30000 "
-               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not compress logs; "
-               "exec-wait {0} 2000".format(s, expID))
+                s, expID
+            )
+        )
+        output(
+            "exec-wait {0} 30000 "
+            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not compress logs; "
+            "exec-wait {0} 2000".format(s, expID)
+        )
+
+    # Envia os tar.gz para o master
     for s in slaves:
         if deplType == "remote":
-            # Sem -i, caminho relativo ao $HOME do master (iss/current-deployment-data/...).
+            # Sem -i, caminho relativo ao $HOME do master (iss/current-deployment-data/raw-results)
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
                 "experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
@@ -318,6 +325,7 @@ def submitLogs(expID, slaves):
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
                 "-i $ssh_key_file experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
             )
+
         output(
             scp_cmd.format(
                 s,
@@ -326,13 +334,16 @@ def submitLogs(expID, slaves):
                 MASTER_EXP_DIR,
             )
         )
-        output("exec-wait {0} 60000 "
-               "exec-start {0} experiment-output/{1}/slave-__
-id__/FAILED echo Could not submit logs; "
-               "exec-wait {0} 2000".format(s, expID))
+        output(
+            "exec-wait {0} 60000 "
+            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not submit logs; "
+            "exec-wait {0} 2000".format(s, expID)
+        )
+
     for s in slaves:
         output("sync {0}".format(s))
     output("")
+
 
 
 def updateStatus(finishedExpID):
