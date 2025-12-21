@@ -38,11 +38,11 @@ sleep 0.3
 echo "[start-slave] Wiping stale state files..."
 
 # estado “global” antigo no work_dir
-rm -f "${remote_work_dir}"/.discovery*        2>/dev/null || true
-rm -f "${remote_work_dir}"/.discoveryslave*   2>/dev/null || true
-rm -f "${remote_work_dir}"/discoveryslave*.pid 2>/dev/null || true
-rm -f "${remote_work_dir}"/slave*.pid         2>/dev/null || true
-rm -f "${remote_work_dir}"/status             2>/dev/null || true
+rm -f "${remote_work_dir}"/.discovery*          2>/dev/null || true
+rm -f "${remote_work_dir}"/.discoveryslave*     2>/dev/null || true
+rm -f "${remote_work_dir}"/discoveryslave*.pid  2>/dev/null || true
+rm -f "${remote_work_dir}"/slave*.pid           2>/dev/null || true
+rm -f "${remote_work_dir}"/status               2>/dev/null || true
 
 # estado de experimento no exp_dir
 rm -rf "${remote_exp_dir}/state"        2>/dev/null || true
@@ -59,7 +59,16 @@ mkdir -p \
 
 # Aqui é onde os dados de experimento vão viver
 mkdir -p "${remote_exp_dir}"
-# (não criamos experiment-output/* aqui; o próprio discovery/peers fazem isso)
+
+# 🔹 NOVO: estrutura padrão de experimento
+# diretório de saída usado pelos peers/clients e pelo fetch-results
+mkdir -p "${remote_exp_dir}/experiment-output"
+# primeiro experimento gerado (0000) – é o que o deployment está usando agora
+mkdir -p "${remote_exp_dir}/experiment-output/0000"
+# onde os tars/logs podem ser armazenados pelo lado remoto
+mkdir -p "${remote_exp_dir}/raw-results"
+# pasta de debug para scripts auxiliares, se necessário
+mkdir -p "${remote_exp_dir}/_debug"
 
 remote_scripts_dir="${remote_work_dir}/scripts"
 export PATH="${remote_scripts_dir}:${remote_bin_dir}:${PATH}"
@@ -79,6 +88,11 @@ export own_private_ip="${own_private_ip}"
 cd "${remote_exp_dir}"
 
 echo "[start-slave] PWD=$(pwd)"
+echo "[start-slave] Preparado diretórios básicos:"
+echo "  - experiment-output/"
+echo "  - experiment-output/0000/"
+echo "  - raw-results/"
+echo "  - _debug/"
 echo "[start-slave] Starting discoveryslave (fresh)..."
 
 exec /usr/bin/nohup \
