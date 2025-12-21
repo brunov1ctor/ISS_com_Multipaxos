@@ -3,12 +3,18 @@ import sys
 from collections import defaultdict
 import fileinput
 
-CLIENT_TIMEOUT = 480000 # In milliseconds
+CLIENT_TIMEOUT = 480000  # In milliseconds
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
-MASTER_CONFIG_DIR = "experiment-config"
-MASTER_EXP_DIR = "current-deployment-data"
+
+# Diretórios vistos a partir do *master* (node-0), como alvo do scp
+# Aqui usamos caminhos relativos ao $HOME, apontando explicitamente para ~/iss/...
+# Para configs:   ~/iss/experiment-config/...
+# Para resultados:~/iss/current-deployment-data/raw-results/...
+MASTER_CONFIG_DIR = "iss/experiment-config"
+MASTER_EXP_DIR = "iss/current-deployment-data"
+
 SLAVE_CONFIG_FILE = "config/config.yml"
 OLDMIR_SERVER_CONFIG = "config/oldmir-config-server.yml"
 OLDMIR_CLIENT_CONFIG = "config/oldmir-config-client.yml"
@@ -21,8 +27,10 @@ deploymentSchedule = []
 numSlaves = defaultdict(int)
 skipAllExisting = False
 
+
 def output(data):
     print(data, file=outFile)
+
 
 def waitForSlaves(slaves):
     output("# Wait for slaves.")
@@ -30,17 +38,20 @@ def waitForSlaves(slaves):
         output("wait for slaves {0} {1}".format(s, numSlaves[s]))
     output("")
 
+
 def createLogDir(expID):
     output("# Create log directory.")
     output("exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__".format(expID))
     output("exec-wait __all__ 2000")
     output("")
 
+
 def createLocalLogDir(expID):
     output("# Create log directory.")
     output("exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__/config".format(expID))
     output("exec-wait __all__ 2000")
     output("")
+
 
 def pushConfigFiles(expID, slaves):
     """
@@ -60,7 +71,7 @@ def pushConfigFiles(expID, slaves):
                 MASTER_CONFIG_DIR,
                 configFile,
                 SCP_RETRY_COUNT,
-                SLAVE_CONFIG_FILE
+                SLAVE_CONFIG_FILE,
             )
         )
         output(
@@ -71,6 +82,7 @@ def pushConfigFiles(expID, slaves):
     for s in slaves:
         output("sync {0}".format(s))
     output("")
+
 
 def pushLocalConfigFiles(expID, slaves):
     output("# Prepare config file.")
@@ -84,6 +96,7 @@ def pushLocalConfigFiles(expID, slaves):
     for s in slaves:
         output("sync {0}".format(s))
     output("")
+
 
 def setBandwidth(expID, bandwidths):
     output("# Set bandwidth limits.")
@@ -102,6 +115,7 @@ def setBandwidth(expID, bandwidths):
         output("sync {0}".format(s))
     output("")
 
+
 def unsetBandwidth(expID, bandwidths):
     output("# Unset bandwidth limits.")
     for s, bandwidth in bandwidths.items():
@@ -118,6 +132,7 @@ def unsetBandwidth(expID, bandwidths):
     for s, bandwidth in bandwidths.items():
         output("sync {0}".format(s))
     output("")
+
 
 def startPeers(expID, peers):
     numPeers = 0
@@ -137,6 +152,7 @@ def startPeers(expID, peers):
     output("discover-wait")
     output("")
 
+
 def startOldMirPeers(expID, peers):
     output("# Start peers.")
     for p in peers:
@@ -146,6 +162,7 @@ def startOldMirPeers(expID, peers):
             )
         )
     output("")
+
 
 def startLocalPeers(expID, peers):
     numPeers = 0
@@ -164,6 +181,7 @@ def startLocalPeers(expID, peers):
         )
     output("discover-wait")
     output("")
+
 
 def runClients(expID, clients):
     output("# Run clients and wait for them to stop.")
@@ -185,6 +203,7 @@ def runClients(expID, clients):
         output("sync {0}".format(c))
         timeout //= 2
     output("")
+
 
 def generateOldMirConfig(expID, peers, clients):
     numPeers = 0
@@ -232,6 +251,7 @@ def generateOldMirConfig(expID, peers, clients):
         timeoutSet = True
     output("")
 
+
 def runOldMirClients(expID, clients):
     output("# Run clients and wait for them to stop.")
     for c in clients:
@@ -251,6 +271,7 @@ def runOldMirClients(expID, clients):
         output("sync {0}".format(c))
         timeoutSet = True
     output("")
+
 
 def runLocalClients(expID, clients):
     output("wait for 2s")
@@ -275,12 +296,14 @@ def runLocalClients(expID, clients):
         timeoutSet = True
     output("")
 
+
 def stopPeers(peers):
     output("# Stop peers.")
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
     output("")
+
 
 def saveConfig(expID, slaves):
     output("# Save config file.")
@@ -297,9 +320,12 @@ def saveConfig(expID, slaves):
         )
     output("")
 
+
 def submitLogs(expID, slaves):
     """
     FIX: não usar '-i $ssh_key_file' aqui pelo mesmo motivo do pushConfigFiles().
+    Logs são comprimidos em experiment-output-<exp>-slave-__id__.tar.gz
+    e enviados para o diretório do master definido em MASTER_EXP_DIR/raw-results/.
     """
     output("# Submit logs to master node")
     for s in slaves:
@@ -328,28 +354,34 @@ def submitLogs(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
+
 def updateStatus(finishedExpID):
     output("# Update master status.")
     output("write-file $status_file {0}".format(finishedExpID))
     output("")
+
 
 def updateLocalStatus(finishedExpID):
     output("# Update master status.")
     output("write-file {0} {1}".format(LOCAL_MASTER_STATUS_FILE, finishedExpID))
     output("")
 
+
 def stopAll():
     output("# Stop all slaves.")
     output("stop __all__")
     output("wait for {0}".format(STOP_SLAVES_DELAY))
 
+
 def writeReadyFile():
     output("write-file $ready_file READY")
     output("")
 
+
 def writeLocalReadyFile():
     output("write-file master-ready READY")
     output("")
+
 
 def generateCommands(expID, peers, clients):
     output("#========================================")
@@ -361,7 +393,7 @@ def generateCommands(expID, peers, clients):
     config.update(clients)
 
     configFiles = {key: val[0] for key, val in config.items()}
-    bandwidths  = {key: val[1] for key, val in config.items()}
+    bandwidths = {key: val[1] for key, val in config.items()}
 
     slaves = list(peers) + list(clients)
 
@@ -378,6 +410,7 @@ def generateCommands(expID, peers, clients):
     updateStatus(expID)
     output("")
 
+
 def generateOldMirCommands(expID, peers, clients):
     output("#========================================")
     output("# {0} (Old Mir)".format(expID))
@@ -388,7 +421,7 @@ def generateOldMirCommands(expID, peers, clients):
     config.update(clients)
 
     configFiles = {key: val[0] for key, val in config.items()}
-    bandwidths  = {key: val[1] for key, val in config.items()}
+    bandwidths = {key: val[1] for key, val in config.items()}
 
     slaves = list(peers) + list(clients)
 
@@ -405,6 +438,7 @@ def generateOldMirCommands(expID, peers, clients):
     updateStatus(expID)
     output("")
 
+
 def generateLocalCommands(expID, peers, clients):
     output("#========================================")
     output("# {0} (local)".format(expID))
@@ -415,7 +449,7 @@ def generateLocalCommands(expID, peers, clients):
     config.update(clients)
 
     configFiles = {key: val[0] for key, val in config.items()}
-    bandwidths  = {key: val[1] for key, val in config.items()}
+    bandwidths = {key: val[1] for key, val in config.items()}
 
     slaves = list(peers) + list(clients)
 
@@ -427,6 +461,7 @@ def generateLocalCommands(expID, peers, clients):
     stopPeers(list(peers))
     updateLocalStatus(expID)
     output("")
+
 
 def deploy(tokens):
     global defaultMachine
@@ -449,8 +484,13 @@ def deploy(tokens):
                 numSlaves[tag] += n
                 deploymentSchedule.append((lastFinished, n, tag, templateFile))
             else:
-                sys.exit("ic-parse-experiment.py: deploy: must specify machine template before token '{0}'".format(tokens[0]))
+                sys.exit(
+                    "ic-parse-experiment.py: deploy: must specify machine template before token '{0}'".format(
+                        tokens[0]
+                    )
+                )
             tokens = tokens[2:]
+
 
 def run(expID, tokens):
     global lastFinished
@@ -464,7 +504,7 @@ def run(expID, tokens):
         tokens = tokens[1:]
 
     if expID == "next":
-        expID = ("{:0"+str(experimentIdDigits)+"d}").format(idOffset)
+        expID = ("{:0" + str(experimentIdDigits) + "d}").format(idOffset)
         idOffset += 1
     else:
         experimentIdDigits = len(expID)
@@ -476,7 +516,9 @@ def run(expID, tokens):
     if os.path.isdir(outdir) and skipAllExisting:
         skip = True
     elif os.path.isdir(outdir):
-        sys.stderr.write("{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir))
+        sys.stderr.write(
+            "{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir)
+        )
         sys.stderr.flush()
         answer = sys.stdin.readline().strip()
         while answer not in {"s", "S", "a", "A", "c", "C"}:
@@ -517,9 +559,17 @@ def run(expID, tokens):
                 if os.path.isfile(configFile):
                     role[tokens[0]] = (config, bandwidth)
                 else:
-                    sys.exit("ic-parse-experiment.py: config file not found: {0}".format(configFile))
+                    sys.exit(
+                        "ic-parse-experiment.py: config file not found: {0}".format(
+                            configFile
+                        )
+                    )
             else:
-                sys.exit("ic-parse-experiment.py: run {0}: must specify role and config before token '{1}'".format(expID, tokens[0]))
+                sys.exit(
+                    "ic-parse-experiment.py: run {0}: must specify role and config before token '{1}'".format(
+                        expID, tokens[0]
+                    )
+                )
             tokens = tokens[1:]
 
     if not skip:
@@ -530,13 +580,19 @@ def run(expID, tokens):
         elif deplType == "local":
             generateLocalCommands(expID, peers, clients)
         else:
-            sys.exit("generate-master-commands.py: unknown deployment type: {0} only know 'local', 'cloud', 'remote'".format(deplType))
+            sys.exit(
+                "generate-master-commands.py: unknown deployment type: {0} only know 'local', 'cloud', 'remote'".format(
+                    deplType
+                )
+            )
 
     lastFinished = expID
+
 
 def printDeploymentSchedule():
     for expID, n, tag, templateFile in deploymentSchedule:
         print("{0} {1} {2} {3}".format(expID, n, tag, templateFile))
+
 
 # ============================================================
 # main
@@ -544,7 +600,9 @@ def printDeploymentSchedule():
 
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
-    sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
+    sys.exit(
+        "generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'"
+    )
 
 inFileName = sys.argv[2]
 outFile = open(sys.argv[3], "w")
@@ -582,7 +640,9 @@ with open(inFileName) as inFile:
         elif tokens[0] == "bandwidth:":
             defaultBandwidth = tokens[1]
         else:
-            sys.exit("ic-parse-experiment.py: Unsupported command: {0}".format(tokens[0]))
+            sys.exit(
+                "ic-parse-experiment.py: Unsupported command: {0}".format(tokens[0])
+            )
 
 output("#========================================")
 output("# Wrap up                                ")
