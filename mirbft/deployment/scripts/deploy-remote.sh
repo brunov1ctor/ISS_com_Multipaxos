@@ -114,17 +114,17 @@ log_i "Master command file pronto: $exp_data_dir/$local_master_command_file"
 # 5) Reset remoto: matar processos antigos + limpar estado
 # =====================================================================
 
-log_i "Iniciando limpeza de estado antigo nas máquinas remotas (processos de experimento, SSH e limites de banda)."
+log_i "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
 
 # Mata analyze-continuously (se estiver rodando)
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" \
     "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}')" \
-    >/dev/null 2>&1 || log_w "$ip: nenhum analyze-continuously em execução ou não foi possível encerrá-lo (seguindo em frente)."
+    >/dev/null 2>&1 || log_w "$ip: could not kill analyze-continuously (continuando)."
   sleep 0.1
 done
 
-log_i "Tentativa de encerrar processos analyze-continuously concluída em todos os nós."
+log_i "Killed continuous analysis scripts."
 
 # Limpa estado, mata binários velhos, reseta status
 for ip in $(awk '{print $2}' "$instance_info_file"); do
@@ -137,13 +137,13 @@ for ip in $(awk '{print $2}' "$instance_info_file"); do
     rm -rf $remote_delete_files
     echo RUNNING > $remote_status_file
     kill -9 \$(ps -ef | grep 'sshd: ${remote_user}@notty' | awk '{print \$2}') 2>/dev/null || true
-  " >/dev/null 2>&1 || log_w "$ip: não foi possível concluir o reset completo desta máquina (continuando para o próximo nó)."
+  " >/dev/null 2>&1 || log_w "$ip: reset failed (continuando)."
   sleep 0.1
 done
 wait
 
 echo
-log_i "Reset básico de estado realizado nas máquinas remotas."
+log_i "Reset machine state."
 echo
 
 # =====================================================================
@@ -218,7 +218,7 @@ if $cancel_instances; then
   log_i "Canceling cloud machines as requested..."
   scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"
 else
-  echo -e "Lembre-se de cancelar as máquinas virtuais usadas com:\n  cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name\n"
+  echo -e "Do not forget to cancel the used virtual servers using cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name \n"
 fi
 
 log_i "deploy-remote.sh finished."

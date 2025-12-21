@@ -14,23 +14,27 @@ attempt=1
 last_status=1
 
 while (( attempt <= MAX_RETRIES )); do
-  echo "[stubborn-scp] Tentativa ${attempt} de ${MAX_RETRIES}..."
-  # Opções para evitar qualquer prompt de host key
-  if scp -o StrictHostKeyChecking=no \
-         -o UserKnownHostsFile=/dev/null \
-         -o LogLevel=ERROR \
-         "${SRC}" "${DST}"; then
-    echo "[stubborn-scp] Cópia local->remoto concluída com sucesso."
+  if (( attempt == 1 )); then
+    echo "[stubborn-scp] Iniciando cópia (máx ${MAX_RETRIES} tentativas)."
+    echo "[stubborn-scp]   origem : ${SRC}"
+    echo "[stubborn-scp]   destino: ${DST}"
+  else
+    echo "[stubborn-scp] Nova tentativa ${attempt}/${MAX_RETRIES} para copiar '${SRC}' (último status: ${last_status})."
+  fi
+
+  # tentativa de cópia
+  if scp "${SRC}" "${DST}"; then
+    echo "[stubborn-scp] Sucesso ao copiar '${SRC}' na tentativa ${attempt}/${MAX_RETRIES}."
     exit 0
   else
     last_status=$?
-    echo "[stubborn-scp] Falha na tentativa ${attempt} (status ${last_status})."
+    echo "[stubborn-scp] Falha na tentativa ${attempt}/${MAX_RETRIES} para copiar '${SRC}' (status ${last_status})."
   fi
 
   attempt=$((attempt + 1))
   sleep 1
 done
 
-echo "[stubborn-scp] Desisti após ${MAX_RETRIES} tentativas. Último status: ${last_status}" >&2
+echo "[stubborn-scp] Desisti de copiar '${SRC}' após ${MAX_RETRIES} tentativas. Último status: ${last_status}" >&2
 exit "${last_status}"
 
