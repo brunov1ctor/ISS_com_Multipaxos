@@ -3,27 +3,24 @@ import sys
 from collections import defaultdict
 import fileinput
 
-CLIENT_TIMEOUT = 480000  # In milliseconds
+CLIENT_TIMEOUT = 480000 # In milliseconds
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
-
-# Diretórios vistos a partir do *master* (node-0), como alvo do scp
-# Aqui usamos caminhos relativos ao $HOME, apontando explicitamente para ~/iss/...
-# Para configs:   ~/iss/experiment-config/...
-# Para resultados:~/iss/current-deployment-data/raw-results/...
-MASTER_CONFIG_DIR = "iss/experiment-config"
+MASTER_CONFIG_DIR = "experiment-config"
 MASTER_EXP_DIR = "iss/current-deployment-data"
-
 SLAVE_CONFIG_FILE = "config/config.yml"
 OLDMIR_SERVER_CONFIG = "config/oldmir-config-server.yml"
 OLDMIR_CLIENT_CONFIG = "config/oldmir-config-client.yml"
+LOCAL_MASTER_STATUS_FILE = "master-status"
+LOCAL_IP_ADDRESS = "127.0.0.1"
+LOCAL_MASTER_PORT = "9999"
 
-LOCAL_IP_ADDRESS = "$own_public_ip"
-LOCAL_MASTER_PORT = "$master_port"
 
-numSlaves = {}
+lastFinished = -1
 deploymentSchedule = []
+numSlaves = defaultdict(int)
+skipAllExisting = False
 
 
 def output(data):
@@ -45,38 +42,110 @@ def createLogDir(expID):
 
 
 def createLocalLogDir(expID):
-    output("# Create local log directory.")
-    output(
-        "exec-start __all__ /dev/null mkdir -p "
-        "experiment-output/{0}/slave-__id__/config".format(expID)
-    )
+    output("# Create log directory.")
+    output("exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__/config".format(expID))
     output("exec-wait __all__ 2000")
     output("")
 
 
-def resetOldmir(numPeers, numClients):
-    output("# Reset oldmir discovery service (if running).")
-    output("discover-reset {0}".format(numPeers))
-    output("discover-reset {0}".format(numClients))
+def pushConfigFiles(expID, slaves):
+    output("# Push config files.")
+    for s, configFile in slaves.items():
+        output(
+            "exec-start {0} scp-output-{1}-config.log stubborn-scp.sh {5} -i $ssh_key_file $own_public_ip:{2}/{3} {4}"
+            "".format(s, expID, MASTER_CONFIG_DIR, configFile, SLAVE_CONFIG_FILE, SCP_RETRY_COUNT)
+        )
+        output("exec-wait {0} 60000 "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not fetch config; "
+               "exec-wait {0} 2000".format(s, expID))
+    for s in slaves:
+        output("sync {0}".format(s))
     output("")
 
 
-def resetDiscovery(numPeers):
-    output("# Reset discovery service.")
-    output("discover-reset {0}".format(numPeers))
+def pushLocalConfigFiles(expID, slaves):
+    output("# Prepare config file.")
+    for s, configFile in slaves.items():
+        output(
+            "exec-start {0} /dev/null cp {1}/{2} experiment-output/{3}/slave-__id__/{4}".format(s, local_config_dir, configFile, expID, SLAVE_CONFIG_FILE)
+        )
+        output("exec-wait {0} 2000".format(s))
+    for s in slaves:
+        output("sync {0}".format(s))
     output("")
 
 
-def runPeers(expID, peers):
-    output("# Start peers and wait for discovery to stabilize.")
+def setBandwidth(expID, bandwidths):
+    output("# Set bandwidth limits.")
+    for s, bandwidth in bandwidths.items():
+        if bandwidth != "0" and bandwidth != "unlimited":
+            output(
+                "exec-start {0} set-bandwidth-{1}.log tc qdisc add dev eth0 root tbf rate {2} burst 320kbit latency 400ms"
+                "".format(s, expID, bandwidth)
+            )
+            output("exec-wait {0} 2000 "
+                   "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not set bandwidth; "
+                   "exec-wait {0} 2000".format(s, expID))
+    for s in bandwidths:
+        output("sync {0}".format(s))
+    output("")
+
+
+def unsetBandwidth(expID, bandwidths):
+    output("# Unset bandwidth limits.")
+    for s, bandwidth in bandwidths.items():
+        if bandwidth != "0" and bandwidth != "unlimited":
+            output(
+                "exec-start {0} unset-bandwidth-{1}.log tc qdisc del dev eth0 root tbf rate {2} burst 320kbit latency 400ms"
+                "".format(s, expID, bandwidth)
+            )
+            output("exec-wait {0} 2000 "
+                   "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not unset bandwidth; "
+                   "exec-wait {0} 2000".format(s, expID))
+    for s, bandwidth in bandwidths.items():
+        output("sync {0}".format(s))
+    output("")
+
+
+def startPeers(expID, peers):
+    numPeers = 0
+    for p in peers:
+        numPeers += numSlaves[p]
+
+    output("# Start peers.")
+    output("discover-reset {0}".format(numPeers))
+    for p in peers:
+        output(
+            "exec-start {0} experiment-output/{1}/slave-__id__/peer.log orderingpeer "
+            "{2} $own_public_ip:$master_port __public_ip__ __private_ip__ "
+            "experiment-output/{1}/slave-__id__/peer.trc experiment-output/{1}/slave-__id__/prof".format(
+                p, expID, SLAVE_CONFIG_FILE))
+    output("discover-wait")
+    output("")
+
+
+def startOldMirPeers(expID, peers):
+    output("# Start peers.")
+    for p in peers:
+        output(
+            "exec-start {0} experiment-output/{1}/slave-__id__/peer.log server {2} ".format(
+                p, expID, OLDMIR_SERVER_CONFIG))
+    output("")
+
+
+def startLocalPeers(expID, peers):
+    numPeers = 0
+    for p in peers:
+        numPeers += numSlaves[p]
+
+    output("# Start peers.")
+    output("discover-reset {0}".format(numPeers))
     for p in peers:
         output(
             "exec-start {0} experiment-output/{1}/slave-__id__/peer.log orderingpeer "
             "experiment-output/{1}/slave-__id__/{2} {3}:{4} {3} {3} "
             "experiment-output/{1}/slave-__id__/peer.trc experiment-output/{1}/slave-__id__/prof".format(
-                p, expID, SLAVE_CONFIG_FILE, LOCAL_IP_ADDRESS, LOCAL_MASTER_PORT
-            )
-        )
+                p, expID, SLAVE_CONFIG_FILE, LOCAL_IP_ADDRESS, LOCAL_MASTER_PORT))
     output("discover-wait")
     output("")
 
@@ -88,153 +157,142 @@ def runClients(expID, clients):
             "exec-start {0} experiment-output/{1}/slave-__id__/clients.log orderingclient "
             "{2} $own_public_ip:$master_port experiment-output/{1}/slave-__id__/client "
             "experiment-output/{1}/slave-__id__/prof-client".format(
-                c, expID, SLAVE_CONFIG_FILE
-            )
-        )
+                c, expID, SLAVE_CONFIG_FILE))
     timeout = CLIENT_TIMEOUT
     for c in clients:
-        output(
-            "exec-wait {0} {2} "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
-            "exec-wait {0} 2000".format(c, expID, timeout)
-        )
+        output("exec-wait {0} {2} "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
+               "exec-wait {0} 2000".format(c, expID, timeout))
         output("sync {0}".format(c))
-        timeout //= 2
+        timeout //= 2 # In case of problems, avoids waiting for the full timeout for all sets of clients.
+                     # Not setting "timeout" directly to a very small value for all except the first set of clients
+                     # avoids the situation where the first set of clients exits normally and the second set of clients,
+                     # taking just slightly longer, is killed. The total timeout is still bounded by 2 * CLIENT_TIMEOUT
     output("")
 
 
 def generateOldMirConfig(expID, peers, clients):
-    output("# Generate oldmir configs from ISS config.")
-    output(
-        "exec-start {0} experiment-output/{1}/slave-__id__/oldmir-config-gen.log "
-        "oldmir-start.sh config {2} {3} {4} {5}".format(
-            peers[0], expID, SLAVE_CONFIG_FILE, OLDMIR_SERVER_CONFIG, OLDMIR_CLIENT_CONFIG, expID
-        )
-    )
-    output("discover-wait")
+    numPeers = 0
+    for p in peers:
+        numPeers += numSlaves[p]
 
-    numPeers = len(peers)
-    resetOldmir(numPeers, len(clients))
+    output("# Generate old mir config.")
+
     output("discover-reset {0}".format(numPeers))
     for p in peers:
         output(
             "exec-start {0} experiment-output/{1}/slave-__id__/config-gen.log "
             "oldmir-start.sh peer $own_public_ip:$master_port {2} {3} "
             "experiment-output/{1}/slave-__id__/peer.log __public_ip__ __private_ip__".format(
-                p, expID, SLAVE_CONFIG_FILE, OLDMIR_SERVER_CONFIG
-            )
-        )
+                p, expID, SLAVE_CONFIG_FILE, OLDMIR_SERVER_CONFIG))
     output("discover-wait")
 
     for c in clients:
         output(
             "exec-start {0} experiment-output/{1}/slave-__id__/config-gen.log "
             "oldmir-start.sh client $own_public_ip:$master_port {2} {3} ".format(
-                c, expID, SLAVE_CONFIG_FILE, OLDMIR_CLIENT_CONFIG
-            )
-        )
-    output("discover-wait")
+                c, expID, SLAVE_CONFIG_FILE, OLDMIR_CLIENT_CONFIG))
+    timeoutSet = False
+    for p in peers:
+        if not timeoutSet:
+            timeout = CLIENT_TIMEOUT
+        else:
+            timeout = 1000
+        output("exec-wait {0} {2} "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Failed to generate configuration; "
+               "exec-wait {0} 2000".format(p, expID, timeout))
+        output("sync {0}".format(p))
+    timeoutSet = False
+    for c in clients:
+        if not timeoutSet:
+            timeout = CLIENT_TIMEOUT
+        else:
+            timeout = 1000
+        output("exec-wait {0} {2} "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Failed to generate configuration; "
+               "exec-wait {0} 2000".format(c, expID, timeout))
+        output("sync {0}".format(c))
     output("")
 
 
-def setBandwidth(expID, bandwidths):
-    output("# Set bandwidth limits.")
-    for s, bandwidth in bandwidths.items():
-        if bandwidth != "0" and bandwidth != "unlimited":
-            output(
-                "exec-start {0} set-bandwidth-{1}.log bash -lc \"tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true && tc qdisc add dev eth0 root tbf rate {2}kbit burst 320kbit latency 400ms\"".format(
-                    s, expID, bandwidth
-                )
-            )
-            output(
-                "exec-wait {0} 2000 "
-                "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not set bandwidth; "
-                "exec-wait {0} 2000".format(s, expID)
-            )
-    for s in bandwidths:
-        output("sync {0}".format(s))
+def runOldMirClients(expID, clients):
+    output("# Run clients and wait for them to stop.")
+    for c in clients:
+        output(
+            "exec-start {0} experiment-output/{1}/slave-__id__/clients.log client {2} ".format(
+                c, expID, OLDMIR_CLIENT_CONFIG))
+    timeoutSet = False
+    for c in clients:
+        if not timeoutSet:
+            timeout = CLIENT_TIMEOUT
+        else:
+            timeout = 1000
+        output("exec-wait {0} {2} "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
+               "exec-wait {0} 2000".format(c, expID, timeout))
+        output("sync {0}".format(c))
     output("")
 
 
-def unsetBandwidth(expID, bandwidths):
-    output("# Unset bandwidth limits.")
-    for s, bandwidth in bandwidths.items():
-        if bandwidth != "0" and bandwidth != "unlimited":
-            output(
-                "exec-start {0} unset-bandwidth-{1}.log bash -lc \"tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true\"".format(
-                    s, expID
-                )
-            )
-            output(
-                "exec-wait {0} 2000 "
-                "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not unset bandwidth; "
-                "exec-wait {0} 2000".format(s, expID)
-            )
-    for s in bandwidths:
-        output("sync {0}".format(s))
+def runLocalClients(expID, clients):
+    output("wait for 2s")
+    output("# Run clients locally and wait for them to stop.")
+
+    for c in clients:
+        output(
+            "exec-start {0} experiment-output/{1}/slave-__id__/clients.log orderingclient "
+            "experiment-output/{1}/slave-__id__/{2} {3}:{4} experiment-output/{1}/slave-__id__/client "
+            "experiment-output/{1}/slave-__id__/prof-client".format(
+                c, expID, SLAVE_CONFIG_FILE, LOCAL_IP_ADDRESS, LOCAL_MASTER_PORT))
+    timeoutSet = False
+    for c in clients:
+        if not timeoutSet:
+            timeout = CLIENT_TIMEOUT
+        else:
+            timeout = 1000
+        output("exec-wait {0} {2} "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
+               "exec-wait {0} 2000".format(c, expID, timeout))
+        output("sync {0}".format(c))
+    output("")
+
+
+def stopPeers(peers):
+    output("# Stop peers.")
+    for p in peers:
+        output("exec-signal {0} SIGINT".format(p))
+    output("wait for {0}".format(SIGNAL_DELAY))
     output("")
 
 
 def saveConfig(expID, slaves):
-    output("# Save config files for experiment.")
+    output("# Save config file.")
     for s in slaves:
-        output(
-            "exec-start {0} save-config-{1}.log stubborn-scp.sh {4} config/config.yml {2}:{3}/config-{1}-slave-__id__.yml".format(
-                s, expID, "$own_public_ip", MASTER_CONFIG_DIR, SCP_RETRY_COUNT
-            )
-        )
-        output(
-            "exec-wait {0} 20000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not save config; "
-            "exec-wait {0} 2000".format(s, expID)
-        )
-    for s in slaves:
-        output("sync {0}".format(s))
+        output("exec-start {0} /dev/null cp {1} experiment-output/{2}/slave-__id__".format(s, SLAVE_CONFIG_FILE,
+                                                                                                 expID))
+        output("exec-wait {0} 2000 "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not log config file; "
+               "exec-wait {0} 2000".format(s, expID))
     output("")
 
 
 def submitLogs(expID, slaves):
-    """
-    Versão ajustada do submitLogs para evitar problemas de CWD e dar logs
-    mais explícitos de compressão/envio.
-
-    Comportamento:
-      1) No slave: gera $HOME/{MASTER_EXP_DIR}/experiment-output-<exp>-slave-__id__.tar.gz
-      2) No slave: envia esse tar via stubborn-scp.sh para
-         $own_public_ip:{MASTER_EXP_DIR}/raw-results/ no master.
-    """
     output("# Submit logs to master node")
     for s in slaves:
-        # 1) Compactar logs localmente no slave, usando caminhos absolutos.
         output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/submit-logs.log "
-            "bash -lc \"tar czf $HOME/{3}/experiment-output-{1}-slave-__id__.tar.gz "
-            "$HOME/{3}/experiment-output/{1}/slave-__id__\"".format(
-                s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR
-            )
-        )
-        # Se a compactação falhar ou travar, registramos no log 'FAILED'.
-        output(
-            "exec-wait {0} 30000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not compress logs; "
-            "exec-wait {0} 2000".format(s, expID)
-        )
-
+            "exec-start {0} experiment-output/{1}/slave-__id__/submit-logs.log tar czf experiment-output-{1}-slave-__id__.tar.gz "
+            "experiment-output/{1}/slave-__id__".format(
+                s, expID))
+        output("exec-wait {0} 30000 "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not compress logs; "
+               "exec-wait {0} 2000".format(s, expID))
     for s in slaves:
-        # 2) Enviar o .tar.gz gerado para o master (raw-results/).
         output(
-            "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
-            "$HOME/{3}/experiment-output-{1}-slave-__id__.tar.gz "
-            "$own_public_ip:{3}/raw-results/".format(
-                s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR
-            )
-        )
-        output(
-            "exec-wait {0} 60000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not submit logs; "
-            "exec-wait {0} 2000".format(s, expID)
-        )
-
+            "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} -i $ssh_key_file "
+            "experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/".format(s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR))
+        output("exec-wait {0} 60000 "
+               "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not submit logs; "
+               "exec-wait {0} 2000".format(s, expID))
     for s in slaves:
         output("sync {0}".format(s))
     output("")
@@ -247,168 +305,282 @@ def updateStatus(finishedExpID):
 
 
 def updateLocalStatus(finishedExpID):
-    output("# Update master status (local).")
-    output("write-file status {0}".format(finishedExpID))
+    output("# Update master status.")
+    output("write-file {0} {1}".format(LOCAL_MASTER_STATUS_FILE, finishedExpID))
     output("")
 
 
 def stopAll():
     output("# Stop all slaves.")
     output("stop __all__")
-    output("wait for slaves __all__ 0")
-    output("sleep {0}".format(STOP_SLAVES_DELAY))
-    output("")
+    output("wait for {0}".format(STOP_SLAVES_DELAY))
 
 
 def writeReadyFile():
     output("write-file $ready_file READY")
     output("")
 
-
 def writeLocalReadyFile():
-    output("write-file ready READY")
+    output("write-file master-ready READY")
     output("")
 
 
-def setDefaultConfig(configFile):
-    global defaultConfig
-    defaultConfig = configFile
+def generateCommands(expID, peers, clients):
 
+    output("#========================================")
+    output("# {0}".format(expID))
+    output("#========================================")
+    output("\n")
 
-def setDefaultMachine(machine):
-    global defaultMachine
-    defaultMachine = machine
+    # both peers and clients are dictionaries with slave tags as keys
+    # and the assigned config file names as the corresponding values.
+    # config is thus the assignment to slave tag to config file.
+    config = peers.copy()
+    config.update(clients)
 
+    configFiles = {key: val[0] for key, val in config.items()}
+    bandwidths = {key: val[1] for key, val in config.items()}
 
-def setDefaultBandwidth(bandwidth):
-    global defaultBandwidth
-    defaultBandwidth = bandwidth
+    # slaves are all the tags of the used slaves, both peers and clients.
+    slaves = list(peers) + list(clients)
 
-
-def deploy(params):
-    hostType = params[0]
-    hostIds = params[1]
-    numInstances = int(params[2])
-    tag = params[3]
-    machineTemplate = params[4]
-
-    hosts = []
-    for hostIdRange in hostIds.split(","):
-        hostIdRange = hostIdRange.strip()
-        if "-" in hostIdRange:
-            start, end = map(int, hostIdRange.split("-"))
-            hosts.extend(range(start, end + 1))
-        else:
-            hosts.append(int(hostIdRange))
-
-    for hostId in hosts:
-        numSlaves[hostId] = numInstances
-        output(
-            "deploy {0} {1} {2} {3} {4}".format(
-                hostType, hostId, numInstances, tag, machineTemplate
-            )
-        )
-
-
-def run(expID, params):
-    global numSlaves, deploymentSchedule
-
-    configFile = defaultConfig
-    machineTemplate = defaultMachine
-    bandwidth = defaultBandwidth
-
-    peers = []
-    clients = []
-    bandwidths = {}
-
-    for param in params:
-        key, value = param.split("=", 1)
-        if key == "config":
-            configFile = value
-        elif key == "machine":
-            machineTemplate = value
-        elif key == "bandwidth":
-            for mapping in value.split(","):
-                hostId, bw = mapping.split(":")
-                bandwidths[int(hostId)] = int(bw)
-        elif key == "peers":
-            peers = [int(x) for x in value.split(",")]
-        elif key == "clients":
-            clients = [int(x) for x in value.split(",")]
-
-    numPeers = sum(numSlaves.get(p, 0) for p in peers)
-    if numPeers == 0:
-        return
-
-    numClients = sum(numSlaves.get(c, 0) for c in clients)
-
-    deploymentSchedule.append(
-        {
-            "id": expID,
-            "config": configFile,
-            "machine": machineTemplate,
-            "bandwidth": bandwidths,
-            "peers": peers,
-            "clients": clients,
-        }
-    )
-
+    # most of these functions only need the keys (slave tags)
+    # and only pushConfigFiles() needs the values (config files) too.
+    waitForSlaves(slaves)
     createLogDir(expID)
-    createLocalLogDir(expID)
-
-    if bandwidths:
-        setBandwidth(expID, bandwidths)
-
-    generateOldMirConfig(expID, peers, clients)
-
-    resetDiscovery(numPeers)
-    runPeers(expID, peers)
-    runClients(expID, clients)
-    submitLogs(expID, peers + clients)
-
-    if bandwidths:
-        unsetBandwidth(expID, bandwidths)
-
+    pushConfigFiles(expID, configFiles)
+    setBandwidth(expID, bandwidths)
+    startPeers(expID, list(peers))
+    runClients(expID, list(clients))
+    stopPeers(list(peers))
+    unsetBandwidth(expID, bandwidths)
+    saveConfig(expID, slaves)
+    submitLogs(expID, slaves)
     updateStatus(expID)
+
+    output("")
+
+def generateOldMirCommands(expID, peers, clients):
+
+    output("#========================================")
+    output("# {0} (Old Mir)".format(expID))
+    output("#========================================")
+    output("\n")
+
+    # both peers and clients are dictionaries with slave tags as keys
+    # and the assigned config file names as the corresponding values.
+    # config is thus the assignment to slave tag to config file.
+    config = peers.copy()
+    config.update(clients)
+
+    configFiles = {key: val[0] for key, val in config.items()}
+    bandwidths = {key: val[1] for key, val in config.items()}
+
+    # slaves are all the tags of the used slaves, both peers and clients.
+    slaves = list(peers) + list(clients)
+
+    # most of these functions only need the keys (slave tags)
+    # and only pushConfigFiles() needs the values (config files) too.
+    waitForSlaves(slaves)
+    createLogDir(expID)
+    pushConfigFiles(expID, configFiles)
+    setBandwidth(expID, bandwidths)
+    generateOldMirConfig(expID, list(peers), list(clients))
+    # startOldMirPeers(expID, list(peers))
+    runOldMirClients(expID, list(clients))
+    stopPeers(list(peers))
+    unsetBandwidth(expID, bandwidths)
+    saveConfig(expID, slaves)
+    submitLogs(expID, slaves)
+    updateStatus(expID)
+
+    output("")
+
+def generateLocalCommands(expID, peers, clients):
+
+    output("#========================================")
+    output("# {0} (local)".format(expID))
+    output("#========================================")
+    output("\n")
+
+    # both peers and clients are dictionaries with slave tags as keys
+    # and the assigned config file names as the corresponding values.
+    # config is thus the assignment to slave tag to config file.
+    config = peers.copy()
+    config.update(clients)
+
+    configFiles = {key: val[0] for key, val in config.items()}
+    bandwidths = {key: val[1] for key, val in config.items()}
+
+    # slaves are all the tags of the used slaves, both peers and clients.
+    slaves = list(peers) + list(clients)
+
+    # most of these functions only need the keys (slave tags)
+    # and only pushConfigFiles() needs the values (config files) too.
+    waitForSlaves(slaves)
+    createLocalLogDir(expID)
+    pushLocalConfigFiles(expID, configFiles)
+    startLocalPeers(expID, list(peers))
+    runLocalClients(expID, list(clients))
+    stopPeers(list(peers))
     updateLocalStatus(expID)
+
+    output("")
+
+
+def deploy(tokens):
+    global defaultMachine
+    global deploymentSchedule
+    global numSlaves
+    global lastFinished
+
+    machine = defaultMachine
+
+    while tokens:
+        if tokens[0] == "machine:":
+            machine = tokens[1]
+            tokens = tokens[2:]
+        else:
+            if machine != "":
+                n = int(tokens[0])
+                tag = tokens[1]
+                templateFile = machine
+
+                numSlaves[tag] += n
+                deploymentSchedule.append((lastFinished, n, tag, templateFile))
+            else:
+                sys.exit("ic-parse-experiment.py: deploy: must specify machine template before token '{0}'".format(tokens[0]))
+            tokens = tokens[2:]
+
+
+def run(expID, tokens):
+    global lastFinished
+    global idOffset
+    global experimentIdDigits
+    global skipAllExisting
+
+    runOldMir = False
+    # If oldmir is the first token, run old mir
+    if tokens[0] == "oldmir":
+        runOldMir = True
+        tokens = tokens[1:]
+
+    # If special value "next" is specified as experiment ID, use the next value
+    if expID == "next":
+        expID = ("{:0"+str(experimentIdDigits)+"d}").format(idOffset)
+        idOffset += 1
+    # Otherwise, set the global idOffset to continue counting from here
+    else:
+        experimentIdDigits = len(expID)
+        idOffset = int(expID) + 1
+
+    # Allow user to skip existing experiments or to cancel the whole process
+    skip = False
+    outdir = "{0}/experiment-output/{1}".format(local_exp_data, expID)
+
+    if os.path.isdir(outdir) and skipAllExisting:
+        skip = True
+    elif os.path.isdir(outdir):
+
+        # Ask the user what to do.
+        sys.stderr.write("{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir))
+        sys.stderr.flush()
+        answer = sys.stdin.readline().strip()
+        while not answer in {"s", "S", "a", "A", "c", "C"}:
+            sys.stderr.write("Please answer a, s, or c : ")
+            sys.stderr.flush()
+            answer = sys.stdin.readline().strip()
+
+        # Act based on user's answer.
+        if answer == "s" or answer == "S":
+            skip = True
+        elif answer == "a" or answer == "A":
+            skip = True
+            skipAllExisting = True
+        elif answer == "c" or answer == "C":
+            os.exit("User abort.")
+
+    clients = {}
+    peers = {}
+    config = defaultConfig
+    bandwidth = defaultBandwidth
+    role = None
+
+    # Process (tag, role) pairs.
+    while tokens:
+
+        if tokens[0] == "config:":
+            config = tokens[1]
+            tokens = tokens[2:]
+        if tokens[0] == "bandwidth:":
+            bandwidth = tokens[1]
+            tokens = tokens[2:]
+        elif tokens[0] == "peers:":
+            role = peers
+            tokens = tokens[1:]
+        elif tokens[0] == "clients:":
+            role = clients
+            tokens = tokens[1:]
+        else:
+            if config != "" and role is not None:
+                configFile = "{0}/{1}/{2}".format(local_exp_data, local_config_dir, config)
+                if os.path.isfile(configFile):
+                    role[tokens[0]] = (config, bandwidth)
+                else:
+                    sys.exit("ic-parse-experiment.py: config file not found: {0}".format(configFile))
+            else:
+                sys.exit("ic-parse-experiment.py: run {0}: must specify role and config before token '{1}'".format(expID, tokens[0]))
+            tokens = tokens[1:]
+
+    if not skip:
+        # TODO: Fix this dirty old mir hack!
+        if runOldMir:
+            generateOldMirCommands(expID, peers, clients)
+        elif deplType in {"cloud", "remote"}:
+            generateCommands(expID, peers, clients)
+        elif deplType == "local":
+            generateLocalCommands(expID, peers, clients)
+        else:
+            sys.exit("generate-master-commands.py: unknown deployment type: {0} only know 'local' and 'cloud'".format(deplType))
+
+    lastFinished = expID
 
 
 def printDeploymentSchedule():
-    if not deploymentSchedule:
-        return
-
-    print("#" * 80, file=sys.stderr)
-    print("# Deployment schedule:", file=sys.stderr)
-    print("#" * 80, file=sys.stderr)
-    for exp in deploymentSchedule:
-        print(
-            "Experiment {id}: config={config}, machine={machine}, peers={peers}, clients={clients}".format(
-                **exp
-            ),
-            file=sys.stderr,
-        )
-    print("#" * 80, file=sys.stderr)
+    for expID, n, tag, templateFile in deploymentSchedule:
+        print("{0} {1} {2} {3}".format(expID, n, tag, templateFile))
 
 
+# ============================================================
+# main
+# ============================================================
+
+# get deployment type ("local" or "cloud")
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
-    sys.exit(
-        "generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'"
-    )
+    sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
 
+# get input file name
 inFileName = sys.argv[2]
+
+# open output file
 outFile = open(sys.argv[3], "w")
 
+# Get local experiment data directories
 local_exp_data = sys.argv[4]
 local_config_dir = "config"
 
+# Initialize default values
 defaultConfig = ""
 defaultMachine = ""
 defaultBandwidth = "unlimited"
 
+# These are the default values, will be overridden by the explicitly set IDs.
 experimentIdDigits = 3
-idOffset = 0
+idOffset=0
 
+# Create "ready" file to indicate that the master server is running.
+# The deployment scripts wait until this file exists before starting slaves.
 if deplType == "local":
     writeLocalReadyFile()
 else:
@@ -416,6 +588,8 @@ else:
 
 with open(inFileName) as inFile:
     for line in inFile:
+
+        # Skip empty lines and comments.
         if line.strip() == "" or line.strip().startswith("#"):
             continue
 
@@ -432,9 +606,8 @@ with open(inFileName) as inFile:
         elif tokens[0] == "bandwidth:":
             defaultBandwidth = tokens[1]
         else:
-            sys.exit(
-                "ic-parse-experiment.py: Unsupported command: {0}".format(tokens[0])
-            )
+            sys.exit("ic-parse-experiment.py: Unsupported command: {0}".format(tokens[0]))
+
 
 output("#========================================")
 output("# Wrap up                                ")
@@ -442,8 +615,10 @@ output("#========================================")
 output("")
 output("# Wait for all slaves, even if they were not involved in experiments.")
 waitForSlaves(numSlaves.keys())
+
 stopAll()
 
 printDeploymentSchedule()
+
 outFile.close()
 
