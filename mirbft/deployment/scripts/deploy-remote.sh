@@ -147,6 +147,17 @@ log_i "Reset machine state."
 echo
 
 # =====================================================================
+# 5b) Garantir diretório de resultados no master
+# =====================================================================
+
+log_i "Ensuring raw-results directory exists on master at /users/${remote_user}/iss/current-deployment-data/raw-results ..."
+ssh $ssh_options "${remote_user}@${master_ip}" "
+  mkdir -p /users/${remote_user}/iss/current-deployment-data/raw-results
+" >/dev/null 2>&1 || log_w "Could not create raw-results dir on master (continuando)."
+
+echo
+
+# =====================================================================
 # 6) Start master (AGORA COM ARGUMENTOS CORRETOS)
 # =====================================================================
 
