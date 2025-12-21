@@ -6,8 +6,8 @@
 # Uso:
 #   start-remote-slaves.sh <exp_data_dir> <desired_count> <wanted_tag> <instance_info_file>
 #
-# - Lê o instance-info (id ctrl_ip data_ip role tag)
-# - Inicia APENAS 'desired_count' instâncias com tag = wanted_tag
+# - Lê o instance-info (id ctrl_ip data_ip role tag ...)
+# - Inicia APENAS 'desired_count' instâncias com tag = wanted_tag (0 = ilimitado)
 # - Copia scripts, binários e TLS para o remoto (atomic)
 # - Dispara start-slave.sh via nohup (não pode travar)
 #
@@ -57,6 +57,34 @@ scp_retries="${scp_retries:-10}"
 # Aqui usamos tls-data que fica em deployment/, não o da raiz do repo.
 local_tls_dir="$(cd "${this_dir}/.." && pwd)/tls-data"
 
+# master_ip pode vir do ambiente, mas se não vier vamos inferir do instance-info
+master_ip="${master_ip:-}"
+
+detect_master_ip() {
+  if [[ -n "${master_ip}" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "${instance_info_file}" ]]; then
+    err "instance_info_file ${instance_info_file} não encontrado para detectar master_ip."
+    return 1
+  fi
+
+  # Formato esperado do instance-info: id ctrl_ip data_ip role tag ...
+  # Usamos o ctrl_ip da linha cujo role == master
+  local ip
+  ip="$(grep -v '^[[:space:]]*#' "${instance_info_file}" | awk '$4 == "master" { print $2; exit }' || true)"
+
+  if [[ -z "${ip}" ]]; then
+    err "Não foi possível detectar master_ip a partir de ${instance_info_file} (role=master não encontrado)."
+    return 1
+  fi
+
+  master_ip="${ip}"
+  info "master_ip detectado automaticamente a partir do instance-info: ${master_ip}"
+  return 0
+}
+
 info "==== [start-remote-slaves] Contexto ====="
 info "  exp_data_dir       = ${exp_data_dir}"
 info "  instance_info_file = ${instance_info_file}"
@@ -69,6 +97,9 @@ info "  local_bin_dir      = ${local_bin_dir}"
 info "  ssh_options        = ${ssh_options}"
 info "  SSH_START_TIMEOUT  = ${SSH_START_TIMEOUT}"
 info ""
+
+# Garante que já sabemos o master_ip antes de sair espalhando slaves
+detect_master_ip || exit 1
 
 remote_mkdirs() {
   local ip="$1"
@@ -206,12 +237,7 @@ start_remote_slave() {
 
   copy_required_assets "${ctrl_ip}"
 
-  # master_ip vem do ambiente (definido em deploy-remote.sh)
-  local _master_ip="${master_ip:-}"
-  if [[ -z "${_master_ip}" ]]; then
-    err "Variável master_ip não definida no ambiente. Abortando start_remote_slave."
-    return 1
-  fi
+  local _master_ip="${master_ip}"
 
   local remote_cmd="
     cd '${remote_work_dir}'
@@ -241,7 +267,7 @@ total=0
 matched=0
 started=0
 
-# Leitura do instance-info: id ctrl_ip data_ip role tag
+# Leitura do instance-info: id ctrl_ip data_ip role tag ...
 while read -r instance_id ctrl_ip data_ip role tag rest; do
   # ignora linhas vazias ou comentários
   [[ -z "${instance_id:-}" ]] && continue
