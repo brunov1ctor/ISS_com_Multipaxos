@@ -46,8 +46,25 @@ local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
 remote_user="${remote_user:-${USER}}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
-ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
+
+# ---------------------------------------------------------------------
+# Compatibilidade de variável de chave SSH
+# ---------------------------------------------------------------------
+# Alguns ambientes antigos podem passar 'remote_priv_key_file'.
+# Normalizamos para 'remote_private_key_file' e garantimos que exista
+# pelo menos como string vazia, para não quebrar com 'set -u'.
+
+if [[ -n "${remote_priv_key_file:-}" && -z "${remote_private_key_file:-}" ]]; then
+  remote_private_key_file="$remote_priv_key_file"
+fi
+
+: "${remote_private_key_file:=}"
+
+log_i "SSH config:"
+log_i "  remote_private_key_file = ${remote_private_key_file:-<none>}"
+log_i "  ssh_options             = ${ssh_options:-<none>}"
 
 # =====================================================================
 # 2) Descobrir IP do master e copiar instance-info para o diretório do experimento
@@ -66,7 +83,7 @@ log_i "Using instance info file: $instance_info_file"
 log_i "Master IP address      : $master_ip"
 
 # =====================================================================
-# 3) Garantir master-commands-template.cmd
+# 3) Garantir que existe um master-commands-template.cmd
 # =====================================================================
 
 template_path="$exp_data_dir/$local_master_command_template_file"
@@ -114,35 +131,21 @@ log_i "Master command file pronto: $exp_data_dir/$local_master_command_file"
 # 5) Reset remoto: matar processos antigos + limpar estado
 # =====================================================================
 
-log_i "Killing everything that is alive and pruning state on the remote machines (including SSH) and removing potential bandwidth limit."
+log_i "Resetando estado das máquinas remotas (kill + prune + cleanup)..."
 
-# Mata analyze-continuously (se estiver rodando)
-for ip in $(awk '{print $2}' "$instance_info_file"); do
-  ssh $ssh_options "${remote_user}@${ip}" \
-    "kill -9 \$(ps -ef | grep 'analyze-continuously' | grep -v \$\$ | awk '{print \$2}')" \
-    >/dev/null 2>&1 || log_w "$ip: could not kill analyze-continuously (continuando)."
-  sleep 0.1
-done
+ssh $ssh_options "${remote_user}@${master_ip}" "
+  set -e
+  echo '[MASTER RESET] Killing old processes and cleaning state...'
+  if [ -d /users/${remote_user}/iss ]; then
+    pkill -u ${remote_user} discoverymaster || true
+    pkill -u ${remote_user} discoveryslave || true
+    pkill -u ${remote_user} orderingpeer || true
+    pkill -u ${remote_user} orderingclient || true
+    rm -rf /users/${remote_user}/iss/current-deployment-data || true
+  fi
+  mkdir -p /users/${remote_user}/iss/current-deployment-data
+" </dev/null
 
-log_i "Killed continuous analysis scripts."
-
-# Limpa estado, mata binários velhos, reseta status
-for ip in $(awk '{print $2}' "$instance_info_file"); do
-  remote_delete_files="$remote_work_dir"
-  remote_status_file="$remote_work_dir/status"
-
-  ssh $ssh_options "${remote_user}@${ip}" "
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
-    killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
-    rm -rf $remote_delete_files
-    echo RUNNING > $remote_status_file
-    kill -9 \$(ps -ef | grep 'sshd: ${remote_user}@notty' | awk '{print \$2}') 2>/dev/null || true
-  " >/dev/null 2>&1 || log_w "$ip: reset failed (continuando)."
-  sleep 0.1
-done
-wait
-
-echo
 log_i "Reset machine state."
 echo
 
@@ -158,68 +161,147 @@ ssh $ssh_options "${remote_user}@${master_ip}" "
 echo
 
 # =====================================================================
-# 6) Start master (AGORA COM ARGUMENTOS CORRETOS)
+# 6) Copiar arquivos de configuração e comandos para o master
 # =====================================================================
 
-log_i "Starting master on $master_ip..."
+log_i "Copiando arquivos de config e comandos para o master..."
 
-# Passamos explicitamente os parâmetros esperados por start-master.sh
-#   $1 = remote_user
-#   $2 = master_ip
-#   $3 = remote_work_dir
-#   $4 = remote_bin_dir
-#   $5 = exp_data_dir
-#   $6 = caminho local do master-commands.cmd
-scripts/start-master.sh \
-  "$remote_user" \
-  "$master_ip" \
-  "$remote_work_dir" \
-  "$remote_bin_dir" \
-  "$exp_data_dir" \
-  "$exp_data_dir/$local_master_command_file" &
+scp $ssh_options "$exp_data_dir/$local_master_command_file" \
+  "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/master-commands.cmd"
 
-log_i "start-master.sh disparado em background (remote_user=$remote_user, master_ip=$master_ip)."
+scp $ssh_options "$exp_data_dir/$instance_info_file_name" \
+  "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/$instance_info_file_name"
 
-# =====================================================================
-# 7) Start slaves (peers + 1client)
-# =====================================================================
+scp $ssh_options "$exp_data_dir/deployment.dpl" \
+  "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/deployment.dpl"
 
-log_i "Starting peer slaves (tag=peers)..."
-# desired_count=0 => inicia todos os nós com a tag especificada
-scripts/start-remote-slaves.sh "$exp_data_dir" 0 peers "$instance_info_file"
-
-log_i "Starting client slaves (tag=1client)..."
-scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
-
-log_i "All slaves started."
-
-# =====================================================================
-# 8) Fetch de resultados em background
-# =====================================================================
-
-log_i "Starting result fetching in the background..."
-scripts/fetch-results.sh "$master_ip" "$exp_data_dir" \
-  > "$exp_data_dir/$local_result_fetching_log" 2>&1 &
-
-fetch_pid=$!
-
-log_i "Waiting for deployment process and result fetching to finish."
-log_i "For progress on experiment result fetching, see:"
-log_i "  $exp_data_dir/$local_result_fetching_log"
+log_i "Arquivos copiados para o master."
 echo
 
-wait "$fetch_pid" || log_w "fetch-results.sh terminou com código $? (veja o log acima)."
-
 # =====================================================================
-# 9) Cancelar instâncias (se configurado)
+# 7) Copiar deployment-data (config, tls-data, etc.) para o master
 # =====================================================================
 
-if $cancel_instances; then
-  log_i "Canceling cloud machines as requested..."
-  scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"
-else
-  echo -e "Do not forget to cancel the used virtual servers using cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name \n"
+log_i "Copiando deployment-data do experimento para o master..."
+
+ssh $ssh_options "${remote_user}@${master_ip}" "
+  mkdir -p /users/${remote_user}/iss/current-deployment-data/experiment-config
+  mkdir -p /users/${remote_user}/iss/current-deployment-data/tls-data
+" </dev/null
+
+scp $ssh_options "$exp_data_dir"/experiment-config/* \
+  "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/experiment-config/"
+
+if [ -d "$deployment_data_root/tls-data" ]; then
+  scp $ssh_options "$deployment_data_root"/tls-data/* \
+    "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/tls-data/" || true
 fi
 
-log_i "deploy-remote.sh finished."
+log_i "Deployment-data enviado ao master."
+echo
+
+# =====================================================================
+# 8) Copiar scripts necessários para o master
+# =====================================================================
+
+log_i "Copiando scripts principais para o master..."
+
+scp $ssh_options scripts/start-remote-slaves.sh \
+  "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/start-remote-slaves.sh"
+
+scp $ssh_options scripts/start-slave.sh \
+  "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/start-slave.sh"
+
+scp $ssh_options scripts/stubborn-scp.sh \
+  "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/stubborn-scp.sh"
+
+scp $ssh_options scripts/fetch-results.sh \
+  "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/fetch-results.sh"
+
+log_i "Scripts copiados."
+echo
+
+# =====================================================================
+# 9) Copiar binários locais para o master (para redistribuição aos slaves)
+# =====================================================================
+
+log_i "Copiando binários locais para o master (para redistribuição)..."
+
+# Descobrimos o diretório de binários local exatamente como em ensure_local_binaries
+local_bin_dir=""
+if [[ -n "${GOBIN:-}" ]]; then
+  local_bin_dir="$GOBIN"
+else
+  local_bin_dir="$(go env GOBIN || true)"
+  if [[ -z "$local_bin_dir" ]]; then
+    local_bin_dir="$(go env GOPATH 2>/dev/null)/bin"
+    if [[ -z "$local_bin_dir" ]]; then
+      local_bin_dir="${HOME}/go/bin"
+    fi
+  fi
+fi
+
+log_i "Diretório de binários local: $local_bin_dir"
+
+for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
+  local_path="${local_bin_dir}/${bin}"
+  if [[ ! -x "$local_path" ]]; then
+    log_w "Binário não encontrado localmente (será ignorado): $local_path"
+    continue
+  fi
+  log_i "Enviando binário $bin para o master..."
+  scp $ssh_options "$local_path" \
+    "${remote_user}@${master_ip}:/users/${remote_user}/iss/current-deployment-data/${bin}" || \
+    log_w "Falha ao enviar binário $bin para o master (continuando)."
+done
+
+echo
+
+# =====================================================================
+# 10) Executar master-commands no master
+# =====================================================================
+
+log_i "Executando master-commands.cmd no master..."
+
+ssh $ssh_options "${remote_user}@${master_ip}" "
+  set -e
+  cd /users/${remote_user}/iss/current-deployment-data
+  chmod +x start-remote-slaves.sh start-slave.sh stubborn-scp.sh fetch-results.sh || true
+  # Descobre caminho de ssh privado (se existir) a partir de remote_private_key_file
+  ssh_key_arg=''
+  if [ -n \"$remote_private_key_file\" ] && [ -f \"$remote_private_key_file\" ]; then
+    ssh_key_arg=\"-i $remote_private_key_file\"
+  fi
+  echo \"[MASTER] Iniciando workers remotos...\"
+  ./start-remote-slaves.sh \"$instance_info_file_name\" > start-remote-slaves.log 2>&1
+  echo \"[MASTER] Rodando master-commands via mir-deploy-master...\"
+  mir-deploy-master master-commands.cmd > master-commands.log 2>&1 || true
+" </dev/null
+
+log_i "master-commands.cmd executado (ou tentou)."
+echo
+
+# =====================================================================
+# 11) Buscar resultados do experimento
+# =====================================================================
+
+log_i "Buscando resultados do experimento a partir do master..."
+
+ssh $ssh_options "${remote_user}@${master_ip}" "
+  set -e
+  cd /users/${remote_user}/iss/current-deployment-data
+  ./fetch-results.sh \"$instance_info_file_name\" > \"$local_result_fetching_log\" 2>&1 || true
+" </dev/null
+
+log_i "fetch-results.sh executado no master (ver $local_result_fetching_log no diretório do experimento)."
+echo
+
+# =====================================================================
+# 12) Mensagem final
+# =====================================================================
+
+log_i "deploy-remote.sh finalizado. Verifique:"
+log_i "  - $exp_data_dir/$local_result_fetching_log"
+log_i "  - $exp_data_dir for experiment-output e raw-results"
+log_i "  - _debug/master-diag.txt, se existir"
 
