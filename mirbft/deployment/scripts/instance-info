@@ -3,6 +3,6 @@ node-1  172.20.3.2  10.10.1.2  slave   peers
 node-2  172.20.6.3  10.10.1.3  slave   peers
 node-3  172.20.5.2  10.10.1.4  slave   peers
 node-4  172.20.5.8  10.10.1.5  slave   peers
-node-5  172.20.6.4  10.10.1.6  slave   
+node-5  172.20.6.4  10.10.1.6    
 node-6  172.20.4.3  10.10.1.7  slave   1client
 
