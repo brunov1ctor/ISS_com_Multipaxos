@@ -1,31 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MAX_RETRIES="$1"
-SRC="$2"
-DST="$3"
+SRC="$1"
+DST="$2"
+MAX_RETRIES="${3:-10}"
+SCP_OPTS=(-q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+
+echo "[scp] Enviando '${SRC}' -> '${DST}' ..."
 
 attempt=1
-status=1
-
-# Log enxuto: só mostra retries (se houver) e erro final.
-while [[ $attempt -le $MAX_RETRIES ]]; do
-  if scp -q "$SRC" "$DST"; then
-    # Sucesso silencioso por arquivo.
+while true; do
+  if scp "${SCP_OPTS[@]}" "$SRC" "$DST"; then
+    echo "[scp] OK (tentativa $attempt)."
     exit 0
-  else
-    status=$?
-
-    # Só mostra log SE não for a primeira tentativa
-    if [[ $attempt -gt 1 ]]; then
-      echo "[scp] Retry ${attempt}/${MAX_RETRIES} (status ${status})"
-    fi
   fi
 
-  attempt=$((attempt+1))
-  sleep 0.3
-done
+  if (( attempt >= MAX_RETRIES )); then
+    echo "[scp] Falhou após $attempt tentativas."
+    exit 1
+  fi
 
-echo "[scp] FALHA: não foi possível enviar '${SRC}' após ${MAX_RETRIES} tentativas." >&2
-exit $status
+  attempt=$((attempt + 1))
+  sleep 1
+  echo "[scp] Tentativa $attempt..."
+done
 
