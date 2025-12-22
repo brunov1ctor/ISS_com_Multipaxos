@@ -15,6 +15,34 @@ log_e() { echo "[ERRO  ][$(ts)] $*" >&2; }
 # =====================================================================
 # 1) Variáveis esperadas do ambiente (de deploy.sh + global-vars.sh)
 # =====================================================================
+#
+# Este script pode ser chamado de duas formas:
+#   (a) via 'source' a partir de deploy.sh, que exporta as variáveis abaixo; ou
+#   (b) diretamente como binário/shell, passando parâmetros:
+#       deploy-remote.sh <exp_data_dir> <instance_info_file> [deployment_data_root] [dpl_filename] [csv_filename]
+#
+# Para tornar o script mais robusto, se as variáveis de ambiente vierem vazias
+# mas existirem argumentos posicionais, usamos esses argumentos como fallback.
+
+if [[ -z "${exp_data_dir:-}" && "$#" -ge 1 ]]; then
+  exp_data_dir="$1"
+fi
+
+if [[ -z "${instance_info_file:-}" && "$#" -ge 2 ]]; then
+  instance_info_file="$2"
+fi
+
+if [[ -z "${deployment_data_root:-}" && "$#" -ge 3 ]]; then
+  deployment_data_root="$3"
+fi
+
+if [[ -z "${dpl_filename:-}" && "$#" -ge 4 ]]; then
+  dpl_filename="$4"
+fi
+
+if [[ -z "${csv_filename:-}" && "$#" -ge 5 ]]; then
+  csv_filename="$5"
+fi
 
 if [[ -z "${exp_data_dir:-}" || -z "${instance_info_file:-}" ]]; then
   log_e "exp_data_dir ou instance_info_file vazio."
@@ -32,7 +60,7 @@ local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
 remote_user="${remote_user:-${USER}}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
-ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 
 # =====================================================================
@@ -51,7 +79,7 @@ cp "$instance_info_file" "$exp_data_dir/$instance_info_file_name"
 log_i "Master: $master_ip (instance-info: $instance_info_file)"
 
 # =====================================================================
-# 3) Garantir master-commands-template.cmd
+# 3) Garantir master-commands-template.cmd e deployment.dpl
 # =====================================================================
 
 template_path="$exp_data_dir/$local_master_command_template_file"
@@ -59,29 +87,20 @@ deployment_file="$exp_data_dir/deployment.dpl"
 
 if [ ! -f "$template_path" ]; then
   log_i "Gerando master-commands-template.cmd..."
-
-  if [ ! -f "$deployment_file" ]; then
-    log_e "Deployment file não encontrado: $deployment_file"
-    exit 1
-  fi
-
-  # Uso correto: generate-master-commands.py <deplType> <deployment.dpl> <outFile> <local_exp_data>
-  if ! python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir"; then
+  if ! "$DEPLOY_DIR/scripts/generate-master-commands.py" "$deployment_file" "$template_path" "$exp_data_dir"; then
     log_e "Falha ao gerar master-commands-template.cmd."
     exit 1
   fi
-else
-  log_i "master-commands-template.cmd já existe."
+fi
+
+if [ ! -f "$deployment_file" ]; then
+  log_e "Arquivo deployment.dpl não encontrado em $exp_data_dir."
+  exit 1
 fi
 
 # =====================================================================
-# 4) Gerar master-commands.cmd final com envsubst
+# 4) Gerar master-commands.cmd
 # =====================================================================
-
-export ssh_key_file="$remote_private_key_file"
-export own_public_ip="$master_ip"
-export master_port
-export status_file="$remote_status_file"
 
 log_i "Gerando master-commands.cmd..."
 envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
@@ -108,19 +127,17 @@ done
 
 # Limpa estado, mata binários velhos, reseta status
 for ip in $(awk '{print $2}' "$instance_info_file"); do
-  remote_delete_files="$remote_work_dir"
-  remote_status_file="$remote_work_dir/status"
-
-  ssh $ssh_options "${remote_user}@${ip}" "
-    tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
-    killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
-    rm -rf $remote_delete_files
-    echo RUNNING > $remote_status_file
-    kill -9 \$(ps -ef | grep 'sshd: ${remote_user}@notty' | awk '{print \$2}') 2>/dev/null || true
-  " >/dev/null 2>&1 || log_w "$ip: falha no reset remoto."
-  sleep 0.1
+  ssh $ssh_options "${remote_user}@${ip}" "\
+    rm -rf '${remote_work_dir}/current-deployment-data' \
+           '${remote_work_dir}/experiment-config' \
+           '${remote_work_dir}/status' \
+           '${remote_work_dir}/master-ready'; \
+    pkill -9 -f '${remote_bin_dir}/discoverymaster' 2>/dev/null || true; \
+    pkill -9 -f '${remote_bin_dir}/discoveryslave' 2>/dev/null || true; \
+    pkill -9 -f '${remote_bin_dir}/orderingpeer' 2>/dev/null || true; \
+    pkill -9 -f '${remote_bin_dir}/orderingclient' 2>/dev/null || true; \
+  " </dev/null || log_w "$ip: não foi possível limpar estado remoto."
 done
-wait
 
 log_i "Reset remoto concluído."
 
@@ -140,14 +157,11 @@ ssh $ssh_options "${remote_user}@${master_ip}" "
 log_i "Iniciando master em $master_ip..."
 
 scripts/start-master.sh \
-  "$remote_user" \
   "$master_ip" \
+  "$exp_data_dir/$instance_info_file_name" \
+  "$exp_data_dir/$local_master_command_file" \
   "$remote_work_dir" \
-  "$remote_bin_dir" \
-  "$exp_data_dir" \
-  "$exp_data_dir/$local_master_command_file" &
-
-log_i "start-master.sh em background."
+  "$remote_bin_dir"
 
 # =====================================================================
 # 7) Start slaves (peers + 1client)
@@ -162,18 +176,13 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 log_i "Slaves iniciados."
 
 # =====================================================================
-# 8) Fetch de resultados em background
+# 8) Coleta de resultados
 # =====================================================================
 
 log_i "Iniciando coleta de resultados..."
-scripts/fetch-results.sh "$master_ip" "$exp_data_dir" \
-  > "$exp_data_dir/$local_result_fetching_log" 2>&1 &
+scripts/fetch-results.sh "$master_ip" "$exp_data_dir" "$local_result_fetching_log"
 
-fetch_pid=$!
-
-log_i "Log de coleta: $exp_data_dir/$local_result_fetching_log"
-
-wait "$fetch_pid" || log_w "fetch-results.sh terminou com código $?."
+log_i "Coleta de resultados concluída."
 
 # =====================================================================
 # 9) Cancelar instâncias (se configurado)
