@@ -164,29 +164,44 @@ copy_tls_assets() {
     mkdir -p '${remote_exp_dir}/tls-data' '${remote_work_dir}/tls-data' 2>/dev/null || true
   " </dev/null || true
 
+  local count=0
   for f in "${local_tls_dir}"/*; do
     [[ -f "${f}" ]] || continue
     local base
     base="$(basename "${f}")"
-    info "[copy] ${ip}: TLS ${base} -> ${remote_exp_dir}/tls-data/"
+
+    # cópia silenciosa por arquivo (stubborn-scp só fala em retry/erro)
     bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
       "${f}" \
       "${remote_user}@${ip}:${remote_exp_dir}/tls-data/${base}"
+
+    ((count++)) || true
   done
+
+  info "[copy] ${ip}: TLS sincronizado (${count} arquivos)."
 }
+
 
 remote_check_assets() {
   local ip="$1"
   ssh ${ssh_options} "${remote_user}@${ip}" "\
-    echo '[remote-check] scripts:'; ls -la '${remote_work_dir}/scripts' | head -n 60; \
-    echo '[remote-check] bins:'; ls -la '${remote_bin_dir}' | head -n 60; \
-    echo '[remote-check] tls-data:'; ls -la '${remote_exp_dir}/tls-data' 2>/dev/null || echo '(sem tls-data no exp_dir)'; \
+    echo -n '[remote-check] scripts: '; \
+      ls -1 '${remote_work_dir}/scripts' 2>/dev/null | wc -l; \
+    echo -n '[remote-check] bins: '; \
+      ls -1 '${remote_bin_dir}' 2>/dev/null | wc -l; \
+    if [ -d '${remote_exp_dir}/tls-data' ]; then \
+      echo -n '[remote-check] tls-data: '; \
+        ls -1 '${remote_exp_dir}/tls-data' 2>/dev/null | wc -l; \
+    else \
+      echo '[remote-check] tls-data: (sem tls-data no exp_dir)'; \
+    fi; \
     test -x '${remote_bin_dir}/discoverymaster' && \
     test -x '${remote_bin_dir}/discoveryslave' && \
     test -x '${remote_bin_dir}/orderingpeer' && \
     test -x '${remote_bin_dir}/orderingclient'
   " </dev/null || true
 }
+
 
 copy_required_assets() {
   local ip="$1"
