@@ -125,19 +125,25 @@ fi
 # 3) Se baixamos tars, descompactar para exp_dir/experiment-output
 # --------------------------------------------------------------------
 local_tars=("${exp_dir}/_fetched_tars"/experiment-output-*.tar.gz)
+
 if [[ ${#local_tars[@]} -gt 0 ]]; then
   info "Descompactando ${#local_tars[@]} tar(s) em ${exp_dir}/experiment-output/ ..."
   for t in "${local_tars[@]}"; do
     bn="$(basename "$t")"
     exp="$(echo "$bn" | sed -n 's/^experiment-output-\([0-9][0-9][0-9][0-9]\)-.*$/\1/p')"
+
     if [[ -n "${exp}" ]]; then
+      info "[untar] ${bn} -> ${exp_dir}/experiment-output/${exp}"
       mkdir -p "${exp_dir}/experiment-output/${exp}"
       tar -xzf "$t" -C "${exp_dir}/experiment-output/${exp}"
     else
       warn "Não consegui inferir expID de '${bn}'. Extraindo no root de experiment-output."
+      info "[untar] ${bn} -> ${exp_dir}/experiment-output (sem expID)"
       tar -xzf "$t" -C "${exp_dir}/experiment-output"
     fi
   done
+else
+  info "Nenhum .tar.gz obtido para extrair (talvez os logs tenham vindo só via rsync de experiment-output/)."
 fi
 
 # --------------------------------------------------------------------
