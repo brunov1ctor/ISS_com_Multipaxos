@@ -107,7 +107,8 @@ fi
 
 if [ ! -f "$template_path" ]; then
   log_i "Gerando master-commands-template.cmd..."
-  if ! "$PYTHON" "$DEPLOY_DIR/scripts/generate-master-commands.py" "$deployment_file" "$template_path" "$exp_data_dir"; then
+  # ✅ CORREÇÃO: passa o tipo de deploy como primeiro argumento ("remote")
+  if ! "$PYTHON" "$DEPLOY_DIR/scripts/generate-master-commands.py" remote "$deployment_file" "$template_path" "$exp_data_dir"; then
     log_e "Falha ao gerar master-commands-template.cmd."
     exit 1
   fi
