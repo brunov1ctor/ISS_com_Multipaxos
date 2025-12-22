@@ -8,12 +8,10 @@ DST="$3"
 attempt=1
 status=1
 
-echo "[scp] Enviando '${SRC}' -> '${DST}' ..."
-
+# Log enxuto: só mostra retries (se houver) e erro final.
 while [[ $attempt -le $MAX_RETRIES ]]; do
-
   if scp -q "$SRC" "$DST"; then
-    echo "[scp] OK: '${SRC}' enviado."
+    # Sucesso silencioso por arquivo.
     exit 0
   else
     status=$?
