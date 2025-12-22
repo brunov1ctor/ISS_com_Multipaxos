@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# deploy-remote.sh (versão com DEPLOY_DIR robusto)
+# deploy-remote.sh (versão com DEPLOY_DIR robusto + chamada python3)
 
 set -e
 
@@ -11,6 +11,9 @@ log_e() { echo "[ERRO  ][$(ts)] $*" >&2; }
 
 # Flag de cancelamento de instâncias (padrão: false)
 : "${cancel_instances:=false}"
+
+# Binário de Python a usar para scripts auxiliares
+: "${PYTHON:=python3}"
 
 # =====================================================================
 # 0) Descobrir DEPLOY_DIR de forma robusta
@@ -104,7 +107,7 @@ fi
 
 if [ ! -f "$template_path" ]; then
   log_i "Gerando master-commands-template.cmd..."
-  if ! "$DEPLOY_DIR/scripts/generate-master-commands.py" "$deployment_file" "$template_path" "$exp_data_dir"; then
+  if ! "$PYTHON" "$DEPLOY_DIR/scripts/generate-master-commands.py" "$deployment_file" "$template_path" "$exp_data_dir"; then
     log_e "Falha ao gerar master-commands-template.cmd."
     exit 1
   fi
