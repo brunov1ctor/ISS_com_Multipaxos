@@ -31,10 +31,8 @@ instance_info_file="$4"
 
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Usuário remoto (cai para REMOTE_USER ou USER se nada for definido)
 remote_user="${remote_user:-${REMOTE_USER:-${USER}}}"
 
-# Opções SSH padrão (coerente com deploy-remote.sh)
 if [[ -z "${ssh_options:-}" ]]; then
   ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 \
@@ -45,19 +43,16 @@ fi
 
 SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
 
-# Diretórios remotos padrão (podem ser sobrescritos via ambiente/global-vars)
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
-local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"      # onde discovery*/ordering* estão instalados
+local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
 
 scp_retries="${scp_retries:-10}"
 
-# TLS local (seguindo deploy-local.sh: cp -r tls-data $exp_data_dir)
 # Aqui usamos tls-data que fica em deployment/, não o da raiz do repo.
 local_tls_dir="$(cd "${this_dir}/.." && pwd)/tls-data"
 
-# master_ip pode vir do ambiente, mas se não vier vamos inferir do instance-info
 master_ip="${master_ip:-}"
 
 detect_master_ip() {
@@ -70,8 +65,6 @@ detect_master_ip() {
     return 1
   fi
 
-  # Formato esperado do instance-info: id ctrl_ip data_ip role tag ...
-  # Usamos o ctrl_ip da linha cujo role == master
   local ip
   ip="$(grep -v '^[[:space:]]*#' "${instance_info_file}" | awk '$4 == "master" { print $2; exit }' || true)"
 
@@ -98,7 +91,6 @@ info "  ssh_options        = ${ssh_options}"
 info "  SSH_START_TIMEOUT  = ${SSH_START_TIMEOUT}"
 info ""
 
-# Garante que já sabemos o master_ip antes de sair espalhando slaves
 detect_master_ip || exit 1
 
 remote_mkdirs() {
@@ -135,8 +127,9 @@ copy_bin_atomic() {
   local remote_tmp="${remote_bin_dir}/.${bin}.tmp"
 
   if [[ ! -x "${local_path}" ]]; then
-    warn "[copy] binário NÃO encontrado localmente: ${local_path}"
-    return 0
+    err "[copy] binário obrigatório NÃO encontrado localmente: ${local_path}"
+    err "[copy] Rode: go install ./cmd/discoverymaster ./cmd/discoveryslave ./cmd/orderingpeer ./cmd/orderingclient (ou o script de build do projeto)."
+    return 1
   fi
 
   ssh ${ssh_options} "${remote_user}@${ip}" "rm -f '${remote_tmp}'" </dev/null || true
@@ -159,7 +152,6 @@ copy_tls_assets() {
     return 0
   fi
 
-  # Garante destino no exp_dir (PWD dos binários) e no work_dir (para scripts que usem)
   ssh ${ssh_options} "${remote_user}@${ip}" "\
     mkdir -p '${remote_exp_dir}/tls-data' '${remote_work_dir}/tls-data' 2>/dev/null || true
   " </dev/null || true
@@ -170,7 +162,6 @@ copy_tls_assets() {
     local base
     base="$(basename "${f}")"
 
-    # cópia silenciosa por arquivo (stubborn-scp só fala em retry/erro)
     bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
       "${f}" \
       "${remote_user}@${ip}:${remote_exp_dir}/tls-data/${base}"
@@ -180,7 +171,6 @@ copy_tls_assets() {
 
   info "[copy] ${ip}: TLS sincronizado (${count} arquivos)."
 }
-
 
 remote_check_assets() {
   local ip="$1"
@@ -198,17 +188,18 @@ remote_check_assets() {
     test -x '${remote_bin_dir}/discoverymaster' && \
     test -x '${remote_bin_dir}/discoveryslave' && \
     test -x '${remote_bin_dir}/orderingpeer' && \
-    test -x '${remote_bin_dir}/orderingclient'
-  " </dev/null || true
+    test -x '${remote_bin_dir}/orderingclient' && \
+    test -f '${remote_exp_dir}/tls-data/ca.pem' && \
+    test -f '${remote_exp_dir}/tls-data/auth.pem' && \
+    test -f '${remote_exp_dir}/tls-data/auth.key'
+  " </dev/null
 }
-
 
 copy_required_assets() {
   local ip="$1"
 
   remote_mkdirs "${ip}"
 
-  # Scripts auxiliares
   bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
     "${this_dir}/start-slave.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/start-slave.sh"
@@ -227,17 +218,13 @@ copy_required_assets() {
     2>/dev/null || true
   " </dev/null || true
 
-  # Limpa binários antigos e copia novos
   remote_kill_bins "${ip}"
   copy_bin_atomic "${ip}" discoverymaster
   copy_bin_atomic "${ip}" discoveryslave
   copy_bin_atomic "${ip}" orderingpeer
   copy_bin_atomic "${ip}" orderingclient
 
-  # TLS (novo)
   copy_tls_assets "${ip}"
-
-  # Sanity check remoto
   remote_check_assets "${ip}"
 }
 
@@ -257,14 +244,13 @@ start_remote_slave() {
   local remote_cmd="
     cd '${remote_work_dir}'
     echo '[start-remote-slaves] Disparando slave ${instance_id} (tag=${tag}) em ${ctrl_ip}...' >> '${remote_work_dir}/logs/start-remote-slaves-${instance_id}.log'
-    /usr/bin/nohup '${remote_work_dir}/scripts/start-slave.sh' '${tag}' '${_master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \\
+    /usr/bin/nohup '${remote_work_dir}/scripts/start-slave.sh' '${tag}' '${_master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \
       >> '${remote_work_dir}/logs/start-slave-${instance_id}.log' 2>&1 < /dev/null &
     echo STARTED
   "
 
   info "SSH para ${ctrl_ip} (disparar slave ${instance_id})..."
 
-  # IMPORTANT: nunca trava aqui. Se timeout acontecer, mas tiver STARTED, consideramos OK.
   local out=""
   out="$( (timeout "${SSH_START_TIMEOUT}" ssh ${ssh_options} "${remote_user}@${ctrl_ip}" "${remote_cmd}" </dev/null) 2>&1 || true )"
 
@@ -282,22 +268,18 @@ total=0
 matched=0
 started=0
 
-# Leitura do instance-info: id ctrl_ip data_ip role tag ...
 while read -r instance_id ctrl_ip data_ip role tag rest; do
-  # ignora linhas vazias ou comentários
   [[ -z "${instance_id:-}" ]] && continue
   [[ "${instance_id}" =~ ^# ]] && continue
 
   ((total++)) || true
 
-  # filtra por tag desejada
   if [[ "${tag}" != "${wanted_tag}" ]]; then
     continue
   fi
 
   ((matched++)) || true
 
-  # Respeita desired_count (0 = ilimitado)
   if [[ "${desired_count}" -gt 0 ]] && (( started >= desired_count )); then
     break
   fi

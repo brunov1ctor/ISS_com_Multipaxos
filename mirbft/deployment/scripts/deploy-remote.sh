@@ -66,6 +66,47 @@ log_i "instance-info: $instance_info_file"
 log_i "Master IP: $master_ip"
 
 # =====================================================================
+# 2b) [REMOTE] Garantir TLS com SAN dos IPs reais do cluster (10.10.1.x)
+# =====================================================================
+
+log_i "Garantindo certificado TLS (auth.pem) com SAN dos IPs do cluster..."
+
+tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
+
+if [[ ! -d "${tls_dir}" ]]; then
+  log_e "Diretório tls-data não encontrado: ${tls_dir}"
+  exit 1
+fi
+
+# Extrai IPs internos (coluna 3 do instance-info). Ex.: 10.10.1.x
+mapfile -t data_ips < <(awk '{print $3}' "$instance_info_file" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
+
+if [[ "${#data_ips[@]}" -eq 0 ]]; then
+  log_e "Não foi possível extrair IPs (coluna 3) do instance-info: $instance_info_file"
+  exit 1
+fi
+
+(
+  cd "${tls_dir}"
+  if [[ ! -x "./generate-auth.sh" ]]; then
+    log_e "generate-auth.sh não encontrado/executável em ${tls_dir}"
+    exit 1
+  fi
+
+  # Gera auth.pem/auth.key com SAN contendo os IPs do cluster.
+  ./generate-auth.sh "${data_ips[@]}"
+
+  # Fail-fast: garante que pelo menos um IP do cluster entrou no SAN.
+  if ! openssl x509 -in auth.pem -noout -ext subjectAltName | grep -q "${data_ips[0]}"; then
+    log_e "TLS gerado, mas SAN não contém IPs esperados. subjectAltName:"
+    openssl x509 -in auth.pem -noout -ext subjectAltName || true
+    exit 1
+  fi
+)
+
+log_i "TLS OK: SAN inclui IPs do cluster."
+
+# =====================================================================
 # 3) Garantir master-commands-template.cmd
 # =====================================================================
 
