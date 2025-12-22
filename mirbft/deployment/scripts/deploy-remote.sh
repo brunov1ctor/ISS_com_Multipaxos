@@ -1,34 +1,18 @@
 #!/usr/bin/env bash
+# deploy-remote.sh (reprodutível + fail-fast)
 
-# deploy-remote.sh (versão com logs enxutos)
-
-set -e
+set -euo pipefail
 
 ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
 log_i() { echo "[INFO  ][$(ts)] $*"; }
 log_w() { echo "[WARN  ][$(ts)] $*" >&2; }
 log_e() { echo "[ERRO  ][$(ts)] $*" >&2; }
 
-# Flag de cancelamento de instâncias (padrão: false)
 : "${cancel_instances:=false}"
 
 # =====================================================================
 # 1) Variáveis esperadas do ambiente (de deploy.sh + global-vars.sh)
 # =====================================================================
-# Esperados:
-#   - exp_data_dir
-#   - instance_info_file
-#   - deployment_data_root
-#   - local_master_command_template_file
-#   - local_master_command_file
-#   - remote_status_file
-#   - remote_private_key_file
-#   - master_port
-#   - local_result_fetching_log
-#   - remote_user
-#   - ssh_options
-#   - remote_work_dir
-#   - remote_bin_dir
 
 if [[ -z "${exp_data_dir:-}" || -z "${instance_info_file:-}" ]]; then
   log_e "exp_data_dir ou instance_info_file não definidos."
@@ -38,7 +22,6 @@ fi
 
 instance_info_file_name="$(basename "$instance_info_file")"
 
-# defaults “seguros” se não vierem setados de fora
 local_master_command_template_file="${local_master_command_template_file:-master-commands-template.cmd}"
 local_master_command_file="${local_master_command_file:-master-commands.cmd}"
 local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
@@ -46,7 +29,9 @@ local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
 remote_user="${remote_user:-${USER}}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
-ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+
+ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 
 # =====================================================================
@@ -54,8 +39,7 @@ remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 # =====================================================================
 
 master_ip=$(awk '$4 == "master" {print $2}' "$instance_info_file" | head -n1)
-
-if [ -z "$master_ip" ]; then
+if [[ -z "$master_ip" ]]; then
   log_e "Não foi possível obter o IP do master a partir de: $instance_info_file"
   exit 1
 fi
@@ -72,15 +56,12 @@ log_i "Master IP: $master_ip"
 log_i "Garantindo certificado TLS (auth.pem) com SAN dos IPs do cluster..."
 
 tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
-
 if [[ ! -d "${tls_dir}" ]]; then
   log_e "Diretório tls-data não encontrado: ${tls_dir}"
   exit 1
 fi
 
-# Extrai IPs internos (coluna 3 do instance-info). Ex.: 10.10.1.x
 mapfile -t data_ips < <(awk '{print $3}' "$instance_info_file" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
-
 if [[ "${#data_ips[@]}" -eq 0 ]]; then
   log_e "Não foi possível extrair IPs (coluna 3) do instance-info: $instance_info_file"
   exit 1
@@ -88,20 +69,13 @@ fi
 
 (
   cd "${tls_dir}"
-  if [[ ! -x "./generate-auth.sh" ]]; then
-    log_e "generate-auth.sh não encontrado/executável em ${tls_dir}"
-    exit 1
-  fi
-
-  # Gera auth.pem/auth.key com SAN contendo os IPs do cluster.
+  [[ -x "./generate-auth.sh" ]] || { log_e "generate-auth.sh não executável em ${tls_dir}"; exit 1; }
   ./generate-auth.sh "${data_ips[@]}"
-
-  # Fail-fast: garante que pelo menos um IP do cluster entrou no SAN.
-  if ! openssl x509 -in auth.pem -noout -ext subjectAltName | grep -q "${data_ips[0]}"; then
-    log_e "TLS gerado, mas SAN não contém IPs esperados. subjectAltName:"
+  openssl x509 -in auth.pem -noout -ext subjectAltName | grep -q "${data_ips[0]}" || {
+    log_e "TLS gerado, mas SAN não contém IPs esperados:"
     openssl x509 -in auth.pem -noout -ext subjectAltName || true
     exit 1
-  fi
+  }
 )
 
 log_i "TLS OK: SAN inclui IPs do cluster."
@@ -113,19 +87,15 @@ log_i "TLS OK: SAN inclui IPs do cluster."
 template_path="$exp_data_dir/$local_master_command_template_file"
 deployment_file="$exp_data_dir/deployment.dpl"
 
-if [ ! -f "$template_path" ]; then
+if [[ ! -f "$template_path" ]]; then
   log_i "Gerando master-commands-template.cmd..."
   log_i "deployment.dpl: $deployment_file"
   log_i "template:      $template_path"
 
-  if [ ! -f "$deployment_file" ]; then
-    log_e "Deployment file não encontrado: $deployment_file"
-    exit 1
-  fi
+  [[ -f "$deployment_file" ]] || { log_e "Deployment file não encontrado: $deployment_file"; exit 1; }
 
-  # Uso correto: generate-master-commands.py <deplType> <deployment.dpl> <outFile> <local_exp_data>
   if ! python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir"; then
-    log_e "Falha ao gerar master-commands-template.cmd via generate-master-commands.py"
+    log_e "Falha ao gerar master-commands-template.cmd"
     exit 1
   fi
 else
@@ -136,7 +106,6 @@ fi
 # 4) Gerar master-commands.cmd final com envsubst
 # =====================================================================
 
-# Variáveis que o template usa
 export ssh_key_file="$remote_private_key_file"
 export own_public_ip="$master_ip"
 export master_port
@@ -144,99 +113,86 @@ export status_file="$remote_status_file"
 
 log_i "Gerando master-commands.cmd a partir do template..."
 envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
-  < "$template_path" \
-  > "$exp_data_dir/$local_master_command_file"
+  < "$template_path" > "$exp_data_dir/$local_master_command_file"
 
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 
 log_i "master-commands.cmd pronto: $exp_data_dir/$local_master_command_file"
 
 # =====================================================================
-# 5) Reset remoto: matar processos antigos + limpar estado
+# 5) Reset remoto
 # =====================================================================
 
 log_i "Limpando processos antigos e estado remoto (incluindo SSH/bandwidth)."
 
-# 5a) Mata analyze-continuously (se estiver rodando)
 for ip in $(awk '{print $2}' "$instance_info_file"); do
-  if ! ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<'EOF_KILL_ANALYZE'
+  ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<'EOF_KILL_ANALYZE' || true
 pids=$(ps -ef | grep 'analyze-continuously' | grep -v $$ | awk '{print $2}')
-if [ -n "$pids" ]; then
-  kill -9 $pids 2>/dev/null || true
-fi
+if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi
 EOF_KILL_ANALYZE
-  then
-    log_w "$ip: não foi possível encerrar analyze-continuously (ok, seguindo)."
-  fi
   sleep 0.1
 done
 
 log_i "Verificação de analyze-continuously concluída."
 
-# 5b) Limpa estado, mata binários velhos, reseta status
 for ip in $(awk '{print $2}' "$instance_info_file"); do
-  remote_delete_files="$remote_work_dir"
-  remote_status_file="$remote_work_dir/status"
-
-  # Executa reset remoto em bloco silencioso para evitar poluição de log com o comando inteiro em caso de erro
-  if ! ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET
+  ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET || true
 tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
 killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
-rm -rf $remote_delete_files
-echo RUNNING > $remote_status_file
+rm -rf ${remote_work_dir}
+echo RUNNING > ${remote_work_dir}/status
 kill -9 \$(ps -ef | grep 'sshd: ${remote_user}@notty' | awk '{print \$2}') 2>/dev/null || true
 EOF_RESET
-  then
-    log_w "$ip: Limpando processos antigos ..."
-  fi
   sleep 0.1
 done
 wait
 
-echo
 log_i "Reset remoto concluído."
-echo
+
+# Garantir raw-results (master)
+log_i "Garantindo diretório de resultados no master: ${remote_work_dir}/current-deployment-data/raw-results"
+ssh $ssh_options "${remote_user}@${master_ip}" "mkdir -p '${remote_work_dir}/current-deployment-data/raw-results'" >/dev/null 2>&1 || {
+  log_e "Não foi possível criar raw-results no master."
+  exit 1
+}
 
 # =====================================================================
-# 5b) Garantir diretório de resultados no master
+# 6) Start master (SÍNCRONO + validações)
 # =====================================================================
 
-log_i "Garantindo diretório de resultados no master: /users/${remote_user}/iss/current-deployment-data/raw-results"
-ssh $ssh_options "${remote_user}@${master_ip}" "
-  mkdir -p /users/${remote_user}/iss/current-deployment-data/raw-results
-" >/dev/null 2>&1 || log_w "Não foi possível criar raw-results no master (prosseguindo)."
-
-echo
-
-# =====================================================================
-# 6) Start master
-# =====================================================================
-
-log_i "Iniciando master em $master_ip..."
-
-# Passamos explicitamente os parâmetros esperados por start-master.sh
-#   $1 = remote_user
-#   $2 = master_ip
-#   $3 = remote_work_dir
-#   $4 = remote_bin_dir
-#   $5 = exp_data_dir
-#   $6 = caminho local do master-commands.cmd
+log_i "Iniciando master em $master_ip (síncrono, fail-fast)..."
 scripts/start-master.sh \
   "$remote_user" \
   "$master_ip" \
   "$remote_work_dir" \
   "$remote_bin_dir" \
   "$exp_data_dir" \
-  "$exp_data_dir/$local_master_command_file" &
+  "$exp_data_dir/$local_master_command_file"
 
-log_i "start-master.sh disparado (remote_user=$remote_user, master_ip=$master_ip)."
+log_i "Master iniciou. Validando TLS no master..."
+
+ssh $ssh_options "${remote_user}@${master_ip}" "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" >/dev/null 2>&1 || {
+  log_e "TLS não está presente no master em ${remote_work_dir}/tls-data."
+  ssh $ssh_options "${remote_user}@${master_ip}" "ls -la '${remote_work_dir}/tls-data' || true" || true
+  exit 1
+}
+
+log_i "TLS presente no master."
+
+log_i "Validando se discoverymaster está escutando em ${master_ip}:${master_port:-9999}..."
+DISC_PORT="${master_port:-9999}"
+ssh $ssh_options "${remote_user}@${master_ip}" "ss -lntp | grep \":${DISC_PORT} \"" >/dev/null 2>&1 || {
+  log_e "discoverymaster não está escutando na porta ${DISC_PORT} no master."
+  ssh $ssh_options "${remote_user}@${master_ip}" "tail -n 120 '${remote_work_dir}/logs/discoverymaster.log' || true" || true
+  exit 1
+}
+log_i "discoverymaster OK na porta ${DISC_PORT}."
 
 # =====================================================================
 # 7) Start slaves (peers + 1client)
 # =====================================================================
 
 log_i "Iniciando slaves com tag=peers..."
-# desired_count=0 => inicia todos os nós com a tag especificada
 scripts/start-remote-slaves.sh "$exp_data_dir" 0 peers "$instance_info_file"
 
 log_i "Iniciando slaves com tag=1client..."
@@ -245,21 +201,22 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 log_i "Todos os slaves foram iniciados."
 
 # =====================================================================
-# 8) Fetch de resultados em background
+# 8) Fetch de resultados
 # =====================================================================
 
-log_i "Iniciando coleta de resultados em background..."
-scripts/fetch-results.sh "$master_ip" "$exp_data_dir" \
-  > "$exp_data_dir/$local_result_fetching_log" 2>&1 &
+log_i "Iniciando coleta de resultados..."
+set +e
+scripts/fetch-results.sh "$master_ip" "$exp_data_dir" > "$exp_data_dir/$local_result_fetching_log" 2>&1
+fetch_rc=$?
+set -e
 
-fetch_pid=$!
+if [[ $fetch_rc -ne 0 ]]; then
+  log_e "fetch-results.sh falhou (rc=${fetch_rc}). Veja: $exp_data_dir/$local_result_fetching_log"
+  exit $fetch_rc
+fi
 
-log_i "Aguardando término do experimento e da coleta de resultados."
-log_i "Acompanhe o progresso em:"
-log_i "  $exp_data_dir/$local_result_fetching_log"
-echo
-
-wait "$fetch_pid" || log_w "fetch-results.sh terminou com código diferente de zero (ver log acima)."
+log_i "fetch-results.sh concluído com sucesso."
+log_i "Acompanhe em: $exp_data_dir/$local_result_fetching_log"
 
 # =====================================================================
 # 9) Cancelar instâncias (se configurado)
