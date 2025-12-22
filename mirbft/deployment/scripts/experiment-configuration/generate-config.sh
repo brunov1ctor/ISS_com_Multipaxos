@@ -37,7 +37,7 @@
 : "${exp_id_digits:=4}"
 # Some header-only variables that might be referenced later
 : "${clients8:=}"
-: "${duration:=30}"
+: "${duration:=60}"
 # --------------------------------------------------------------------
 
 # Deployment setup
