@@ -26,10 +26,67 @@ fi
 
 mkdir -p "${exp_dir}/experiment-output" "${exp_dir}/_fetched_tars" "${exp_dir}/_debug"
 
+# Defaults canônicos (permite override via env exportado pelo deploy-remote.sh)
+remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+remote_exp_dir="${REMOTE_EXP_DIR:-${remote_exp_dir:-${remote_work_dir}/current-deployment-data}}"
+remote_experiment_output_dir="${REMOTE_EXPERIMENT_OUTPUT_DIR:-${remote_exp_dir}/experiment-output}"
+
 info "Iniciando fetch de resultados do master ${master_ip} para ${exp_dir}"
-info "remote_user=${remote_user} remote_work_dir=${remote_work_dir} remote_exp_dir=${remote_exp_dir}"
+info "remote_user=${remote_user}"
+info "remote_work_dir=${remote_work_dir}"
+info "remote_exp_dir=${remote_exp_dir}"
+info "remote_experiment_output_dir=${remote_experiment_output_dir}"
 info "ssh_options=${ssh_options}"
 echo
+
+# --------------------------------------------------------------------
+# Helpers: checar existência remota sem poluir log
+# --------------------------------------------------------------------
+remote_has_glob() {
+  local ip="$1"
+  local pat="$2"
+  ssh $ssh_options "${remote_user}@${ip}" "ls -1 ${pat} >/dev/null 2>&1" </dev/null
+}
+
+remote_has_dir() {
+  local ip="$1"
+  local dir="$2"
+  ssh $ssh_options "${remote_user}@${ip}" "test -d '${dir}'" </dev/null >/dev/null 2>&1
+}
+
+rsync_glob_if_exists() {
+  local ip="$1"
+  local pat="$2"
+  local dst="$3"
+
+  if remote_has_glob "$ip" "$pat"; then
+    info "Baixando: ${ip}:${pat}"
+    rsync -rtz --progress -e "ssh $ssh_options" \
+      "${remote_user}@${ip}:${pat}" \
+      "${dst}/"
+    return 0
+  else
+    warn "Não existe no remoto: ${ip}:${pat}"
+    return 1
+  fi
+}
+
+rsync_dir_if_exists() {
+  local ip="$1"
+  local dir="$2"
+  local dst="$3"
+
+  if remote_has_dir "$ip" "$dir"; then
+    info "Baixando dir: ${ip}:${dir}"
+    rsync -rtz --progress -e "ssh $ssh_options" \
+      "${remote_user}@${ip}:${dir%/}/" \
+      "${dst}/"
+    return 0
+  else
+    warn "Dir não existe no remoto: ${ip}:${dir}"
+    return 1
+  fi
+}
 
 # --------------------------------------------------------------------
 # 0) Diagnóstico no master (não falha o script)
@@ -45,6 +102,8 @@ ssh $ssh_options "${remote_user}@${master_ip}" "
   ls -la '${remote_work_dir}/current-deployment-data' 2>/dev/null || true;
   echo '--- raw-results ---';
   ls -la '${remote_work_dir}/current-deployment-data/raw-results' 2>/dev/null || true;
+  echo '--- experiment-output (canônico) ---';
+  ls -la '${remote_experiment_output_dir}' 2>/dev/null || true;
   echo '--- find experiment-output* (maxdepth 6) ---';
   find '${remote_work_dir}' -maxdepth 6 \
       \( -type d -name 'experiment-output' -o -type f -name 'experiment-output-*.tar.gz' \) \
@@ -55,36 +114,34 @@ info "Salvei diagnóstico do master em: ${exp_dir}/_debug/master-diag.txt"
 echo
 
 # --------------------------------------------------------------------
-# 1) Busca .tar.gz em múltiplos paths prováveis no master
+# 1) Busca .tar.gz em múltiplos paths (prioriza canônico)
 # --------------------------------------------------------------------
 tar_paths=(
-  "${remote_work_dir}/experiment-output-*.tar.gz"
-  "${remote_work_dir}/current-deployment-data/experiment-output-*.tar.gz"
-  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output-*.tar.gz"
   "${remote_exp_dir}/raw-results/experiment-output-*.tar.gz"
+  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output-*.tar.gz"
+  "${remote_work_dir}/current-deployment-data/experiment-output-*.tar.gz"
+  "${remote_work_dir}/experiment-output-*.tar.gz"
 )
 
 found_tar=false
 for pat in "${tar_paths[@]}"; do
   info "Tentando baixar tar(s) do master: ${pat}"
-  if rsync -rtz --progress -e "ssh $ssh_options" \
-      "${remote_user}@${master_ip}:${pat}" \
-      "${exp_dir}/_fetched_tars/" ; then
+  if rsync_glob_if_exists "${master_ip}" "${pat}" "${exp_dir}/_fetched_tars"; then
     found_tar=true
-  else
-    warn "Não encontrei nesse path: ${pat}"
   fi
   echo
 done
 
 # --------------------------------------------------------------------
-# 2) Fallback: tenta baixar diretórios experiment-output (master e slaves)
+# 2) Fallback: rsync de diretórios experiment-output (master e slaves)
+#     (prioriza canônico e só tenta se existir)
 # --------------------------------------------------------------------
 dir_paths=(
-  "${remote_work_dir}/experiment-output/"
-  "${remote_work_dir}/current-deployment-data/experiment-output/"
-  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output/"
-  "${remote_exp_dir}/raw-results/experiment-output/"
+  "${remote_experiment_output_dir}"
+  "${remote_work_dir}/current-deployment-data/experiment-output"
+  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output"
+  "${remote_exp_dir}/raw-results/experiment-output"
+  "${remote_work_dir}/experiment-output"
 )
 
 if [[ "${found_tar}" != "true" ]]; then
@@ -92,11 +149,8 @@ if [[ "${found_tar}" != "true" ]]; then
   echo
 
   info "Tentando no master primeiro..."
-  for dpat in "${dir_paths[@]}"; do
-    info "- master dir: ${dpat}"
-    rsync -rtz --progress -e "ssh $ssh_options" \
-      "${remote_user}@${master_ip}:${dpat}" \
-      "${exp_dir}/experiment-output/" || true
+  for d in "${dir_paths[@]}"; do
+    rsync_dir_if_exists "${master_ip}" "${d}" "${exp_dir}/experiment-output" || true
   done
   echo
 
@@ -112,10 +166,8 @@ if [[ "${found_tar}" != "true" ]]; then
     [[ "${role:-}" != "slave" ]] && continue
 
     info "- slave ${instance_id} (${tag}) @ ${ctrl_ip}: tentando dirs..."
-    for dpat in "${dir_paths[@]}"; do
-      rsync -rtz --progress -e "ssh $ssh_options" \
-        "${remote_user}@${ctrl_ip}:${dpat}" \
-        "${exp_dir}/experiment-output/" || true
+    for d in "${dir_paths[@]}"; do
+      rsync_dir_if_exists "${ctrl_ip}" "${d}" "${exp_dir}/experiment-output" || true
     done
     echo
   done < "${instance_info_file}"
@@ -147,7 +199,7 @@ else
 fi
 
 # --------------------------------------------------------------------
-# 4) Verificação final (sem isso, o pipeline vira 'sucesso falso')
+# 4) Verificação final (evita 'sucesso falso')
 # --------------------------------------------------------------------
 if [[ ! -d "${exp_dir}/experiment-output" ]]; then
   err "experiment-output não existe após fetch."
