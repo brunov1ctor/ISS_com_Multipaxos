@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MAX_RETRIES="$1"
-SRC="$2"
-DST="$3"
+MAX_RETRIES="${1:?MAX_RETRIES ausente}"
+SRC="${2:?SRC ausente}"
+DST="${3:?DST ausente}"
 
 attempt=1
-status=1
 
 # Se o destino tiver "user@host:...", tratamos como remoto.
 is_remote_dest=0
@@ -15,31 +14,26 @@ if [[ "$DST" == *:* ]]; then
 fi
 
 while [[ $attempt -le $MAX_RETRIES ]]; do
+  # Destino local: garante diretório pai
   if [[ $is_remote_dest -eq 0 ]]; then
-    # Destino local: garante diretório pai
-    dest_dir="$(dirname "$DST")"
-    mkdir -p "$dest_dir"
-    if scp -q "$SRC" "$DST"; then
-      exit 0
-    fi
-  else
-    # Destino remoto (ex: Bruno@172.20.3.2:/users/Bruno/iss/scripts/start-slave.sh)
-    if scp -q "$SRC" "$DST"; then
-      exit 0
-    fi
+    mkdir -p "$(dirname "$DST")"
   fi
 
+  # Rodar scp e capturar status REAL
+  set +e
+  scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$SRC" "$DST"
   status=$?
+  set -e
 
-  # Só loga retries além da primeira tentativa
-  if [[ $attempt -gt 1 ]]; then
-    echo "[scp] Retry ${attempt}/${MAX_RETRIES} (status ${status})"
+  if [[ $status -eq 0 ]]; then
+    exit 0
   fi
 
+  echo "[scp] Retry ${attempt}/${MAX_RETRIES} (status ${status})" >&2
   attempt=$((attempt+1))
   sleep 0.3
 done
 
-echo "[scp] FALHA: não foi possível enviar '${SRC}' -> '${DST}' após ${MAX_RETRIES} tentativas." >&2
-exit $status
+echo "[scp] FALHA: não foi possível copiar '${SRC}' -> '${DST}' após ${MAX_RETRIES} tentativas." >&2
+exit 1
 
