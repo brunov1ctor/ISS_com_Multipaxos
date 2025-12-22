@@ -100,19 +100,18 @@ patch_master_commands() {
     "$f"
 
   # 2) Transformar destinos relativos "iss/..." em caminhos absolutos no master
-  #    (isso evita iss//users/... e garante scp pro lugar certo)
   sed -i \
     -e "s#\\$own_public_ip:iss/experiment-config/#\\$own_public_ip:${remote_work_dir}/experiment-config/#g" \
     -e "s#\\$own_public_ip:iss/current-deployment-data/#\\$own_public_ip:${remote_work_dir}/current-deployment-data/#g" \
     "$f"
 
-  # 3) Caminhos absolutos no lado do slave (destino /users/Bruno/iss/...)
+  # 3) Caminhos absolutos no lado do slave
   sed -i \
     -e 's#\bconfig/config\.yml\b#'"${remote_work_dir}"'/config/config.yml#g' \
     -e 's#\bexperiment-config/config-#'"${remote_work_dir}"'/experiment-config/config-#g' \
     "$f"
 
-  # 4) Garantir criação do diretório config/ usando DSL (exec-start), NÃO shell solto
+  # 4) Garantir criação do diretório config/
   if ! grep -q "exec-start __all__ /dev/null mkdir -p ${remote_work_dir}/config" "$f"; then
     log "Inserindo criação de ${remote_work_dir}/config via exec-start no início do master-commands."
     sed -i "1i exec-start __all__ /dev/null mkdir -p ${remote_work_dir}/config\nexec-wait __all__ 2000\n" "$f"
@@ -123,6 +122,9 @@ patch_master_commands() {
   log "Patch do master-commands concluído."
 }
 
+# Executa o patch localmente ANTES de enviar para o master.
+patch_master_commands "${local_master_cmd}"
+
 # ---------------------------------------------------------------------------
 # 4) Garantir diretórios e scripts no master
 # ---------------------------------------------------------------------------
@@ -132,7 +134,26 @@ remote_exec() {
 }
 
 log "Criando diretórios básicos no master..."
-remote_exec "mkdir -p '${remote_work_dir}' '${remote_work_dir}/logs' '${remote_work_dir}/config' '${remote_work_dir}/scripts' '${remote_work_dir}/experiment-output'"
+remote_exec "mkdir -p '${remote_work_dir}' '${remote_work_dir}/logs' '${remote_work_dir}/config' '${remote_work_dir}/scripts' '${remote_work_dir}/experiment-output' '${remote_work_dir}/tls-data' '${remote_work_dir}/current-deployment-data/tls-data'"
+
+# ---------------------------------------------------------------------------
+# 4b) Copiar TLS (tls-data) para o master
+# ---------------------------------------------------------------------------
+
+local_tls_dir="$(cd "${this_dir}/.." && pwd)/tls-data"
+
+if [[ -d "${local_tls_dir}" ]]; then
+  log "Copiando TLS de ${local_tls_dir} para o master (${remote_work_dir}/tls-data e ${remote_work_dir}/current-deployment-data/tls-data)..."
+  scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/tls-data/"
+  scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/current-deployment-data/tls-data/"
+  remote_exec "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" || {
+    echo "FATAL: tls-data não foi copiado corretamente para o master." >&2
+    exit 1
+  }
+else
+  echo "FATAL: local_tls_dir não encontrado: ${local_tls_dir}" >&2
+  exit 1
+fi
 
 log "Copiando master-commands.cmd para o master..."
 scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd"
