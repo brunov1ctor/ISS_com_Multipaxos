@@ -38,7 +38,7 @@ remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 # 2) Descobrir IP do master e copiar instance-info para o diretório do experimento
 # =====================================================================
 
-master_ip=$(awk '$4 == "master" {print $2}' "$instance_info_file" | head -n1)
+master_ip="$(awk '$4 == "master" {print $2; exit}' "$instance_info_file")"
 if [[ -z "$master_ip" ]]; then
   log_e "Não foi possível obter o IP do master a partir de: $instance_info_file"
   exit 1
@@ -50,10 +50,10 @@ log_i "instance-info: $instance_info_file"
 log_i "Master IP: $master_ip"
 
 # =====================================================================
-# 2b) [REMOTE] Garantir TLS com SAN dos IPs reais do cluster (10.10.1.x)
+# 2b) TLS: gerar auth.pem com SAN = IPs públicos (col 2) + privados (col 3)
 # =====================================================================
 
-log_i "Garantindo certificado TLS (auth.pem) com SAN dos IPs do cluster..."
+log_i "Garantindo certificado TLS (auth.pem) com SAN dos IPs PUBLICOS+PRIVADOS do cluster..."
 
 tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
 if [[ ! -d "${tls_dir}" ]]; then
@@ -61,24 +61,44 @@ if [[ ! -d "${tls_dir}" ]]; then
   exit 1
 fi
 
-mapfile -t data_ips < <(awk '{print $3}' "$instance_info_file" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
-if [[ "${#data_ips[@]}" -eq 0 ]]; then
-  log_e "Não foi possível extrair IPs (coluna 3) do instance-info: $instance_info_file"
+# Col 2 (ctrl/public) + Col 3 (data/private), únicos
+mapfile -t all_ips < <(
+  awk '{print $2"\n"$3}' "$instance_info_file" \
+  | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+  | sort -u
+)
+
+if [[ "${#all_ips[@]}" -eq 0 ]]; then
+  log_e "Não foi possível extrair IPs (coluna 2/3) do instance-info: $instance_info_file"
   exit 1
 fi
 
 (
   cd "${tls_dir}"
   [[ -x "./generate-auth.sh" ]] || { log_e "generate-auth.sh não executável em ${tls_dir}"; exit 1; }
-  ./generate-auth.sh "${data_ips[@]}"
-  openssl x509 -in auth.pem -noout -ext subjectAltName | grep -q "${data_ips[0]}" || {
-    log_e "TLS gerado, mas SAN não contém IPs esperados:"
-    openssl x509 -in auth.pem -noout -ext subjectAltName || true
+
+  ./generate-auth.sh "${all_ips[@]}"
+
+  # Fail-fast: garante que pelo menos 1 IP público e 1 IP privado estão no SAN (se existirem)
+  san="$(openssl x509 -in auth.pem -noout -ext subjectAltName || true)"
+
+  # pega um exemplo de ip público e privado (se houver)
+  pub_ip="$(awk '{print $2}' "$instance_info_file" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1 || true)"
+  priv_ip="$(awk '{print $3}' "$instance_info_file" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1 || true)"
+
+  if [[ -n "$pub_ip" ]] && ! grep -q "$pub_ip" <<<"$san"; then
+    log_e "SAN NÃO contém IP público esperado ($pub_ip). subjectAltName:"
+    echo "$san" >&2
     exit 1
-  }
+  fi
+  if [[ -n "$priv_ip" ]] && ! grep -q "$priv_ip" <<<"$san"; then
+    log_e "SAN NÃO contém IP privado esperado ($priv_ip). subjectAltName:"
+    echo "$san" >&2
+    exit 1
+  fi
 )
 
-log_i "TLS OK: SAN inclui IPs do cluster."
+log_i "TLS OK: SAN inclui IPs públicos+privados do cluster."
 
 # =====================================================================
 # 3) Garantir master-commands-template.cmd
@@ -94,10 +114,10 @@ if [[ ! -f "$template_path" ]]; then
 
   [[ -f "$deployment_file" ]] || { log_e "Deployment file não encontrado: $deployment_file"; exit 1; }
 
-  if ! python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir"; then
+  python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir" || {
     log_e "Falha ao gerar master-commands-template.cmd"
     exit 1
-  fi
+  }
 else
   log_i "Usando master-commands-template existente: $template_path"
 fi
@@ -127,10 +147,10 @@ log_i "Limpando processos antigos e estado remoto (incluindo SSH/bandwidth)."
 
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<'EOF_KILL_ANALYZE' || true
-pids=$(ps -ef | grep 'analyze-continuously' | grep -v $$ | awk '{print $2}')
+pids=$(ps -ef | grep 'analyze-continuously' | grep -v grep | awk '{print $2}')
 if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi
 EOF_KILL_ANALYZE
-  sleep 0.1
+  sleep 0.05
 done
 
 log_i "Verificação de analyze-continuously concluída."
@@ -139,22 +159,36 @@ for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET || true
 tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
 killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
-rm -rf ${remote_work_dir}
-echo RUNNING > ${remote_work_dir}/status
-kill -9 \$(ps -ef | grep 'sshd: ${remote_user}@notty' | awk '{print \$2}') 2>/dev/null || true
+rm -rf '${remote_work_dir}'
+mkdir -p '${remote_work_dir}'
+echo RUNNING > '${remote_work_dir}/status'
+kill -9 \$(ps -ef | grep 'sshd: ${remote_user}@notty' | grep -v grep | awk '{print \$2}') 2>/dev/null || true
 EOF_RESET
-  sleep 0.1
+  sleep 0.05
 done
 wait
 
 log_i "Reset remoto concluído."
 
-# Garantir raw-results (master)
-log_i "Garantindo diretório de resultados no master: ${remote_work_dir}/current-deployment-data/raw-results"
-ssh $ssh_options "${remote_user}@${master_ip}" "mkdir -p '${remote_work_dir}/current-deployment-data/raw-results'" >/dev/null 2>&1 || {
-  log_e "Não foi possível criar raw-results no master."
-  exit 1
-}
+# =====================================================================
+# 5c) NÃO fazer symlink na mão: garantir paths esperados em TODOS os nós
+# =====================================================================
+
+log_i "Garantindo path compatível para fetch-results em TODOS os nós (experiment-output -> current-deployment-data/experiment-output)..."
+
+for ip in $(awk '{print $2}' "$instance_info_file"); do
+  ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_FIX_PATHS
+set -e
+mkdir -p '${remote_work_dir}/current-deployment-data'
+ln -sfn '${remote_work_dir}/current-deployment-data/experiment-output' '${remote_work_dir}/experiment-output'
+mkdir -p '${remote_work_dir}/current-deployment-data/raw-results'
+EOF_FIX_PATHS || {
+    log_e "Falha ao preparar paths em $ip"
+    exit 1
+  }
+done
+
+log_i "Paths OK em todos os nós."
 
 # =====================================================================
 # 6) Start master (SÍNCRONO + validações)
@@ -171,16 +205,18 @@ scripts/start-master.sh \
 
 log_i "Master iniciou. Validando TLS no master..."
 
-ssh $ssh_options "${remote_user}@${master_ip}" "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" >/dev/null 2>&1 || {
-  log_e "TLS não está presente no master em ${remote_work_dir}/tls-data."
-  ssh $ssh_options "${remote_user}@${master_ip}" "ls -la '${remote_work_dir}/tls-data' || true" || true
-  exit 1
+ssh $ssh_options "${remote_user}@${master_ip}" \
+  "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" \
+  >/dev/null 2>&1 || {
+    log_e "TLS não está presente no master em ${remote_work_dir}/tls-data."
+    ssh $ssh_options "${remote_user}@${master_ip}" "ls -la '${remote_work_dir}/tls-data' || true" || true
+    exit 1
 }
 
 log_i "TLS presente no master."
 
-log_i "Validando se discoverymaster está escutando em ${master_ip}:${master_port:-9999}..."
 DISC_PORT="${master_port:-9999}"
+log_i "Validando se discoverymaster está escutando em ${master_ip}:${DISC_PORT}..."
 ssh $ssh_options "${remote_user}@${master_ip}" "ss -lntp | grep \":${DISC_PORT} \"" >/dev/null 2>&1 || {
   log_e "discoverymaster não está escutando na porta ${DISC_PORT} no master."
   ssh $ssh_options "${remote_user}@${master_ip}" "tail -n 120 '${remote_work_dir}/logs/discoverymaster.log' || true" || true
