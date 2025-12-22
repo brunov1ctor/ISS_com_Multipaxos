@@ -648,7 +648,7 @@ if deplType not in {"local", "cloud", "remote"}:
     )
 
 if deplType == "remote":
-    MASTER_CONFIG_DIR = "experiment-config"
+    MASTER_CONFIG_DIR = "iss/experiment-config"
     MASTER_EXP_DIR = "iss/current-deployment-data"
 
 inFileName = sys.argv[2]
