@@ -32,27 +32,30 @@ type configuration struct {
 	UseTLS bool `yaml:"UseTLS"` // Use TLS for both peer-to-peer and client-to-peer communication.
 
 	// The 3 options below are ignored if UseTLS is set to false.
-	CACertFile            string `yaml:"CACertFile"`
-	KeyFile               string `yaml:"KeyFile"`
-	CertFile              string `yaml:"CertFile"`
-	BasicConnections      int    `yaml:"PriorityConnections"`   // Number of parallel connections between 2 peers.
-	PriorityConnections   int    `yaml:"BasicConnections"`      // Number of parallel priority connections between 2 peers
-	TestConnections       bool   `yaml:"TestConnections"`       // Enable testing of connections before the actual experiment starts.
-	ExcessConnections     int    `yaml:"ExcessConnections"`     // Number of extra connections to open when choosing the fastest ones. Those connections will be closed after the test.
-	ConnectionTestMsgs    int    `yaml:"ConnectionTestMsgs"`    // Number of messages to use for testing a single connection.
-	ConnectionTestPayload int    `yaml:"ConnectionTestPayload"` // Number of bytes in the payload of each connection test message.
-	OutMessageBufSize     int    `yaml:"OutMessageBufsize"`     // Buffer size of channels used for outgoing messages. If 0, no channels are used.
-	OutMessageBatchPeriod int    `yaml:"OutMessageBatchPeriod"` // Batching period of outgoing non-priority messages to each peer.
-	ThroughputCap         int    `yaml:"ThroughputCap"`         // Batches are not cut faster than at this rate (system-wide).
-	StragglerTolerance    int    `yaml:"StragglerTolerance"`
-	BatchSizeIncrement    int    `yaml:"BatchSizeIncrement"`
+	CACertFile string `yaml:"CACertFile"`
+	KeyFile    string `yaml:"KeyFile"`
+	CertFile   string `yaml:"CertFile"`
+
+	// Network connections
+	BasicConnections    int `yaml:"BasicConnections"`    // Number underlying parallel network connections for each logical connection between 2 peers.
+	PriorityConnections int `yaml:"PriorityConnections"` // Number of parallel priority connections between 2 peers
+
+	TestConnections       bool `yaml:"TestConnections"`       // Enable testing of connections before the actual experiment starts.
+	ExcessConnections     int  `yaml:"ExcessConnections"`     // Number of extra connections to open when choosing the fastest ones. Those connections will be closed after the test.
+	ConnectionTestMsgs    int  `yaml:"ConnectionTestMsgs"`    // Number of messages to use for testing a single connection.
+	ConnectionTestPayload int  `yaml:"ConnectionTestPayload"` // Number of bytes in the payload of each connection test message.
+	OutMessageBufSize     int  `yaml:"OutMessageBufsize"`     // Buffer size of channels used for outgoing messages. If 0, no channels are used.
+	OutMessageBatchPeriod int  `yaml:"OutMessageBatchPeriod"` // Batching period of outgoing non-priority messages to each peer.
+	ThroughputCap         int  `yaml:"ThroughputCap"`         // Batches are not cut faster than at this rate (system-wide).
+	StragglerTolerance    int  `yaml:"StragglerTolerance"`
+	BatchSizeIncrement    int  `yaml:"BatchSizeIncrement"`
 
 	// Startup config
 	Orderer           string `yaml:"Orderer"`
 	Manager           string `yaml:"Manager"`
 	Checkpointer      string `yaml:"Checkpointer"`
-	Failures     	  int    `yaml:"Failures"`
-	CrashTiming  	  string `yaml:"CrashTiming"`
+	Failures          int    `yaml:"Failures"`
+	CrashTiming       string `yaml:"CrashTiming"`
 	RandomSeed        int64  `yaml:"RandomSeed"`
 	NodeToLeaderRatio int    `yaml:"NodeToLeaderRatio"`
 
@@ -61,6 +64,7 @@ type configuration struct {
 	WatermarkWindowSize int `yaml:"WatermarkWindowSize"` // The number of "in-flight" sequence numbers.
 	// I.e., the maximum difference between the first uncommitted sequence number and the last sequence number for which
 	// a value can be proposed, plus 1.
+
 	// Mir Manager Config
 	EpochLength        int  `yaml:"EpochLength"`
 	SegmentLength      int  `yaml:"SegmentLength"`
@@ -111,7 +115,6 @@ type configuration struct {
 
 func LoadFile(configFileName string) {
 	f, err := ioutil.ReadFile(configFileName)
-
 	if err != nil {
 		logger.Fatal().Err(err).Str("configFileName", configFileName).Msg("Could not read config file.")
 	}
@@ -133,7 +136,7 @@ func LoadFile(configFileName string) {
 	logger.Debug().Int("ConnectionTestMsgs", Config.ConnectionTestMsgs).Msg("Config")
 	logger.Debug().Int("ConnectionTestPayload", Config.ConnectionTestPayload).Msg("Config")
 	logger.Debug().Int("OutMessageBufsize", Config.OutMessageBufSize).Msg("Config")
-	logger.Debug().Int("OutMessageBufsize", Config.OutMessageBatchPeriod).Msg("Config")
+	logger.Debug().Int("OutMessageBatchPeriod", Config.OutMessageBatchPeriod).Msg("Config")
 	logger.Debug().Int("ThroughputCap", Config.ThroughputCap).Msg("Config")
 	logger.Debug().Int("StragglerTolerance", Config.StragglerTolerance).Msg("Config")
 	logger.Debug().Int("BatchSizeIncrement", Config.BatchSizeIncrement).Msg("Config")
@@ -153,7 +156,7 @@ func LoadFile(configFileName string) {
 	logger.Debug().Str("LeaderPolicy", Config.LeaderPolicy).Msg("Config")
 	logger.Debug().Int("DefaultLeaderBan", Config.DefaultLeaderBan).Msg("Config")
 	logger.Debug().Int("NumBuckets", Config.NumBuckets).Msg("Config")
-	logger.Debug().Int("BatchSize", Config.BatchTimeoutMs).Msg("Config")
+	logger.Debug().Int("BatchTimeout", Config.BatchTimeoutMs).Msg("Config")
 	logger.Debug().Bool("DisabledViewChange", Config.DisabledViewChange).Msg("Config")
 	logger.Debug().Int("ViewChangeTimeout", Config.ViewChangeTimeoutMs).Msg("Config")
 	logger.Debug().Int("ClientTraceSampling", Config.ClientTraceSampling).Msg("Config")
@@ -177,7 +180,6 @@ func LoadFile(configFileName string) {
 
 	Config.BatchTimeout = time.Duration(Config.BatchTimeoutMs) * time.Millisecond
 	Config.ViewChangeTimeout = time.Duration(Config.ViewChangeTimeoutMs) * time.Millisecond
-
 }
 
 func setLoggingLevel(level string) zerolog.Level {
@@ -197,3 +199,4 @@ func setLoggingLevel(level string) zerolog.Level {
 	}
 	return zerolog.NoLevel
 }
+
