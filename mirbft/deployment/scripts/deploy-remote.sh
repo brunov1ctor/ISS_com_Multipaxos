@@ -73,6 +73,10 @@ remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 
+# ✅ Defaults para variáveis usadas no envsubst / comandos gerados
+: "${status_file:=${remote_status_file}}"
+: "${ready_file:=${remote_work_dir}/master-ready}"
+
 # =====================================================================
 # 2) Descobrir IP do master e copiar instance-info
 # =====================================================================
@@ -107,7 +111,7 @@ fi
 
 if [ ! -f "$template_path" ]; then
   log_i "Gerando master-commands-template.cmd..."
-  # ✅ CORREÇÃO: passa o tipo de deploy como primeiro argumento ("remote")
+  # Uso correto: generate-master-commands.py <deplType> <deployment.dpl> <outFile> <local_exp_data>
   if ! "$PYTHON" "$DEPLOY_DIR/scripts/generate-master-commands.py" remote "$deployment_file" "$template_path" "$exp_data_dir"; then
     log_e "Falha ao gerar master-commands-template.cmd."
     exit 1
@@ -119,7 +123,7 @@ fi
 # =====================================================================
 
 log_i "Gerando master-commands.cmd..."
-envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
+envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
   < "$template_path" \
   > "$exp_data_dir/$local_master_command_file"
 
