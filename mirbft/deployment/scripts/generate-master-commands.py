@@ -35,14 +35,22 @@ def waitForSlaves(slaves):
 
 def createLogDir(expID):
     output("# mkdir log dir")
-    output("exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__".format(expID))
+    output(
+        "exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__".format(
+            expID
+        )
+    )
     output("exec-wait __all__ 2000")
     output("")
 
 
 def createLocalLogDir(expID):
     output("# mkdir local log dir")
-    output("exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__/config".format(expID))
+    output(
+        "exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__/config".format(
+            expID
+        )
+    )
     output("exec-wait __all__ 2000")
     output("")
 
@@ -99,8 +107,9 @@ def setBandwidth(expID, bandwidths):
     for s, bandwidth in bandwidths.items():
         if bandwidth != "0" and bandwidth != "unlimited":
             output(
-                "exec-start {0} set-bandwidth-{1}.log tc qdisc add dev eth0 root tbf rate {2} burst 320kbit latency 400ms"
-                "".format(s, expID, bandwidth)
+                "exec-start {0} set-bandwidth-{1}.log tc qdisc add dev eth0 root tbf rate {2} burst 320kbit latency 400ms".format(
+                    s, expID, bandwidth
+                )
             )
             output(
                 "exec-wait {0} 2000 "
@@ -117,8 +126,9 @@ def unsetBandwidth(expID, bandwidths):
     for s, bandwidth in bandwidths.items():
         if bandwidth != "0" and bandwidth != "unlimited":
             output(
-                "exec-start {0} unset-bandwidth-{1}.log tc qdisc del dev eth0 root tbf rate {2} burst 320kbit latency 400ms"
-                "".format(s, expID, bandwidth)
+                "exec-start {0} unset-bandwidth-{1}.log tc qdisc del dev eth0 root tbf rate {2} burst 320kbit latency 400ms".format(
+                    s, expID, bandwidth
+                )
             )
             output(
                 "exec-wait {0} 2000 "
@@ -330,6 +340,12 @@ def saveConfig(expID, slaves):
 def submitLogs(expID, slaves):
     output("# submit logs")
     for s in slaves:
+        # log amigável no slave sobre compactação
+        output(
+            "exec-start {0} /dev/null echo '[logs] tar experiment-output/{1}/slave-__id__ -> experiment-output-{1}-slave-__id__.tar.gz'".format(
+                s, expID
+            )
+        )
         output(
             "exec-start {0} /dev/null tar czf experiment-output-{1}-slave-__id__.tar.gz "
             "experiment-output/{1}/slave-__id__".format(
@@ -344,6 +360,12 @@ def submitLogs(expID, slaves):
 
     for s in slaves:
         if deplType == "remote":
+            # log amigável no slave sobre envio
+            output(
+                "exec-start {0} /dev/null echo '[logs] scp experiment-output-{1}-slave-__id__.tar.gz -> $own_public_ip:{3}/raw-results/'".format(
+                    s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR
+                )
+            )
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
                 "experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
@@ -537,7 +559,9 @@ def run(expID, tokens):
     if os.path.isdir(outdir) and skipAllExisting:
         skip = True
     elif os.path.isdir(outdir):
-        sys.stderr.write("{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir))
+        sys.stderr.write(
+            "{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir)
+        )
         sys.stderr.flush()
         answer = sys.stdin.readline().strip()
         while answer not in {"s", "S", "a", "A", "c", "C"}:
@@ -619,7 +643,9 @@ def printDeploymentSchedule():
 
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
-    sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
+    sys.exit(
+        "generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'"
+    )
 
 if deplType == "remote":
     MASTER_CONFIG_DIR = "experiment-config"

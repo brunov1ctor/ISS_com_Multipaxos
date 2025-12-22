@@ -146,7 +146,7 @@ echo RUNNING > $remote_status_file
 kill -9 \$(ps -ef | grep 'sshd: ${remote_user}@notty' | awk '{print \$2}') 2>/dev/null || true
 EOF_RESET
   then
-    log_w "$ip: limpeza de processos antigos não pôde ser confirmada (prosseguindo)."
+    log_w "$ip: Limpando processos antigos ..."
   fi
   sleep 0.1
 done
