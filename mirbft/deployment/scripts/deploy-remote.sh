@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# deploy-remote.sh (versão enxuta de logs)
+# deploy-remote.sh (versão com DEPLOY_DIR robusto)
 
 set -e
 
@@ -11,6 +11,13 @@ log_e() { echo "[ERRO  ][$(ts)] $*" >&2; }
 
 # Flag de cancelamento de instâncias (padrão: false)
 : "${cancel_instances:=false}"
+
+# =====================================================================
+# 0) Descobrir DEPLOY_DIR de forma robusta
+# =====================================================================
+# Se DEPLOY_DIR vier do ambiente (global-vars.sh / deploy.sh), usa ele.
+# Caso contrário, usa o diretório pai deste script como fallback.
+: "${DEPLOY_DIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # =====================================================================
 # 1) Variáveis esperadas do ambiente (de deploy.sh + global-vars.sh)
@@ -57,7 +64,7 @@ local_master_command_template_file="${local_master_command_template_file:-master
 local_master_command_file="${local_master_command_file:-master-commands.cmd}"
 local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
 
-remote_user="${remote_user:-${USER}}"
+remote_user="${remote_user:-${USER:-unknown}}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
@@ -83,7 +90,17 @@ log_i "Master: $master_ip (instance-info: $instance_info_file)"
 # =====================================================================
 
 template_path="$exp_data_dir/$local_master_command_template_file"
-deployment_file="$exp_data_dir/deployment.dpl"
+deployment_file="$exp_data_dir/${dpl_filename:-deployment.dpl}"
+
+if [ ! -f "$deployment_file" ]; then
+  # fallback clássico: arquivo padrão
+  deployment_file="$exp_data_dir/deployment.dpl"
+fi
+
+if [ ! -f "$deployment_file" ]; then
+  log_e "Arquivo deployment.dpl não encontrado em $exp_data_dir."
+  exit 1
+fi
 
 if [ ! -f "$template_path" ]; then
   log_i "Gerando master-commands-template.cmd..."
@@ -91,11 +108,6 @@ if [ ! -f "$template_path" ]; then
     log_e "Falha ao gerar master-commands-template.cmd."
     exit 1
   fi
-fi
-
-if [ ! -f "$deployment_file" ]; then
-  log_e "Arquivo deployment.dpl não encontrado em $exp_data_dir."
-  exit 1
 fi
 
 # =====================================================================
@@ -156,7 +168,7 @@ ssh $ssh_options "${remote_user}@${master_ip}" "
 
 log_i "Iniciando master em $master_ip..."
 
-scripts/start-master.sh \
+"$DEPLOY_DIR/scripts/start-master.sh" \
   "$master_ip" \
   "$exp_data_dir/$instance_info_file_name" \
   "$exp_data_dir/$local_master_command_file" \
@@ -168,10 +180,10 @@ scripts/start-master.sh \
 # =====================================================================
 
 log_i "Iniciando slaves (peers)..."
-scripts/start-remote-slaves.sh "$exp_data_dir" 0 peers "$instance_info_file"
+"$DEPLOY_DIR/scripts/start-remote-slaves.sh" "$exp_data_dir" 0 peers "$instance_info_file"
 
 log_i "Iniciando slaves (1client)..."
-scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
+"$DEPLOY_DIR/scripts/start-remote-slaves.sh" "$exp_data_dir" 0 1client "$instance_info_file"
 
 log_i "Slaves iniciados."
 
@@ -180,7 +192,7 @@ log_i "Slaves iniciados."
 # =====================================================================
 
 log_i "Iniciando coleta de resultados..."
-scripts/fetch-results.sh "$master_ip" "$exp_data_dir" "$local_result_fetching_log"
+"$DEPLOY_DIR/scripts/fetch-results.sh" "$master_ip" "$exp_data_dir" "$local_result_fetching_log"
 
 log_i "Coleta de resultados concluída."
 
@@ -190,7 +202,7 @@ log_i "Coleta de resultados concluída."
 
 if $cancel_instances; then
   log_i "Cancelando máquinas na nuvem..."
-  scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"
+  "$DEPLOY_DIR/scripts/cancel-cloud-instances.sh" "$exp_data_dir/$instance_info_file_name"
 else
   echo -e "Lembre-se de cancelar as VMs com:\n  cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name\n"
 fi
