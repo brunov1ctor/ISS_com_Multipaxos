@@ -99,24 +99,29 @@ patch_master_commands() {
     -e 's#\borderingclient\b#'"${remote_bin_dir}"'/orderingclient#g' \
     "$f"
 
-  # 2) Caminhos absolutos de config/experiment-config
+  # 2) Transformar destinos relativos "iss/..." em caminhos absolutos no master
+  #    (isso evita iss//users/... e garante scp pro lugar certo)
   sed -i \
-    -e 's#\bconfig/config.yml\b#'"${remote_work_dir}"'/config/config.yml#g' \
+    -e "s#\\$own_public_ip:iss/experiment-config/#\\$own_public_ip:${remote_work_dir}/experiment-config/#g" \
+    -e "s#\\$own_public_ip:iss/current-deployment-data/#\\$own_public_ip:${remote_work_dir}/current-deployment-data/#g" \
+    "$f"
+
+  # 3) Caminhos absolutos no lado do slave (destino /users/Bruno/iss/...)
+  sed -i \
+    -e 's#\bconfig/config\.yml\b#'"${remote_work_dir}"'/config/config.yml#g' \
     -e 's#\bexperiment-config/config-#'"${remote_work_dir}"'/experiment-config/config-#g' \
     "$f"
 
-  # 3) Garante mkdir -p do diretório de config no início do arquivo
-  if ! grep -q "mkdir -p ${remote_work_dir}/config" "$f"; then
-    log "Inserindo mkdir -p ${remote_work_dir}/config no início do master-commands."
-    sed -i "1i mkdir -p ${remote_work_dir}/config" "$f"
+  # 4) Garantir criação do diretório config/ usando DSL (exec-start), NÃO shell solto
+  if ! grep -q "exec-start __all__ /dev/null mkdir -p ${remote_work_dir}/config" "$f"; then
+    log "Inserindo criação de ${remote_work_dir}/config via exec-start no início do master-commands."
+    sed -i "1i exec-start __all__ /dev/null mkdir -p ${remote_work_dir}/config\nexec-wait __all__ 2000\n" "$f"
   else
-    log "mkdir -p ${remote_work_dir}/config já existe no master-commands."
+    log "Criação de ${remote_work_dir}/config já existe no master-commands."
   fi
 
   log "Patch do master-commands concluído."
 }
-
-patch_master_commands "${local_master_cmd}"
 
 # ---------------------------------------------------------------------------
 # 4) Garantir diretórios e scripts no master
