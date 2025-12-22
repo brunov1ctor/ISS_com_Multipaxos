@@ -28,7 +28,7 @@ ssh_options="${ssh_options:-${SSH_OPTIONS:-"-o StrictHostKeyChecking=no -o UserK
 
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Se exp_data_dir não veio por env/arg, tenta deduzir do PWD
+# Se exp_data_dir não vier por env/arg, tenta deduzir do PWD
 if [[ -z "${exp_data_dir}" ]]; then
   if [[ "$PWD" =~ deployment-data/remote-[0-9]{4}$ ]]; then
     exp_data_dir="$PWD"
@@ -40,12 +40,12 @@ fi
 # ---------------------------------------------------------------------------
 
 if [[ -z "${master_ip}" ]]; then
-  echo "FATAL: master_ip vazio. O deploy.sh precisa fornecer MASTER_IP/master_ip." >&2
+  echo "FATAL: master_ip vazio (configure MASTER_IP/master_ip)." >&2
   exit 1
 fi
 
 if [[ -z "${exp_data_dir}" ]]; then
-  echo "FATAL: exp_data_dir vazio. O deploy.sh precisa fornecer EXP_DATA_DIR/exp_data_dir." >&2
+  echo "FATAL: exp_data_dir vazio (configure EXP_DATA_DIR/exp_data_dir)." >&2
   exit 1
 fi
 
@@ -57,7 +57,7 @@ if [[ -z "${local_master_cmd}" ]]; then
 fi
 
 if [[ -z "${local_master_cmd}" || ! -f "${local_master_cmd}" ]]; then
-  echo "FATAL: não consegui localizar master-commands.cmd." >&2
+  echo "FATAL: não encontrei master-commands.cmd." >&2
   echo "  exp_data_dir=${exp_data_dir}" >&2
   echo "  local_master_cmd=${local_master_cmd:-<vazio>}" >&2
   exit 1
@@ -88,9 +88,9 @@ patch_master_commands() {
   local f="$1"
   local bak="${f}.bak.$(date +%s)"
 
-  log "Patching master-commands.cmd (PATH-proof + config absoluto)..."
+  log "Ajustando master-commands.cmd (paths absolutos)..."
   cp -f "$f" "$bak"
-  log "Backup: $bak"
+  log "Backup salvo em: $bak"
 
   # 1) Forçar caminhos absolutos de scripts e binários no master
   sed -i \
@@ -107,15 +107,13 @@ patch_master_commands() {
 
   # 3) Garante mkdir -p do diretório de config no início do arquivo
   if ! grep -q "mkdir -p ${remote_work_dir}/config" "$f"; then
-    log "Inserindo mkdir -p ${remote_work_dir}/config no master-commands..."
+    log "Inserindo mkdir -p ${remote_work_dir}/config no início do master-commands."
     sed -i "1i mkdir -p ${remote_work_dir}/config" "$f"
   else
-    log "mkdir -p ${remote_work_dir}/config já presente (não duplicando)."
+    log "mkdir -p ${remote_work_dir}/config já existe no master-commands."
   fi
 
-  log "Trechos críticos (grep):"
-  egrep -n "stubborn-scp|orderingpeer|orderingclient|config/config.yml|experiment-config/config-|mkdir -p ${remote_work_dir}/config" "$f" | head -n 200 || true
-  log "Patch OK."
+  log "Patch do master-commands concluído."
 }
 
 patch_master_commands "${local_master_cmd}"
@@ -128,13 +126,13 @@ remote_exec() {
   ssh ${ssh_options} "${remote_user}@${master_ip}" "$@" < /dev/null
 }
 
-log "Ensuring remote workdir exists..."
+log "Criando diretórios básicos no master..."
 remote_exec "mkdir -p '${remote_work_dir}' '${remote_work_dir}/logs' '${remote_work_dir}/config' '${remote_work_dir}/scripts' '${remote_work_dir}/experiment-output'"
 
-log "Copying master-commands.cmd to remote..."
+log "Copiando master-commands.cmd para o master..."
 scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd"
 
-log "Copying helper scripts (stubborn-scp.sh, global-vars.sh) to master..."
+log "Copiando scripts auxiliares (stubborn-scp.sh, global-vars.sh)..."
 scp ${ssh_options} "${this_dir}/stubborn-scp.sh" "${remote_user}@${master_ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
 scp ${ssh_options} "${this_dir}/global-vars.sh"   "${remote_user}@${master_ip}:${remote_work_dir}/scripts/global-vars.sh"
 remote_exec "chmod +x '${remote_work_dir}/scripts/'*.sh || true"
@@ -143,25 +141,23 @@ remote_exec "chmod +x '${remote_work_dir}/scripts/'*.sh || true"
 # 5) Copiar experiment-config para o master
 # ---------------------------------------------------------------------------
 
-# generate-config.sh escreve em /users/<user>/iss/experiment-config/config-000X.yml
-# então tentamos primeiro esse caminho, depois um fallback em exp_data_dir/experiment-config
 local_config_dir="/users/${remote_user}/iss/experiment-config"
 
 if [[ -d "${local_config_dir}" ]]; then
-  log "Copying generated configs to master from ${local_config_dir} ..."
+  log "Copiando configs de ${local_config_dir} para o master..."
   scp ${ssh_options} -r "${local_config_dir}" "${remote_user}@${master_ip}:${remote_work_dir}/"
 elif [[ -d "${exp_data_dir}/experiment-config" ]]; then
-  log "Copying generated configs to master from ${exp_data_dir}/experiment-config ..."
+  log "Copiando configs de ${exp_data_dir}/experiment-config para o master..."
   scp ${ssh_options} -r "${exp_data_dir}/experiment-config" "${remote_user}@${master_ip}:${remote_work_dir}/"
 else
-  log "WARN: nenhum diretório experiment-config/ encontrado em ${local_config_dir} ou ${exp_data_dir}/experiment-config"
+  log "WARN: nenhum diretório experiment-config em ${local_config_dir} ou ${exp_data_dir}/experiment-config."
 fi
 
 # ---------------------------------------------------------------------------
 # 6) Iniciar discoverymaster no master
 # ---------------------------------------------------------------------------
 
-log "Iniciando discoverymaster no master (nohup)..."
+log "Iniciando discoverymaster (nohup) no master..."
 remote_exec "
   cd '${remote_work_dir}' && \
   rm -f '${remote_work_dir}/status' '${remote_work_dir}/master-ready' 2>/dev/null || true
@@ -169,11 +165,10 @@ remote_exec "
     > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null &
 "
 
-log "Verificando se o master está escutando na porta ${DISCOVERY_PORT}..."
-# Evita aspas simples dentro do comando remoto para não quebrar o ssh
+log "Checando se o master está escutando na porta ${DISCOVERY_PORT}..."
 if ! remote_exec "ss -lntp | grep \":${DISCOVERY_PORT} \"" >/dev/null 2>&1; then
-  log "Master parece não estar escutando na porta ${DISCOVERY_PORT} (verifique discoverymaster.log)."
+  log "ATENÇÃO: master não parece escutando na porta ${DISCOVERY_PORT} (veja discoverymaster.log no master)."
 else
-  log "Master started successfully e está escutando em ${master_ip}:${DISCOVERY_PORT}."
+  log "Master ativo em ${master_ip}:${DISCOVERY_PORT}."
 fi
 
