@@ -132,22 +132,55 @@ done
 
 log_i "Verificação de analyze-continuously concluída."
 
-# 5b) Limpa estado, mata binários velhos, reseta status
+# 5b) Limpa estado, mata binários velhos, reseta status — com log mais descritivo
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   remote_delete_files="$remote_work_dir"
   remote_status_file="$remote_work_dir/status"
 
-  # Executa reset remoto em bloco silencioso para evitar poluição de log com o comando inteiro em caso de erro
-  if ! ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET
-tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
-killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
-rm -rf $remote_delete_files
-echo RUNNING > $remote_status_file
-kill -9 \$(ps -ef | grep 'sshd: ${remote_user}@notty' | awk '{print \$2}') 2>/dev/null || true
+  log_i "Limpando processos antigos no nó $ip..."
+
+  reset_out=$(ssh $ssh_options "${remote_user}@${ip}" "bash -s" 2>/dev/null <<EOF_RESET
+# Processos discovery*/ordering* antigos
+killed=\$(ps -ef | egrep 'discoverymaster|discoveryslave|orderingpeer|orderingclient' | grep -v grep | awk '{print \$2}')
+if [ -n "\$killed" ]; then
+  kill -9 \$killed 2>/dev/null || true
+  echo "processos finalizados: \$killed"
+else
+  echo "nenhum processo discovery/ordering antigo encontrado"
+fi
+
+# Diretório de trabalho
+if [ -d "$remote_delete_files" ]; then
+  rm -rf "$remote_delete_files"
+  echo "diretório limpo: $remote_delete_files"
+else
+  echo "diretório já inexistente: $remote_delete_files"
+fi
+
+# Status local
+echo RUNNING > "$remote_status_file"
+
+# Sessões ssh notty
+notty=\$(ps -ef | grep 'sshd: ${remote_user}@notty' | grep -v grep | awk '{print \$2}')
+if [ -n "\$notty" ]; then
+  kill -9 \$notty 2>/dev/null || true
+  echo "sessões ssh notty finalizadas: \$notty"
+else
+  echo "nenhuma sessão ssh notty encontrada"
+fi
 EOF_RESET
-  then
-    log_w "$ip: falha ao resetar nó (prosseguindo)."
+) || true
+
+  if [ -n "$reset_out" ]; then
+    # Loga cada linha de resultado como INFO, amigável
+    while IFS= read -r line; do
+      [ -n "$line" ] && log_i "$ip: $line"
+    done <<< "$reset_out"
+  else
+    # Só aqui realmente indicamos problema real no reset
+    log_w "$ip: não foi possível executar a limpeza remota (prosseguindo)."
   fi
+
   sleep 0.1
 done
 wait
@@ -157,7 +190,7 @@ log_i "Reset remoto concluído."
 echo
 
 # =====================================================================
-# 5b) Garantir diretório de resultados no master
+# 5c) Garantir diretório de resultados no master
 # =====================================================================
 
 log_i "Garantindo diretório de resultados no master: /users/${remote_user}/iss/current-deployment-data/raw-results"
