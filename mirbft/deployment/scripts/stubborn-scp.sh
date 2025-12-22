@@ -1,31 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MAX_RETRIES="$1"
-SRC="$2"
-DST="$3"
+ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
+log(){ echo "[stubborn-scp][$(ts)] $*"; }
 
-attempt=1
-status=1
+# Uso esperado:
+#   remoto simples:
+#     stubborn-scp.sh <tentativas> <src> <dst>
+#   remoto/local com chave:
+#     stubborn-scp.sh <tentativas> -i <ssh_key_file> <src> <dst>
 
-# Log enxuto: só mostra retries (se houver) e erro final.
-while [[ $attempt -le $MAX_RETRIES ]]; do
-  if scp -q "$SRC" "$DST"; then
-    # Sucesso silencioso por arquivo.
+if [[ $# -lt 3 ]]; then
+  log "Uso: $0 <tentativas> [-i chave] <src> <dst>"
+  exit 1
+fi
+
+retries="$1"
+shift
+
+ssh_extra=()
+if [[ "${1:-}" == "-i" ]]; then
+  # modo com chave: stubborn-scp.sh <tentativas> -i chave src dst
+  if [[ $# -lt 4 ]]; then
+    log "Uso: $0 <tentativas> -i <chave> <src> <dst>"
+    exit 1
+  fi
+  ssh_extra=(-i "$2")
+  shift 2
+fi
+
+src="$1"
+dest="$2"
+
+dest_dir="$(dirname "$dest")"
+log "Iniciando stubborn-scp"
+log "  src      = ${src}"
+log "  dest     = ${dest}"
+log "  dest_dir = ${dest_dir}"
+
+# Garante diretório de destino no nó local (slave)
+if [[ -d "$dest_dir" ]]; then
+  log "Dest dir já existe localmente."
+else
+  log "Dest dir NÃO existe; tentando criar: $dest_dir"
+  if mkdir -p "$dest_dir"; then
+    log "Dest dir criado com sucesso."
+  else
+    log "ERRO: mkdir -p $dest_dir falhou."
+  fi
+fi
+
+i=0
+while (( i < retries )); do
+  i=$((i+1))
+  log "Tentativa $i de $retries: scp ${src} -> ${dest}"
+  if scp "${ssh_extra[@]}" "$src" "$dest"; then
+    log "SCP OK (tentativa $i)."
     exit 0
   else
-    status=$?
-
-    # Só mostra log SE não for a primeira tentativa
-    if [[ $attempt -gt 1 ]]; then
-      echo "[scp] Retry ${attempt}/${MAX_RETRIES} (status ${status})"
-    fi
+    rc=$?
+    log "SCP falhou (tentativa $i), código de saída = $rc."
+    sleep 1
   fi
-
-  attempt=$((attempt+1))
-  sleep 0.3
 done
 
-echo "[scp] FALHA: não foi possível enviar '${SRC}' após ${MAX_RETRIES} tentativas." >&2
-exit $status
+log "SCP falhou após $retries tentativas."
+exit 2
 
