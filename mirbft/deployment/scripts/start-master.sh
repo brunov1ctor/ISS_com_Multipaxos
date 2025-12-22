@@ -50,7 +50,6 @@ if [[ -z "${exp_data_dir}" ]]; then
 fi
 
 if [[ -z "${local_master_cmd}" ]]; then
-  # fallback para o caminho padrão dentro de exp_data_dir
   if [[ -f "${exp_data_dir}/master-commands.cmd" ]]; then
     local_master_cmd="${exp_data_dir}/master-commands.cmd"
   fi
@@ -81,79 +80,89 @@ log "local_master_cmd=${local_master_cmd}"
 log "debug_log=${debug_log}"
 
 # ---------------------------------------------------------------------------
-# 3) Patch do master-commands.cmd (não depender de PATH + config absoluto)
+# 3) Patch do master-commands.cmd (não depender de PATH + paths consistentes)
 # ---------------------------------------------------------------------------
 
 patch_master_commands() {
   local f="$1"
   local bak="${f}.bak.$(date +%s)"
 
-  log "Ajustando master-commands.cmd (paths absolutos)..."
+  log "Ajustando master-commands.cmd (paths absolutos, sem sed frágil)..."
   cp -f "$f" "$bak"
   log "Backup salvo em: $bak"
 
-  # 1) Forçar caminhos absolutos de scripts e binários no master
-  sed -i \
-    -e 's#\bstubborn-scp\.sh\b#'"${remote_work_dir}"'/scripts/stubborn-scp.sh#g' \
-    -e 's#\borderingpeer\b#'"${remote_bin_dir}"'/orderingpeer#g' \
-    -e 's#\borderingclient\b#'"${remote_bin_dir}"'/orderingclient#g' \
-    "$f"
+  # Trocas robustas (perl)
+  perl -0777 -pe "s#\\bstubborn-scp\\.sh\\b#${remote_work_dir}/scripts/stubborn-scp.sh#g" -i "$f"
+  perl -0777 -pe "s#\\borderingpeer\\b#${remote_bin_dir}/orderingpeer#g" -i "$f"
+  perl -0777 -pe "s#\\borderingclient\\b#${remote_bin_dir}/orderingclient#g" -i "$f"
 
-  # 2) Transformar destinos relativos "iss/..." em caminhos absolutos no master
-  sed -i \
-    -e "s#\\$own_public_ip:iss/experiment-config/#\\$own_public_ip:${remote_work_dir}/experiment-config/#g" \
-    -e "s#\\$own_public_ip:iss/current-deployment-data/#\\$own_public_ip:${remote_work_dir}/current-deployment-data/#g" \
-    "$f"
+  # Ajusta caminhos remotos usados no master-commands (mantendo $own_public_ip literal)
+  perl -0777 -pe "s#\\\$own_public_ip:iss/experiment-config/#\\\$own_public_ip:${remote_work_dir}/experiment-config/#g" -i "$f"
+  perl -0777 -pe "s#\\\$own_public_ip:iss/current-deployment-data/#\\\$own_public_ip:${remote_work_dir}/current-deployment-data/#g" -i "$f"
 
-  # 3) Caminhos absolutos no lado do slave
-  sed -i \
-    -e 's#\bconfig/config\.yml\b#'"${remote_work_dir}"'/config/config.yml#g' \
-    -e 's#\bexperiment-config/config-#'"${remote_work_dir}"'/experiment-config/config-#g' \
-    "$f"
-
-  # 4) Garantir criação do diretório config/
-  if ! grep -q "exec-start __all__ /dev/null mkdir -p ${remote_work_dir}/config" "$f"; then
-    log "Inserindo criação de ${remote_work_dir}/config via exec-start no início do master-commands."
-    sed -i "1i exec-start __all__ /dev/null mkdir -p ${remote_work_dir}/config\nexec-wait __all__ 2000\n" "$f"
-  else
-    log "Criação de ${remote_work_dir}/config já existe no master-commands."
+  # Garante criação dos diretórios essenciais no início
+  if ! grep -q "mkdir -p ${remote_work_dir}/config" "$f"; then
+    log "Inserindo criação de diretórios essenciais no início do master-commands."
+    printf "exec-start __all__ /dev/null mkdir -p %s/config %s/logs %s/tls-data %s/experiment-output %s/current-deployment-data/tls-data %s/current-deployment-data/raw-results\nexec-wait __all__ 2000\n\n" \
+      "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" \
+      | cat - "$f" > "${f}.tmp" && mv -f "${f}.tmp" "$f"
   fi
 
   log "Patch do master-commands concluído."
 }
 
-# Executa o patch localmente ANTES de enviar para o master.
+# >>> IMPORTANTE: executar o patch de verdade
 patch_master_commands "${local_master_cmd}"
 
 # ---------------------------------------------------------------------------
-# 4) Garantir diretórios e scripts no master
+# 4) Exec remoto helper
 # ---------------------------------------------------------------------------
 
 remote_exec() {
   ssh ${ssh_options} "${remote_user}@${master_ip}" "$@" < /dev/null
 }
 
+# ---------------------------------------------------------------------------
+# 5) Garantir diretórios no master
+# ---------------------------------------------------------------------------
+
 log "Criando diretórios básicos no master..."
-remote_exec "mkdir -p '${remote_work_dir}' '${remote_work_dir}/logs' '${remote_work_dir}/config' '${remote_work_dir}/scripts' '${remote_work_dir}/experiment-output' '${remote_work_dir}/tls-data' '${remote_work_dir}/current-deployment-data/tls-data'"
+remote_exec "mkdir -p \
+  '${remote_work_dir}' \
+  '${remote_work_dir}/logs' \
+  '${remote_work_dir}/config' \
+  '${remote_work_dir}/scripts' \
+  '${remote_work_dir}/tls-data' \
+  '${remote_work_dir}/experiment-output' \
+  '${remote_work_dir}/current-deployment-data' \
+  '${remote_work_dir}/current-deployment-data/tls-data' \
+  '${remote_work_dir}/current-deployment-data/raw-results' \
+"
 
 # ---------------------------------------------------------------------------
-# 4b) Copiar TLS (tls-data) para o master
+# 6) Copiar TLS (tls-data) para o master
 # ---------------------------------------------------------------------------
 
 local_tls_dir="$(cd "${this_dir}/.." && pwd)/tls-data"
-
-if [[ -d "${local_tls_dir}" ]]; then
-  log "Copiando TLS de ${local_tls_dir} para o master (${remote_work_dir}/tls-data e ${remote_work_dir}/current-deployment-data/tls-data)..."
-  scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/tls-data/"
-  scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/current-deployment-data/tls-data/"
-  remote_exec "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" || {
-    echo "FATAL: tls-data não foi copiado corretamente para o master." >&2
-    exit 1
-  }
-else
+if [[ ! -d "${local_tls_dir}" ]]; then
   echo "FATAL: local_tls_dir não encontrado: ${local_tls_dir}" >&2
   exit 1
 fi
+
+log "Copiando TLS de ${local_tls_dir} para o master (${remote_work_dir}/tls-data e ${remote_work_dir}/current-deployment-data/tls-data)..."
+scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/tls-data/"
+scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/current-deployment-data/tls-data/"
+
+log "Validando presença de TLS no master..."
+remote_exec "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" || {
+  echo "FATAL: tls-data não foi copiado corretamente para o master em ${remote_work_dir}/tls-data." >&2
+  remote_exec "ls -la '${remote_work_dir}/tls-data' || true"
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# 7) Copiar master-commands.cmd e scripts auxiliares
+# ---------------------------------------------------------------------------
 
 log "Copiando master-commands.cmd para o master..."
 scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd"
@@ -164,37 +173,37 @@ scp ${ssh_options} "${this_dir}/global-vars.sh"   "${remote_user}@${master_ip}:$
 remote_exec "chmod +x '${remote_work_dir}/scripts/'*.sh || true"
 
 # ---------------------------------------------------------------------------
-# 5) Copiar experiment-config para o master
+# 8) Copiar experiment-config para o master (usa exp_data_dir primeiro)
 # ---------------------------------------------------------------------------
 
-local_config_dir="/users/${remote_user}/iss/experiment-config"
-
-if [[ -d "${local_config_dir}" ]]; then
-  log "Copiando configs de ${local_config_dir} para o master..."
-  scp ${ssh_options} -r "${local_config_dir}" "${remote_user}@${master_ip}:${remote_work_dir}/"
-elif [[ -d "${exp_data_dir}/experiment-config" ]]; then
+if [[ -d "${exp_data_dir}/experiment-config" ]]; then
   log "Copiando configs de ${exp_data_dir}/experiment-config para o master..."
   scp ${ssh_options} -r "${exp_data_dir}/experiment-config" "${remote_user}@${master_ip}:${remote_work_dir}/"
+elif [[ -d "/users/${remote_user}/iss/experiment-config" ]]; then
+  log "Copiando configs de /users/${remote_user}/iss/experiment-config para o master..."
+  scp ${ssh_options} -r "/users/${remote_user}/iss/experiment-config" "${remote_user}@${master_ip}:${remote_work_dir}/"
 else
-  log "WARN: nenhum diretório experiment-config em ${local_config_dir} ou ${exp_data_dir}/experiment-config."
+  log "WARN: nenhum diretório experiment-config encontrado (nem em exp_data_dir nem em /users/${remote_user}/iss)."
 fi
 
 # ---------------------------------------------------------------------------
-# 6) Iniciar discoverymaster no master
+# 9) Iniciar discoverymaster no master
 # ---------------------------------------------------------------------------
 
 log "Iniciando discoverymaster (nohup) no master..."
 remote_exec "
   cd '${remote_work_dir}' && \
-  rm -f '${remote_work_dir}/status' '${remote_work_dir}/master-ready' 2>/dev/null || true
+  rm -f '${remote_work_dir}/status' '${remote_work_dir}/master-ready' 2>/dev/null || true; \
   nohup '${remote_bin_dir}/discoverymaster' master '${master_ip}:${DISCOVERY_PORT}' '${remote_work_dir}/master-commands.cmd' \
     > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null &
 "
 
 log "Checando se o master está escutando na porta ${DISCOVERY_PORT}..."
 if ! remote_exec "ss -lntp | grep \":${DISCOVERY_PORT} \"" >/dev/null 2>&1; then
-  log "ATENÇÃO: master não parece escutando na porta ${DISCOVERY_PORT} (veja discoverymaster.log no master)."
-else
-  log "Master ativo em ${master_ip}:${DISCOVERY_PORT}."
+  log "FATAL: master não parece escutando na porta ${DISCOVERY_PORT}. Veja: ${remote_work_dir}/logs/discoverymaster.log"
+  remote_exec "tail -n 80 '${remote_work_dir}/logs/discoverymaster.log' || true"
+  exit 1
 fi
+
+log "Master ativo em ${master_ip}:${DISCOVERY_PORT}."
 
