@@ -46,7 +46,7 @@ SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"
-remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
+remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
 
 scp_retries="${scp_retries:-10}"
 
@@ -101,6 +101,8 @@ remote_mkdirs() {
              '${remote_work_dir}/logs' \
              '${remote_work_dir}/config' \
              '${remote_work_dir}/tls-data' \
+             '${remote_exp_dir}' \
+             '${remote_exp_dir}/tls-data' \
              '${remote_bin_dir}' \
     2>/dev/null || true
   " </dev/null
@@ -151,7 +153,7 @@ copy_tls_assets() {
   fi
 
   ssh ${ssh_options} "${remote_user}@${ip}" "\
-    mkdir -p '${remote_work_dir}/tls-data' 2>/dev/null || true
+    mkdir -p '${remote_exp_dir}/tls-data' '${remote_work_dir}/tls-data' 2>/dev/null || true
   " </dev/null || true
 
   local count=0
@@ -162,7 +164,7 @@ copy_tls_assets() {
 
     bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
       "${f}" \
-      "${remote_user}@${ip}:${remote_work_dir}/tls-data/${base}"
+      "${remote_user}@${ip}:${remote_exp_dir}/tls-data/${base}"
 
     ((count++)) || true
   done
@@ -177,19 +179,19 @@ remote_check_assets() {
       ls -1 '${remote_work_dir}/scripts' 2>/dev/null | wc -l; \
     echo -n '[remote-check] bins: '; \
       ls -1 '${remote_bin_dir}' 2>/dev/null | wc -l; \
-    if [ -d '${remote_work_dir}/tls-data' ]; then \
+    if [ -d '${remote_exp_dir}/tls-data' ]; then \
       echo -n '[remote-check] tls-data: '; \
-        ls -1 '${remote_work_dir}/tls-data' 2>/dev/null | wc -l; \
+        ls -1 '${remote_exp_dir}/tls-data' 2>/dev/null | wc -l; \
     else \
-      echo '[remote-check] tls-data: (sem tls-data no work_dir)'; \
+      echo '[remote-check] tls-data: (sem tls-data no exp_dir)'; \
     fi; \
     test -x '${remote_bin_dir}/discoverymaster' && \
     test -x '${remote_bin_dir}/discoveryslave' && \
     test -x '${remote_bin_dir}/orderingpeer' && \
     test -x '${remote_bin_dir}/orderingclient' && \
-    test -f '${remote_work_dir}/tls-data/ca.pem' && \
-    test -f '${remote_work_dir}/tls-data/auth.pem' && \
-    test -f '${remote_work_dir}/tls-data/auth.key'
+    test -f '${remote_exp_dir}/tls-data/ca.pem' && \
+    test -f '${remote_exp_dir}/tls-data/auth.pem' && \
+    test -f '${remote_exp_dir}/tls-data/auth.key'
   " </dev/null
 }
 
