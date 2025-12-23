@@ -26,10 +26,10 @@ fi
 
 mkdir -p "${exp_dir}/experiment-output" "${exp_dir}/_fetched_tars" "${exp_dir}/_debug"
 
-# Defaults canônicos (permite override via env exportado pelo deploy-remote.sh)
+# Defaults canônicos (1 root só; permite override via env exportado pelo deploy-remote.sh)
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
-remote_exp_dir="${REMOTE_EXP_DIR:-${remote_exp_dir:-${remote_work_dir}/current-deployment-data}}"
-remote_experiment_output_dir="${REMOTE_EXPERIMENT_OUTPUT_DIR:-${remote_exp_dir}/experiment-output}"
+remote_exp_dir="${REMOTE_EXP_DIR:-${remote_exp_dir:-${remote_work_dir}}}"
+remote_experiment_output_dir="${REMOTE_EXPERIMENT_OUTPUT_DIR:-${remote_work_dir}/experiment-output}"
 
 info "Iniciando fetch de resultados do master ${master_ip} para ${exp_dir}"
 info "remote_user=${remote_user}"
@@ -98,10 +98,8 @@ ssh $ssh_options "${remote_user}@${master_ip}" "
   ls -la '${remote_work_dir}' || true;
   echo '--- logs ---';
   ls -la '${remote_work_dir}/logs' 2>/dev/null || true;
-  echo '--- current-deployment-data ---';
-  ls -la '${remote_work_dir}/current-deployment-data' 2>/dev/null || true;
   echo '--- raw-results ---';
-  ls -la '${remote_work_dir}/current-deployment-data/raw-results' 2>/dev/null || true;
+  ls -la '${remote_work_dir}/raw-results' 2>/dev/null || true;
   echo '--- experiment-output (canônico) ---';
   ls -la '${remote_experiment_output_dir}' 2>/dev/null || true;
   echo '--- find experiment-output* (maxdepth 6) ---';
@@ -117,9 +115,7 @@ echo
 # 1) Busca .tar.gz em múltiplos paths (prioriza canônico)
 # --------------------------------------------------------------------
 tar_paths=(
-  "${remote_exp_dir}/raw-results/experiment-output-*.tar.gz"
-  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output-*.tar.gz"
-  "${remote_work_dir}/current-deployment-data/experiment-output-*.tar.gz"
+  "${remote_work_dir}/raw-results/experiment-output-*.tar.gz"
   "${remote_work_dir}/experiment-output-*.tar.gz"
 )
 
@@ -138,9 +134,7 @@ done
 # --------------------------------------------------------------------
 dir_paths=(
   "${remote_experiment_output_dir}"
-  "${remote_work_dir}/current-deployment-data/experiment-output"
-  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output"
-  "${remote_exp_dir}/raw-results/experiment-output"
+  "${remote_work_dir}/raw-results/experiment-output"
   "${remote_work_dir}/experiment-output"
 )
 

@@ -98,13 +98,14 @@ patch_master_commands() {
 
   # Ajusta caminhos remotos usados no master-commands (mantendo $own_public_ip literal)
   perl -0777 -pe "s#\\\$own_public_ip:iss/experiment-config/#\\\$own_public_ip:${remote_work_dir}/experiment-config/#g" -i "$f"
-  perl -0777 -pe "s#\\\$own_public_ip:iss/current-deployment-data/#\\\$own_public_ip:${remote_work_dir}/current-deployment-data/#g" -i "$f"
+  # Remover raiz duplicada: tudo fica diretamente em ${remote_work_dir}
+  perl -0777 -pe "s#\\\$own_public_ip:iss/current-deployment-data/#\\\$own_public_ip:${remote_work_dir}/#g" -i "$f"
 
   # Garante criação dos diretórios essenciais no início
   if ! grep -q "mkdir -p ${remote_work_dir}/config" "$f"; then
     log "Inserindo criação de diretórios essenciais no início do master-commands."
-    printf "exec-start __all__ /dev/null mkdir -p %s/config %s/logs %s/tls-data %s/experiment-output %s/current-deployment-data/tls-data %s/current-deployment-data/raw-results\nexec-wait __all__ 2000\n\n" \
-      "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" \
+    printf "exec-start __all__ /dev/null mkdir -p %s/config %s/logs %s/tls-data %s/experiment-output %s/raw-results\nexec-wait __all__ 2000\n\n" \
+      "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" \
       | cat - "$f" > "${f}.tmp" && mv -f "${f}.tmp" "$f"
   fi
 
@@ -134,9 +135,7 @@ remote_exec "mkdir -p \
   '${remote_work_dir}/scripts' \
   '${remote_work_dir}/tls-data' \
   '${remote_work_dir}/experiment-output' \
-  '${remote_work_dir}/current-deployment-data' \
-  '${remote_work_dir}/current-deployment-data/tls-data' \
-  '${remote_work_dir}/current-deployment-data/raw-results' \
+  '${remote_work_dir}/raw-results' \
 "
 
 # ---------------------------------------------------------------------------
@@ -149,9 +148,8 @@ if [[ ! -d "${local_tls_dir}" ]]; then
   exit 1
 fi
 
-log "Copiando TLS de ${local_tls_dir} para o master (${remote_work_dir}/tls-data e ${remote_work_dir}/current-deployment-data/tls-data)..."
+log "Copiando TLS de ${local_tls_dir} para o master (${remote_work_dir}/tls-data)..."
 scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/tls-data/"
-scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/current-deployment-data/tls-data/"
 
 log "Validando presença de TLS no master..."
 remote_exec "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" || {
