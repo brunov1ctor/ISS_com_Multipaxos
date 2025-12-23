@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# deploy-remote.sh (reprodutível + fail-fast + paths canônicos + TLS SAN completo)
-
 set -euo pipefail
 
 ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
@@ -8,20 +6,9 @@ log_i() { echo "[INFO  ][$(ts)] $*"; }
 log_w() { echo "[WARN  ][$(ts)] $*" >&2; }
 log_e() { echo "[ERRO  ][$(ts)] $*" >&2; }
 
-# Aceita: true/false/1/0/yes/no
 cancel_instances="${cancel_instances:-false}"
-
-to_bool() {
-  case "${1:-false}" in
-    1|true|TRUE|yes|YES|y|Y) echo "true" ;;
-    *) echo "false" ;;
-  esac
-}
+to_bool() { case "${1:-false}" in 1|true|TRUE|yes|YES|y|Y) echo "true" ;; *) echo "false" ;; esac; }
 cancel_instances="$(to_bool "$cancel_instances")"
-
-# =====================================================================
-# 1) Variáveis esperadas do ambiente (deploy.sh + global-vars.sh)
-# =====================================================================
 
 if [[ -z "${exp_data_dir:-}" || -z "${instance_info_file:-}" ]]; then
   log_e "exp_data_dir ou instance_info_file não definidos."
@@ -29,7 +16,6 @@ if [[ -z "${exp_data_dir:-}" || -z "${instance_info_file:-}" ]]; then
   exit 1
 fi
 
-# Resolva para caminho absoluto para evitar CWD quebrar scripts internos
 if command -v realpath >/dev/null 2>&1; then
   instance_info_file="$(realpath "${instance_info_file}")"
   exp_data_dir="$(realpath "${exp_data_dir}")"
@@ -50,15 +36,13 @@ ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/d
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 DISC_PORT="${master_port:-${MASTER_PORT:-9999}}"
 
-# Caminho canônico do experimento no remoto (1 root só)
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
 remote_experiment_output_dir="${remote_experiment_output_dir:-${remote_work_dir}/experiment-output}"
 
-rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
+# >>> PUBLISHED ROOT (encurtado)
+published_root="${published_root:-/users/${remote_user}/iss/experiment-output}"
 
-# =====================================================================
-# 2) Descobrir IP do master e copiar instance-info para o experimento local
-# =====================================================================
+rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
 
 master_ip="$(awk 'NF>=4 && $4=="master"{print $2; exit}' "$instance_info_file" || true)"
 if [[ -z "${master_ip}" ]]; then
@@ -68,23 +52,16 @@ fi
 
 cp -f "$instance_info_file" "$exp_data_dir/$instance_info_file_name"
 
-log_i "instance-info: $instance_info_file"
 log_i "Master IP: $master_ip"
-log_i "Remote exp dir: ${remote_exp_dir}"
+log_i "Remote work dir: ${remote_work_dir}"
 log_i "Remote experiment-output dir: ${remote_experiment_output_dir}"
+log_i "Published root: ${published_root}"
 log_i "Discovery port: ${DISC_PORT}"
 
-# =====================================================================
-# 2b) TLS: gerar auth.pem com SAN de IPs públicos (col2) + privados (col3)
-# =====================================================================
-
+# TLS SAN (mantém teu bloco atual)
 log_i "Gerando certificado TLS (auth.pem) com SAN dos IPs públicos+privados do cluster..."
-
 tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
-if [[ ! -d "${tls_dir}" ]]; then
-  log_e "Diretório tls-data não encontrado: ${tls_dir}"
-  exit 1
-fi
+[[ -d "${tls_dir}" ]] || { log_e "Diretório tls-data não encontrado: ${tls_dir}"; exit 1; }
 
 mapfile -t all_ips < <(
   awk '{print $2"\n"$3}' "$instance_info_file" \
@@ -92,29 +69,20 @@ mapfile -t all_ips < <(
   | sort -u
 )
 
-if [[ "${#all_ips[@]}" -eq 0 ]]; then
-  log_e "Não foi possível extrair IPs (col 2/3) do instance-info: $instance_info_file"
-  exit 1
-fi
+[[ "${#all_ips[@]}" -gt 0 ]] || { log_e "Não extraí IPs do instance-info."; exit 1; }
 
 (
   cd "${tls_dir}"
   [[ -x "./generate-auth.sh" ]] || { log_e "generate-auth.sh não executável em ${tls_dir}"; exit 1; }
-
   ./generate-auth.sh "${all_ips[@]}"
-
   san="$(openssl x509 -in auth.pem -noout -ext subjectAltName || true)"
   for ip in "${all_ips[@]}"; do
     echo "$san" | grep -q "$ip" || { log_e "SAN não contém IP esperado: $ip"; echo "$san"; exit 1; }
   done
 )
+log_i "TLS OK."
 
-log_i "TLS OK: SAN contém IPs públicos e privados do cluster."
-
-# =====================================================================
-# 3) Garantir master-commands-template.cmd
-# =====================================================================
-
+# Gerar template se faltar
 template_path="$exp_data_dir/$local_master_command_template_file"
 deployment_file="$exp_data_dir/deployment.dpl"
 
@@ -124,31 +92,22 @@ if [[ ! -f "$template_path" ]]; then
   python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir" \
     || { log_e "Falha ao gerar master-commands-template.cmd"; exit 1; }
 else
-  log_i "Usando master-commands-template existente: $template_path"
+  log_i "Usando template existente: $template_path"
 fi
-
-# =====================================================================
-# 4) Gerar master-commands.cmd (envsubst)
-# =====================================================================
 
 export ssh_key_file="${remote_private_key_file:-}"
 export own_public_ip="$master_ip"
 export master_port="${DISC_PORT}"
 export status_file="$remote_status_file"
 
-log_i "Gerando master-commands.cmd a partir do template..."
+log_i "Gerando master-commands.cmd..."
 envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
   < "$template_path" > "$exp_data_dir/$local_master_command_file"
-
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
-log_i "master-commands.cmd pronto: $exp_data_dir/$local_master_command_file"
+log_i "master-commands.cmd pronto."
 
-# =====================================================================
-# 5) Reset remoto: matar processos + recriar layout canônico
-# =====================================================================
-
-log_i "Reset remoto: limpando ${remote_work_dir} e recriando layout canônico (sem current-deployment-data)."
-
+# Reset remoto (IMPORTANTE: mantém raw-results e também cria published_root no MASTER)
+log_i "Reset remoto..."
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET || true
 tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
@@ -165,14 +124,10 @@ EOF_RESET
   sleep 0.1
 done
 wait
-
 log_i "Reset remoto concluído."
 
-# =====================================================================
-# 6) Start master + validações
-# =====================================================================
-
-log_i "Iniciando master em $master_ip..."
+# Start master
+log_i "Iniciando master..."
 scripts/start-master.sh \
   "$remote_user" \
   "$master_ip" \
@@ -181,38 +136,23 @@ scripts/start-master.sh \
   "$exp_data_dir" \
   "$exp_data_dir/$local_master_command_file"
 
-log_i "Validando TLS no master..."
-rsh "$master_ip" "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" \
-  || { log_e "TLS não presente no master."; rsh "$master_ip" "ls -la '${remote_work_dir}/tls-data' || true" || true; exit 1; }
-
-log_i "Validando discoverymaster na porta ${DISC_PORT}..."
+log_i "Validando discoverymaster..."
 rsh "$master_ip" "ss -lntp | grep \":${DISC_PORT} \"" >/dev/null \
   || { log_e "discoverymaster não escutando ${DISC_PORT}."; rsh "$master_ip" "tail -n 200 '${remote_work_dir}/logs/discoverymaster.log' || true" || true; exit 1; }
-log_i "discoverymaster OK."
 
-# =====================================================================
-# 7) Start slaves (peers + 1client)
-# =====================================================================
-
+# Start slaves
 log_i "Iniciando slaves peers..."
 scripts/start-remote-slaves.sh "$exp_data_dir" 0 peers "$instance_info_file"
-
 log_i "Iniciando slaves 1client..."
 scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 
-log_i "Todos os slaves disparados."
-
-# =====================================================================
-# 8) Fetch de resultados (paths canônicos, sem symlink)
-# =====================================================================
-
-log_i "Coletando resultados..."
+# Fetch resultados -> PUBLISHED ROOT
+log_i "Coletando resultados para published_root=${published_root} ..."
 export REMOTE_WORK_DIR="${remote_work_dir}"
-export REMOTE_EXP_DIR="${remote_exp_dir}"
-export REMOTE_EXPERIMENT_OUTPUT_DIR="${remote_experiment_output_dir}"
+export INSTANCE_INFO_FILE="${instance_info_file}"
 
 set +e
-scripts/fetch-results.sh "$master_ip" "$exp_data_dir" > "$exp_data_dir/$local_result_fetching_log" 2>&1
+scripts/fetch-results.sh "$master_ip" "${published_root}" > "$exp_data_dir/$local_result_fetching_log" 2>&1
 fetch_rc=$?
 set -e
 
@@ -220,15 +160,24 @@ if [[ $fetch_rc -ne 0 ]]; then
   log_e "fetch-results.sh falhou (rc=${fetch_rc}). Log: $exp_data_dir/$local_result_fetching_log"
   exit $fetch_rc
 fi
-
 log_i "fetch-results.sh OK. Log: $exp_data_dir/$local_result_fetching_log"
 
-# =====================================================================
-# 9) Cancelar instâncias (se configurado)
-# =====================================================================
+# Rodar análise automática para cada RUN existente em published_root
+log_i "Rodando análise (gera .val) em ${published_root} ..."
+if compgen -G "${published_root}/[0-9][0-9][0-9][0-9]" > /dev/null; then
+  for run_dir in "${published_root}"/[0-9][0-9][0-9][0-9]; do
+    [[ -d "${run_dir}" ]] || continue
+    log_i "Analyze: ${run_dir}"
+    # não falha o deploy inteiro se um run estiver incompleto; mas loga
+    ./scripts/analyze/analyze.sh "${run_dir}" >> "${exp_data_dir}/analyze.log" 2>&1 || log_w "Analyze falhou em ${run_dir} (ver ${exp_data_dir}/analyze.log)"
+  done
+else
+  log_w "Nenhum RUN encontrado em ${published_root} para analisar."
+fi
 
+# Cancelar instâncias
 if [[ "$cancel_instances" == "true" ]]; then
-  log_i "Encerrando instâncias (cancel_instances=true)..."
+  log_i "Encerrando instâncias..."
   scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"
 else
   echo -e "Lembre-se de encerrar as VMs com:\n  cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name\n"
