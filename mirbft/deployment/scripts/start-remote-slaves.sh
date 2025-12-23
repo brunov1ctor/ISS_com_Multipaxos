@@ -46,7 +46,9 @@ SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
 remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"
-remote_exp_dir="${remote_exp_dir:-${remote_work_dir}/current-deployment-data}"
+# Layout canônico: usa o mesmo root (remote_work_dir) como exp_dir.
+# Assim não há duplicação de tls-data/ e raw-results/.
+remote_exp_dir="${remote_work_dir}"
 
 scp_retries="${scp_retries:-10}"
 
@@ -102,7 +104,6 @@ remote_mkdirs() {
              '${remote_work_dir}/config' \
              '${remote_work_dir}/tls-data' \
              '${remote_exp_dir}' \
-             '${remote_exp_dir}/tls-data' \
              '${remote_bin_dir}' \
     2>/dev/null || true
   " </dev/null
@@ -153,7 +154,7 @@ copy_tls_assets() {
   fi
 
   ssh ${ssh_options} "${remote_user}@${ip}" "\
-    mkdir -p '${remote_exp_dir}/tls-data' '${remote_work_dir}/tls-data' 2>/dev/null || true
+    mkdir -p '${remote_work_dir}/tls-data' 2>/dev/null || true
   " </dev/null || true
 
   local count=0
@@ -164,7 +165,7 @@ copy_tls_assets() {
 
     bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
       "${f}" \
-      "${remote_user}@${ip}:${remote_exp_dir}/tls-data/${base}"
+      "${remote_user}@${ip}:${remote_work_dir}/tls-data/${base}"
 
     ((count++)) || true
   done
@@ -179,19 +180,15 @@ remote_check_assets() {
       ls -1 '${remote_work_dir}/scripts' 2>/dev/null | wc -l; \
     echo -n '[remote-check] bins: '; \
       ls -1 '${remote_bin_dir}' 2>/dev/null | wc -l; \
-    if [ -d '${remote_exp_dir}/tls-data' ]; then \
-      echo -n '[remote-check] tls-data: '; \
-        ls -1 '${remote_exp_dir}/tls-data' 2>/dev/null | wc -l; \
-    else \
-      echo '[remote-check] tls-data: (sem tls-data no exp_dir)'; \
-    fi; \
+    echo -n '[remote-check] tls-data: '; \
+      ls -1 '${remote_work_dir}/tls-data' 2>/dev/null | wc -l; \
     test -x '${remote_bin_dir}/discoverymaster' && \
     test -x '${remote_bin_dir}/discoveryslave' && \
     test -x '${remote_bin_dir}/orderingpeer' && \
     test -x '${remote_bin_dir}/orderingclient' && \
-    test -f '${remote_exp_dir}/tls-data/ca.pem' && \
-    test -f '${remote_exp_dir}/tls-data/auth.pem' && \
-    test -f '${remote_exp_dir}/tls-data/auth.key'
+    test -f '${remote_work_dir}/tls-data/ca.pem' && \
+    test -f '${remote_work_dir}/tls-data/auth.pem' && \
+    test -f '${remote_work_dir}/tls-data/auth.key'
   " </dev/null
 }
 
@@ -219,13 +216,18 @@ copy_required_assets() {
   " </dev/null || true
 
   remote_kill_bins "${ip}"
+
   copy_bin_atomic "${ip}" discoverymaster
   copy_bin_atomic "${ip}" discoveryslave
   copy_bin_atomic "${ip}" orderingpeer
   copy_bin_atomic "${ip}" orderingclient
 
   copy_tls_assets "${ip}"
-  remote_check_assets "${ip}"
+
+  remote_check_assets "${ip}" || {
+    err "[remote-check] ${ip}: faltam assets (scripts/bin/tls)."
+    return 0
+  }
 }
 
 start_remote_slave() {
@@ -280,8 +282,12 @@ while read -r instance_id ctrl_ip data_ip role tag rest; do
 
   ((matched++)) || true
 
-  if [[ "${desired_count}" -gt 0 ]] && (( started >= desired_count )); then
-    break
+  if [[ "${desired_count}" -ne 0 && "${started}" -ge "${desired_count}" ]]; then
+    continue
+  fi
+
+  if [[ "${role}" != "slave" ]]; then
+    continue
   fi
 
   start_remote_slave "${instance_id}" "${ctrl_ip}" "${data_ip}" "${role}" "${tag}"
@@ -292,4 +298,6 @@ info "Resumo start-remote-slaves:"
 info "  total linhas lidas   = ${total}"
 info "  com tag=${wanted_tag} = ${matched}"
 info "  efetivamente startados = ${started}"
+
+exit 0
 
