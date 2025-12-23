@@ -1,181 +1,221 @@
 #!/bin/bash
+set -euo pipefail
+shopt -s nullglob
 
+# shellcheck source=/dev/null
 source scripts/global-vars.sh
-source scripts/remote-commands.sh
-source scripts/logging.sh
+
+ts() { date +"%Y-%m-%d %H:%M:%S"; }
+info(){ echo "[INFO  ][$(ts)] $*"; }
+warn(){ echo "[WARN  ][$(ts)] $*"; }
+err(){  echo "[ERRO  ][$(ts)] $*" >&2; }
 
 master_ip="${1:-${MASTER_IP:-}}"
 exp_dir="${2:-${exp_data_dir:-}}"
-instance_info="${3:-${instance_info:-}}"
 
-if [[ -z "${master_ip}" || -z "${exp_dir}" ]]; then
-  echo "Usage: $0 <master-ip> <exp-data-dir> [instance-info]"
-  echo "Example: $0 172.20.5.5 deployment-data/remote-0000 scripts/instance-info"
-  exit 1
+# Tenta inferir master_ip pelo instance-info, se necessário.
+if [[ -z "${master_ip}" && -n "${instance_info_file:-}" && -f "${instance_info_file}" ]]; then
+  master_ip="$(awk 'NF>=4 && $4=="master" {print $2; exit}' "${instance_info_file}" 2>/dev/null || true)"
 fi
 
-if [[ -z "${instance_info}" ]]; then
-  echo "ERROR: instance-info não informado (3º argumento) e variável instance_info não setada."
+if [[ -z "${master_ip}" || -z "${exp_dir}" ]]; then
+  err "fetch-results.sh precisa de master_ip e exp_dir."
+  err "  master_ip='${master_ip:-}' exp_dir='${exp_dir:-}' instance_info_file='${instance_info_file:-}'"
   exit 1
 fi
 
 mkdir -p "${exp_dir}/experiment-output" "${exp_dir}/_fetched_tars" "${exp_dir}/_debug"
 
+# Defaults canônicos (permite override via env exportado pelo deploy-remote.sh)
+remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+remote_exp_dir="${REMOTE_EXP_DIR:-${remote_exp_dir:-${remote_work_dir}/current-deployment-data}}"
+remote_experiment_output_dir="${REMOTE_EXPERIMENT_OUTPUT_DIR:-${remote_exp_dir}/experiment-output}"
+
+info "Iniciando fetch de resultados do master ${master_ip} para ${exp_dir}"
+info "remote_user=${remote_user}"
+info "remote_work_dir=${remote_work_dir}"
+info "remote_exp_dir=${remote_exp_dir}"
+info "remote_experiment_output_dir=${remote_experiment_output_dir}"
+info "ssh_options=${ssh_options}"
+echo
+
 # --------------------------------------------------------------------
-# Local canonical results location
-#
-# We keep a single canonical place for results on the controller node:
-#   /users/<remote_user>/iss/experiment-output
-#   /users/<remote_user>/iss/raw-results
-#
-# This avoids confusion with deployment-data/... and survives reboot/deploy.
-# You can override with ISS_ROOT=/some/path if needed.
+# Helpers: checar existência remota sem poluir log
 # --------------------------------------------------------------------
-ISS_ROOT="${ISS_ROOT:-/users/${remote_user}/iss}"
-LOCAL_EXPERIMENT_OUTPUT_DIR="${ISS_ROOT}/experiment-output"
-LOCAL_RAW_RESULTS_DIR="${ISS_ROOT}/raw-results"
+remote_has_glob() {
+  local ip="$1"
+  local pat="$2"
+  ssh $ssh_options "${remote_user}@${ip}" "ls -1 ${pat} >/dev/null 2>&1" </dev/null
+}
 
-mkdir -p "${LOCAL_EXPERIMENT_OUTPUT_DIR}" "${LOCAL_RAW_RESULTS_DIR}"
+remote_has_dir() {
+  local ip="$1"
+  local dir="$2"
+  ssh $ssh_options "${remote_user}@${ip}" "test -d '${dir}'" </dev/null >/dev/null 2>&1
+}
 
-info "fetch-results: master_ip=${master_ip} exp_dir=${exp_dir}"
-info "Canonical local results: ${LOCAL_EXPERIMENT_OUTPUT_DIR} and ${LOCAL_RAW_RESULTS_DIR}"
+rsync_glob_if_exists() {
+  local ip="$1"
+  local pat="$2"
+  local dst="$3"
 
-# ------------------------------------------------------------
-# 1) Descobre lista de máquinas do deployment (peers+clientes)
-# ------------------------------------------------------------
-info "Lendo IPs a partir de instance-info: ${instance_info}"
+  if remote_has_glob "$ip" "$pat"; then
+    info "Baixando: ${ip}:${pat}"
+    rsync -rtz --progress -e "ssh $ssh_options" \
+      "${remote_user}@${ip}:${pat}" \
+      "${dst}/"
+    return 0
+  else
+    warn "Não existe no remoto: ${ip}:${pat}"
+    return 1
+  fi
+}
 
-# Espera-se que o instance-info tenha linhas tipo:
-# master: 172.20.x.x
-# 0: 172.20.x.x
-# 1: 172.20.x.x
-# client: 172.20.x.x
-#
-# Vamos extrair todos os IPs exceto o master (vamos incluir o master também, se ele tiver resultados).
-all_ips=$(
-  awk '
-    NF>=2 {
-      # pega o último campo se parecer IP
-      for (i=1;i<=NF;i++) {
-        if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print $i
-      }
-    }
-  ' "${instance_info}" | sort -u
+rsync_dir_if_exists() {
+  local ip="$1"
+  local dir="$2"
+  local dst="$3"
+
+  if remote_has_dir "$ip" "$dir"; then
+    info "Baixando dir: ${ip}:${dir}"
+    rsync -rtz --progress -e "ssh $ssh_options" \
+      "${remote_user}@${ip}:${dir%/}/" \
+      "${dst}/"
+    return 0
+  else
+    warn "Dir não existe no remoto: ${ip}:${dir}"
+    return 1
+  fi
+}
+
+# --------------------------------------------------------------------
+# 0) Diagnóstico no master (não falha o script)
+# --------------------------------------------------------------------
+info "Diagnóstico no master: listando dirs e procurando outputs..."
+ssh $ssh_options "${remote_user}@${master_ip}" "
+  set -e;
+  echo '--- work dir ---';
+  ls -la '${remote_work_dir}' || true;
+  echo '--- logs ---';
+  ls -la '${remote_work_dir}/logs' 2>/dev/null || true;
+  echo '--- current-deployment-data ---';
+  ls -la '${remote_work_dir}/current-deployment-data' 2>/dev/null || true;
+  echo '--- raw-results ---';
+  ls -la '${remote_work_dir}/current-deployment-data/raw-results' 2>/dev/null || true;
+  echo '--- experiment-output (canônico) ---';
+  ls -la '${remote_experiment_output_dir}' 2>/dev/null || true;
+  echo '--- find experiment-output* (maxdepth 6) ---';
+  find '${remote_work_dir}' -maxdepth 6 \
+      \( -type d -name 'experiment-output' -o -type f -name 'experiment-output-*.tar.gz' \) \
+      2>/dev/null | head -n 200 || true;
+" </dev/null >"${exp_dir}/_debug/master-diag.txt" 2>&1 || true
+
+info "Salvei diagnóstico do master em: ${exp_dir}/_debug/master-diag.txt"
+echo
+
+# --------------------------------------------------------------------
+# 1) Busca .tar.gz em múltiplos paths (prioriza canônico)
+# --------------------------------------------------------------------
+tar_paths=(
+  "${remote_exp_dir}/raw-results/experiment-output-*.tar.gz"
+  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output-*.tar.gz"
+  "${remote_work_dir}/current-deployment-data/experiment-output-*.tar.gz"
+  "${remote_work_dir}/experiment-output-*.tar.gz"
 )
 
-if [[ -z "${all_ips}" ]]; then
-  echo "ERROR: não consegui extrair IPs de ${instance_info}"
-  exit 1
-fi
+found_tar=false
+for pat in "${tar_paths[@]}"; do
+  info "Tentando baixar tar(s) do master: ${pat}"
+  if rsync_glob_if_exists "${master_ip}" "${pat}" "${exp_dir}/_fetched_tars"; then
+    found_tar=true
+  fi
+  echo
+done
 
-info "IPs encontrados:"
-echo "${all_ips}" | sed 's/^/  - /'
+# --------------------------------------------------------------------
+# 2) Fallback: rsync de diretórios experiment-output (master e slaves)
+#     (prioriza canônico e só tenta se existir)
+# --------------------------------------------------------------------
+dir_paths=(
+  "${remote_experiment_output_dir}"
+  "${remote_work_dir}/current-deployment-data/experiment-output"
+  "${remote_work_dir}/current-deployment-data/raw-results/experiment-output"
+  "${remote_exp_dir}/raw-results/experiment-output"
+  "${remote_work_dir}/experiment-output"
+)
 
-# ------------------------------------------------------------
-# 2) Puxa os tars de logs/resultados e extrai
-# ------------------------------------------------------------
-# Os slaves costumam gerar /users/<user>/iss/current-deployment-data/experiment-output-000X.tar.gz
-# Vamos buscar todos os experiment-output-*.tar.gz (remote_log_archives).
-info "Buscando archives remotos: ${remote_log_archives}"
-info "Diretório remoto de onde vamos puxar: ${remote_exp_dir}"
+if [[ "${found_tar}" != "true" ]]; then
+  info "Nenhum tar encontrado. Fallback: tentando rsync de diretórios experiment-output..."
+  echo
 
-# Faz fetch de cada IP
-while read -r ip; do
-  [[ -z "${ip}" ]] && continue
-  info "== Fetch from ${ip} =="
+  info "Tentando no master primeiro..."
+  for d in "${dir_paths[@]}"; do
+    rsync_dir_if_exists "${master_ip}" "${d}" "${exp_dir}/experiment-output" || true
+  done
+  echo
 
-  # lista tars no remoto (pode ser vazio)
-  ssh_cmd="ls -1 ${remote_exp_dir}/${remote_log_archives} 2>/dev/null || true"
-  remote_tars=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${remote_user}@${ip}" "${ssh_cmd}" | tr -d '\r')
-
-  if [[ -z "${remote_tars}" ]]; then
-    info "Nenhum tar encontrado em ${ip}:${remote_exp_dir}/${remote_log_archives}"
-    continue
+  if [[ -z "${instance_info_file:-}" || ! -f "${instance_info_file:-}" ]]; then
+    err "instance_info_file não definido/encontrado; não dá para varrer slaves."
+    err "(sem tar e sem dir -> abortando)"
+    exit 2
   fi
 
-  info "Tars encontrados em ${ip}:"
-  echo "${remote_tars}" | sed 's/^/  - /'
+  while read -r instance_id ctrl_ip data_ip role tag; do
+    [[ -z "${instance_id:-}" ]] && continue
+    [[ "${instance_id:-}" =~ ^# ]] && continue
+    [[ "${role:-}" != "slave" ]] && continue
 
-  while read -r tarpath; do
-    [[ -z "${tarpath}" ]] && continue
-    tarname=$(basename "${tarpath}")
-    local_tar="${exp_dir}/_fetched_tars/${ip}--${tarname}"
-
-    info "Baixando ${ip}:${tarpath} -> ${local_tar}"
-    scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      "${remote_user}@${ip}:${tarpath}" "${local_tar}" || {
-        info "WARN: falha ao scp ${ip}:${tarpath}"
-        continue
-      }
-
-    info "Extraindo ${local_tar} em ${exp_dir}"
-    tar -xzf "${local_tar}" -C "${exp_dir}" || {
-      info "WARN: falha ao extrair ${local_tar}"
-      continue
-    }
-  done <<< "${remote_tars}"
-
-done <<< "${all_ips}"
-
-# ------------------------------------------------------------
-# 3) Fallback: se não existirem tars, tenta rsync direto do experiment-output/
-# ------------------------------------------------------------
-count_dirs=$(find "${exp_dir}/experiment-output" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-if [[ "${count_dirs}" -eq 0 ]]; then
-  info "Nenhum subdir em ${exp_dir}/experiment-output após extrair tars. Tentando rsync direto do experiment-output/ remoto."
-
-  while read -r ip; do
-    [[ -z "${ip}" ]] && continue
-
-    info "Rsync direto de ${ip}:${remote_exp_dir}/experiment-output/ ..."
-    rsync -az --ignore-missing-args \
-      -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-      "${remote_user}@${ip}:${remote_exp_dir}/experiment-output/" \
-      "${exp_dir}/experiment-output/" || true
-
-  done <<< "${all_ips}"
+    info "- slave ${instance_id} (${tag}) @ ${ctrl_ip}: tentando dirs..."
+    for d in "${dir_paths[@]}"; do
+      rsync_dir_if_exists "${ctrl_ip}" "${d}" "${exp_dir}/experiment-output" || true
+    done
+    echo
+  done < "${instance_info_file}"
 fi
 
-# ------------------------------------------------------------
-# 4) Verificação mínima
-# ------------------------------------------------------------
-count_dirs=$(find "${exp_dir}/experiment-output" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-if [[ "${count_dirs}" -eq 0 ]]; then
-  echo "ERROR: Ainda não há dados em ${exp_dir}/experiment-output."
-  echo "Dicas:"
-  echo "  - Verifique se os peers realmente geraram peer.log/peer.trc"
-  echo "  - Verifique permissões em ${remote_exp_dir} no remoto"
-  echo "  - Veja ${exp_dir}/_debug e logs do deploy"
-  exit 2
+# --------------------------------------------------------------------
+# 3) Se baixamos tars, descompactar para exp_dir/experiment-output
+# --------------------------------------------------------------------
+local_tars=("${exp_dir}/_fetched_tars"/experiment-output-*.tar.gz)
+
+if [[ ${#local_tars[@]} -gt 0 ]]; then
+  info "Descompactando ${#local_tars[@]} tar(s) em ${exp_dir}/experiment-output/ ..."
+  for t in "${local_tars[@]}"; do
+    bn="$(basename "$t")"
+    exp="$(echo "$bn" | sed -n 's/^experiment-output-\([0-9][0-9][0-9][0-9]\)-.*$/\1/p')"
+
+    if [[ -n "${exp}" ]]; then
+      info "[untar] ${bn} -> ${exp_dir}/experiment-output/${exp}"
+      mkdir -p "${exp_dir}/experiment-output/${exp}"
+      tar -xzf "$t" -C "${exp_dir}/experiment-output/${exp}"
+    else
+      warn "Não consegui inferir expID de '${bn}'. Extraindo no root de experiment-output."
+      info "[untar] ${bn} -> ${exp_dir}/experiment-output (sem expID)"
+      tar -xzf "$t" -C "${exp_dir}/experiment-output"
+    fi
+  done
+else
+  info "Nenhum .tar.gz obtido para extrair (talvez os logs tenham vindo só via rsync de experiment-output/)."
+fi
+
+# --------------------------------------------------------------------
+# 4) Verificação final (evita 'sucesso falso')
+# --------------------------------------------------------------------
+if [[ ! -d "${exp_dir}/experiment-output" ]]; then
+  err "experiment-output não existe após fetch."
+  exit 10
+fi
+
+count_dirs="$(find "${exp_dir}/experiment-output" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "${count_dirs}" == "0" ]]; then
+  err "experiment-output está vazio após fetch."
+  err "Veja: ${exp_dir}/_debug/master-diag.txt"
+  exit 11
 fi
 
 info "OK: experiment-output contém dados (${count_dirs} dirs)."
 info "Exemplos de arquivos (head):"
 find "${exp_dir}/experiment-output" -maxdepth 4 -type f | head -n 120 || true
 
-# --------------------------------------------------------------------
-# 5) Canonicalize results location on the local controller node
-#
-# Mirror what we fetched into /users/<user>/iss/{experiment-output,raw-results}
-# so the user always knows where to look, regardless of deployment-data run id.
-# --------------------------------------------------------------------
-info "Mirroring to canonical ISS dirs..."
-info "  -> ${LOCAL_EXPERIMENT_OUTPUT_DIR}"
-rsync -a --delete "${exp_dir}/experiment-output/" "${LOCAL_EXPERIMENT_OUTPUT_DIR}/" || true
-
-# raw-results is optional; if it exists, mirror it too.
-if [[ -d "${exp_dir}/raw-results" ]]; then
-  info "  -> ${LOCAL_RAW_RESULTS_DIR}"
-  rsync -a --delete "${exp_dir}/raw-results/" "${LOCAL_RAW_RESULTS_DIR}/" || true
-fi
-
-# Helpful pointer file
-{
-  echo "Fetched at: $(date -Is)"
-  echo "From exp_dir: ${exp_dir}"
-  echo "Master IP: ${master_ip}"
-  echo "Instance-info: ${instance_info}"
-} > "${LOCAL_EXPERIMENT_OUTPUT_DIR}/.last_fetch_info" 2>/dev/null || true
-
-info "Done. Canonical results are now in: ${LOCAL_EXPERIMENT_OUTPUT_DIR}"
+info "fetch-results finalizado."
 
