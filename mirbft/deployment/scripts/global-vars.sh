@@ -110,8 +110,13 @@ local_slave_log=slave-log.log
 #########################################
 
 # Arquivos/diretórios que serão removidos nos nós remotos ao iniciar um novo experimento.
-remote_delete_files="$remote_work_dir/experiment-output \
-$remote_work_dir/current-deployment-data \
+# What to wipe on each remote host before starting a new deployment.
+#
+# IMPORTANT: We keep "$remote_work_dir/experiment-output" as a stable,
+# canonical location for fetched results on the controller node. Deleting
+# it causes confusion because the directory becomes empty even though
+# results exist under deployment-data.
+remote_delete_files="$remote_work_dir/current-deployment-data \
 $remote_work_dir/master-ready \
 $remote_work_dir/master-log.log \
 $remote_work_dir/main_log.log \
@@ -162,36 +167,4 @@ if [[ -z "${remote_private_key_file:-}" ]]; then
     remote_private_key_file=""
   fi
 fi
-
-# Opções padrão de SSH:
-# - se existir chave, usa -i; senão, deixa o ssh usar o que o ambiente tiver.
-if [[ -z "${ssh_options:-}" ]]; then
-  if [[ -n "$remote_private_key_file" && -f "$remote_private_key_file" ]]; then
-    ssh_options="-i $remote_private_key_file -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-  else
-    ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-  fi
-fi
-
-# Opções de SCP (por padrão iguais às de SSH).
-scp_options="${scp_options:-$ssh_options}"
-
-#########################################
-# Configuração de análise contínua
-#########################################
-
-# Script de análise contínua (rodado no master).
-continuous_analysis_script="scripts/analyze/analyze-continuously.sh"
-
-#########################################
-# Arquivos de código que o deploy local pode querer copiar
-#########################################
-
-code_files_to_copy="$local_code_dir/Makefile
-$local_code_dir/deployment
-$local_code_dir/orderer
-$local_code_dir/protobufs
-$local_code_dir/tracing
-$local_code_dir/util
-$local_code_dir/run-protoc.sh"
 
