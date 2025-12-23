@@ -38,7 +38,6 @@ source "$deploy_dir/scripts/global-vars.sh"
 
 ########################################
 # Preflight: garante que os binários existem localmente
-# (não muda o cwd do script)
 ########################################
 
 ensure_local_binaries() {
@@ -94,7 +93,6 @@ ensure_local_binaries() {
   log_warn "Binários faltando: ${missing[*]}"
   log_info "Compilando apenas os binários faltantes via 'go install ./cmd/<bin>'..."
 
-  # *** IMPORTANTE: tudo dentro de subshell, NÃO altera cwd do deploy.sh ***
   (
     cd "$repo_dir" || {
       log_err "Não consegui entrar em $repo_dir"
@@ -196,11 +194,9 @@ config_generator_script=""
 exp_data_dir=""
 
 if [ "${1:-}" = "new" ]; then
-  # remote <instance-info> new [config_generator]
   new_experiment=true
   shift || true
 
-  # Escolhe automaticamente o próximo remote-XXXX
   idx=0
   while :; do
     candidate=$(printf "%s/remote-%04d" "$deployment_data_root" "$idx")
@@ -211,16 +207,12 @@ if [ "${1:-}" = "new" ]; then
     idx=$((idx + 1))
   done
 
-  # Script gerador de config (padrão, se não passado)
   config_generator_script="${1:-scripts/experiment-configuration/generate-config.sh}"
-
   log_info "Novo experimento. Diretório escolhido: $exp_data_dir"
 else
-  # remote <instance-info> <exp_data_dir>
   exp_data_dir="$1"
   shift || true
 
-  # Se for relativo, considere em relação a deployment_data_root
   if [[ "$exp_data_dir" != /* ]]; then
     exp_data_dir="$deployment_data_root/$exp_data_dir"
   fi
@@ -238,18 +230,12 @@ fi
 ########################################
 
 if $new_experiment; then
-  # Para experimento novo, criamos apenas o diretório raiz.
-  # O generate-config.sh é responsável por criar config/.
   mkdir -p "$exp_data_dir"
 else
-  # Para experimento existente, garantimos que config/ exista.
   mkdir -p "$exp_data_dir/config"
 fi
 
-# Em ambos os casos, garantimos logs/ e _debug/
-mkdir -p \
-  "$exp_data_dir/logs" \
-  "$exp_data_dir/_debug"
+mkdir -p "$exp_data_dir/logs" "$exp_data_dir/_debug"
 
 log_info "Garantidos diretórios locais em $exp_data_dir:"
 if $new_experiment; then
@@ -276,7 +262,6 @@ fi
 
 if $new_experiment; then
   if [ -n "$config_generator_script" ]; then
-    # Resolver path do script: relativo ao deployment_dir se não for absoluto
     if [[ "$config_generator_script" != /* ]]; then
       config_generator_script="$deploy_dir/$config_generator_script"
     fi
@@ -309,7 +294,6 @@ if [ -d "$exp_data_dir/config" ] || ls "$exp_data_dir"/config-*.yml >/dev/null 2
   rm -rf "$exp_data_dir/experiment-config"
   mkdir -p "$exp_data_dir/experiment-config"
 
-  # Copia configs tanto da raiz quanto de config/
   cp "$exp_data_dir"/config-*.yml "$exp_data_dir/experiment-config/" 2>/dev/null || true
   cp "$exp_data_dir"/config/config-*.yml "$exp_data_dir/experiment-config/" 2>/dev/null || true
 
@@ -325,7 +309,7 @@ if $init_only; then
 fi
 
 ########################################
-# Deploy remoto
+# Deploy remoto (EXECUTAR, NÃO SOURCEAR)
 ########################################
 
 log_sep "[DEPLOY] Iniciando deploy remoto"
@@ -333,18 +317,17 @@ log_info "Exp dir        : $exp_data_dir"
 log_info "Instance-info  : $instance_info_file"
 log_info "Data root      : $deployment_data_root"
 
-# Variáveis que scripts/deploy-remote.sh esperam encontrar
 export exp_data_dir
 export instance_info_file
 export deployment_data_root
 export dpl_filename
 export csv_filename
 
-# Executa o deploy remoto (sourced para compartilhar shell/variáveis do global-vars.sh)
-# shellcheck source=/dev/null
-if ! source "$deploy_dir/scripts/deploy-remote.sh"; then
-  log_err "scripts/deploy-remote.sh retornou erro."
-  exit 1
+# Executa como subprocesso (permite deploy-remote.sh usar exit sem matar deploy.sh)
+if ! bash "$deploy_dir/scripts/deploy-remote.sh"; then
+  rc=$?
+  log_err "scripts/deploy-remote.sh falhou (rc=$rc)."
+  exit "$rc"
 fi
 
 ########################################
@@ -384,8 +367,35 @@ then
   exit 11
 fi
 
+########################################
+# Publicar resultados em /users/Bruno/iss/experiment-output
+########################################
+
+log_sep "[PUBLISH] Exportando métricas para /users/${USER}/iss/experiment-output"
+
+publish_root="/users/${USER}/iss/experiment-output"
+publish_name="$(basename "$exp_data_dir")"     # ex: remote-0000
+publish_dir="${publish_root}/${publish_name}"
+
+mkdir -p "$publish_dir"
+
+# Copia o summary e os artefatos para um lugar “fixo”
+cp -f "$result_summary_path" "$publish_dir/result-summary.csv"
+rsync -a --delete \
+  "$exp_data_dir/experiment-output/" \
+  "$publish_dir/experiment-output/"
+
+# (Opcional) guardar alguns metadados úteis
+cp -f "$exp_data_dir/$csv_filename" "$publish_dir/$csv_filename" 2>/dev/null || true
+cp -f "$exp_data_dir/$dpl_filename" "$publish_dir/$dpl_filename" 2>/dev/null || true
+
+# latest -> último experimento
+ln -sfn "$publish_dir" "${publish_root}/latest"
+
+log_info "Publicado em: $publish_dir"
+log_info "Atalho: ${publish_root}/latest"
+
 echo
 echo "Done. Experiment data directory: $exp_data_dir"
-
 exit 0
 
