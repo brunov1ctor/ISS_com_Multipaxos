@@ -4,7 +4,12 @@ from collections import defaultdict
 import fileinput
 
 CLIENT_TIMEOUT = 480000  # ms
-SIGNAL_DELAY = "5s"
+
+# Antes era "5s". 5s costuma não ser suficiente para o orderingpeer flushar/fechar o trace (.trc)
+# após receber SIGINT. Aumentamos e adicionamos uma segunda fase SIGTERM.
+SIGNAL_DELAY = "20s"
+TERM_SIGNAL_DELAY = "5s"
+
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 MASTER_CONFIG_DIR = "experiment-config"
@@ -314,10 +319,20 @@ def runLocalClients(expID, clients):
 
 
 def stopPeers(peers):
-    output("# stop peers")
+    """
+    IMPORTANT:
+    orderingpeer só fecha/flush o trace (.trc) no shutdown gracioso após sinal.
+    Com SIGNAL_DELAY pequeno, o tar/scp pode acontecer antes do flush.
+    """
+    output("# stop peers (graceful: flush trace)")
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
+
+    # Fallback: se algum peer ficou preso, manda SIGTERM e dá mais um tempo.
+    for p in peers:
+        output("exec-signal {0} SIGTERM".format(p))
+    output("wait for {0}".format(TERM_SIGNAL_DELAY))
     output("")
 
 
@@ -340,7 +355,6 @@ def saveConfig(expID, slaves):
 def submitLogs(expID, slaves):
     output("# submit logs")
     for s in slaves:
-        # log amigável no slave sobre compactação
         output(
             "exec-start {0} /dev/null echo '[logs] tar experiment-output/{1}/slave-__id__ -> experiment-output-{1}-slave-__id__.tar.gz'".format(
                 s, expID
@@ -360,7 +374,6 @@ def submitLogs(expID, slaves):
 
     for s in slaves:
         if deplType == "remote":
-            # log amigável no slave sobre envio
             output(
                 "exec-start {0} /dev/null echo '[logs] scp experiment-output-{1}-slave-__id__.tar.gz -> $own_public_ip:{3}/raw-results/'".format(
                     s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR
