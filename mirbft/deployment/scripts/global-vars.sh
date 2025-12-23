@@ -66,7 +66,9 @@ remote_master_log="$remote_work_dir/master-log.log"
 remote_slave_log="$remote_work_dir/slave-log.log"
 
 # Diretório dos dados de experimento nos nós remotos.
-remote_exp_dir="$remote_work_dir/current-deployment-data"
+# Layout canônico: tudo em um único root (${remote_work_dir}).
+# (Evita duplicação de tls-data/ e raw-results/ e diretórios vazios.)
+remote_exp_dir="$remote_work_dir"
 
 # Diretório de configs remotas (onde deploy.sh copia config-000X.yml).
 remote_config_dir="$remote_work_dir/experiment-config"
@@ -111,7 +113,6 @@ local_slave_log=slave-log.log
 
 # Arquivos/diretórios que serão removidos nos nós remotos ao iniciar um novo experimento.
 remote_delete_files="$remote_work_dir/experiment-output \
-$remote_work_dir/current-deployment-data \
 $remote_work_dir/master-ready \
 $remote_work_dir/master-log.log \
 $remote_work_dir/main_log.log \
@@ -179,19 +180,4 @@ scp_options="${scp_options:-$ssh_options}"
 #########################################
 # Configuração de análise contínua
 #########################################
-
-# Script de análise contínua (rodado no master).
-continuous_analysis_script="scripts/analyze/analyze-continuously.sh"
-
-#########################################
-# Arquivos de código que o deploy local pode querer copiar
-#########################################
-
-code_files_to_copy="$local_code_dir/Makefile
-$local_code_dir/deployment
-$local_code_dir/orderer
-$local_code_dir/protobufs
-$local_code_dir/tracing
-$local_code_dir/util
-$local_code_dir/run-protoc.sh"
 

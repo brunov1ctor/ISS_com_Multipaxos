@@ -42,8 +42,9 @@ remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 DISC_PORT="${master_port:-${MASTER_PORT:-9999}}"
 
 # Caminho canônico do experimento no remoto (1 root só)
-remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
-remote_experiment_output_dir="${remote_experiment_output_dir:-${remote_work_dir}/experiment-output}"
+# Força layout sem current-deployment-data, mesmo que global-vars.sh tenha exportado algo.
+remote_exp_dir="${remote_work_dir}"
+remote_experiment_output_dir="${remote_work_dir}/experiment-output"
 
 rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
 
@@ -138,7 +139,7 @@ log_i "master-commands.cmd pronto: $exp_data_dir/$local_master_command_file"
 # 5) Reset remoto: matar processos + recriar layout canônico
 # =====================================================================
 
-log_i "Reset remoto: limpando ${remote_work_dir} e recriando layout canônico (sem current-deployment-data)."
+log_i "Reset remoto: limpando ${remote_work_dir} e recriando layout canônico."
 
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET || true
@@ -194,7 +195,7 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 log_i "Todos os slaves disparados."
 
 # =====================================================================
-# 8) Fetch de resultados (paths canônicos, sem symlink)
+# 8) Fetch de resultados (paths canônicos)
 # =====================================================================
 
 log_i "Coletando resultados..."
@@ -218,12 +219,10 @@ log_i "fetch-results.sh OK. Log: $exp_data_dir/$local_result_fetching_log"
 # 9) Cancelar instâncias (se configurado)
 # =====================================================================
 
-if $cancel_instances; then
-  log_i "Encerrando instâncias (cancel_instances=true)..."
-  scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"
-else
-  echo -e "Lembre-se de encerrar as VMs com:\n  cancel-cloud-instances.sh $exp_data_dir/$instance_info_file_name\n"
+if [[ "${cancel_instances}" == "true" ]]; then
+  log_w "cancel_instances=true: chamando cancel-cloud-instances.sh..."
+  scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name" || true
 fi
 
-log_i "deploy-remote.sh finalizado."
+exit 0
 
