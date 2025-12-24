@@ -24,8 +24,10 @@ var (
 	randomRequestPayload []byte
 )
 
-func enoughResponses(n int) bool { return n >= 1 }
-
+// Need more than one third of the peers to respond.
+func enoughResponses(n int) bool {
+	return n > membership.NumNodes()/3
+}
 
 func main() {
 	// Check number of parameters
