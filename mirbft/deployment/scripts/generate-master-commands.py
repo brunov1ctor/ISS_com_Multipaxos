@@ -382,20 +382,32 @@ def stopPeers(peers):
 
 
 def saveConfig(expID, slaves):
-    # Mantém por compatibilidade (mas o snapshotConfigNow já garante o config correto por-run)
-    output("# save config (best-effort)")
+    output("# Save config (best-effort, ensure dir exists)")
     for s in slaves:
+        # 1) Garantir diretório
+        output(
+            "exec-start {0} /dev/null mkdir -p experiment-output/{1}/slave-__id__".format(
+                s, expID
+            )
+        )
+        output(
+            "exec-wait {0} 5000".format(s)
+        )
+
+        # 2) Copiar config final
         output(
             "exec-start {0} /dev/null cp {1} experiment-output/{2}/slave-__id__/config.final.yml".format(
                 s, SLAVE_CONFIG_FILE, expID
             )
         )
         output(
-            "exec-wait {0} 2000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not log config file; "
-            "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
+            "exec-wait {0} 5000 "
+            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not log config file".format(
+                s, expID
+            )
         )
     output("")
+
 
 
 def submitLogs(expID, slaves):
