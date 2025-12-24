@@ -203,7 +203,7 @@ log_i "Todos os slaves disparados."
 # 7b) **CORREÇÃO**: esperar DONE antes de buscar resultados
 # =====================================================================
 
-master_done_timeout_secs="${MASTER_DONE_TIMEOUT_SECS:-900}"  # 15min default
+master_done_timeout_secs="${MASTER_DONE_TIMEOUT_SECS:-7200}"  # 2h default
 log_i "Aguardando DONE no status do master: ${remote_status_file} (timeout=${master_done_timeout_secs}s)..."
 
 done_ok=false
