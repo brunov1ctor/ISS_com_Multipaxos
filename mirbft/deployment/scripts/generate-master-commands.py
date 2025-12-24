@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os.path
 import sys
 from collections import defaultdict
@@ -23,6 +24,11 @@ LOCAL_MASTER_PORT = "9999"
 
 # Para dar tempo do fs assentar entre passos críticos (pouco, mas ajuda)
 FS_SETTLE_DELAY_MS = 2000
+
+# Timeouts mais generosos pros passos "best-effort"
+BEST_EFFORT_WAIT_MS = 15000       # cp/dir
+BEST_EFFORT_TAR_WAIT_MS = 120000  # tar pode demorar com logs grandes
+BEST_EFFORT_SCP_WAIT_MS = 180000  # scp pode oscilar
 
 lastFinished = -1
 deploymentSchedule = []
@@ -98,13 +104,14 @@ def pushConfigFiles(expID, slaves):
                 SCP_RETRY_COUNT,
             )
         )
+        # Aqui É FALHA REAL: se não buscar config, o experimento está inválido.
         output(
             "exec-wait {0} 60000 "
             "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not fetch config; "
             "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
         )
 
-    # Verifica cedo: config existe e tem conteúdo
+    # Verifica cedo: config existe e tem conteúdo (FALHA REAL)
     output("# verify config arrived")
     for s in slaves:
         output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
@@ -132,8 +139,9 @@ def snapshotConfigNow(expID, slaves):
                 s, SLAVE_CONFIG_FILE, expID
             )
         )
+        # Se snapshot falhar, a execução fica ambígua => manter FAILED aqui.
         output(
-            "exec-wait {0} 2000 "
+            "exec-wait {0} 5000 "
             "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not snapshot config; "
             "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
         )
@@ -152,7 +160,7 @@ def pushLocalConfigFiles(expID, slaves):
         )
         output("exec-wait {0} {1}".format(s, FS_SETTLE_DELAY_MS))
 
-    # Verifica cedo
+    # Verifica cedo (FALHA REAL)
     output("# verify config present (local)")
     for s in slaves:
         output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
@@ -176,6 +184,7 @@ def setBandwidth(expID, bandwidths):
                     s, expID, bandwidth
                 )
             )
+            # Se falhar, altera o experimento => manter FAILED.
             output(
                 "exec-wait {0} 2000 "
                 "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not set bandwidth; "
@@ -195,11 +204,8 @@ def unsetBandwidth(expID, bandwidths):
                     s, expID
                 )
             )
-            output(
-                "exec-wait {0} 2000 "
-                "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not unset bandwidth; "
-                "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
-            )
+            # BEST-EFFORT: não marcar FAILED; só tentar e seguir.
+            output("exec-wait {0} 5000".format(s))
     for s in bandwidths:
         output("sync {0}".format(s))
     output("")
@@ -266,6 +272,7 @@ def runClients(expID, clients):
         )
     timeout = CLIENT_TIMEOUT
     for c in clients:
+        # Aqui é FALHA REAL: client morreu/timeout => experimento inválido.
         output(
             "exec-wait {0} {2} "
             "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
@@ -382,36 +389,45 @@ def stopPeers(peers):
 
 
 def saveConfig(expID, slaves):
+    # BEST-EFFORT: garantir diretório e copiar config.final, sem marcar FAILED por timeout.
     output("# Save config (best-effort, ensure dir exists)")
     for s in slaves:
-        # 1) Garantir diretório
         output(
             "exec-start {0} /dev/null mkdir -p experiment-output/{1}/slave-__id__".format(
                 s, expID
             )
         )
-        output(
-            "exec-wait {0} 5000".format(s)
-        )
+    for s in slaves:
+        output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
 
-        # 2) Copiar config final
+    for s in slaves:
         output(
             "exec-start {0} /dev/null cp {1} experiment-output/{2}/slave-__id__/config.final.yml".format(
                 s, SLAVE_CONFIG_FILE, expID
             )
         )
-        output(
-            "exec-wait {0} 5000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not log config file".format(
-                s, expID
-            )
-        )
-    output("")
+    for s in slaves:
+        output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
 
+    for s in slaves:
+        output("sync {0}".format(s))
+    output("")
 
 
 def submitLogs(expID, slaves):
     output("# submit logs")
+
+    # BEST-EFFORT: tar + scp sem marcar FAILED.
+    # (Se falhar, o experimento ainda pode ser válido; só perde coleta.)
+    for s in slaves:
+        output(
+            "exec-start {0} /dev/null sh -lc 'mkdir -p experiment-output/{1}/slave-__id__'".format(
+                s, expID
+            )
+        )
+    for s in slaves:
+        output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
+
     for s in slaves:
         output(
             "exec-start {0} /dev/null echo '[logs] tar experiment-output/{1}/slave-__id__ -> experiment-output-{1}-slave-__id__.tar.gz'".format(
@@ -419,16 +435,12 @@ def submitLogs(expID, slaves):
             )
         )
         output(
-            "exec-start {0} /dev/null tar czf experiment-output-{1}-slave-__id__.tar.gz "
-            "experiment-output/{1}/slave-__id__".format(
+            "exec-start {0} /dev/null tar czf experiment-output-{1}-slave-__id__.tar.gz experiment-output/{1}/slave-__id__".format(
                 s, expID
             )
         )
-        output(
-            "exec-wait {0} 30000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not compress logs; "
-            "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
-        )
+    for s in slaves:
+        output("exec-wait {0} {1}".format(s, BEST_EFFORT_TAR_WAIT_MS))
 
     for s in slaves:
         if deplType == "remote":
@@ -463,11 +475,8 @@ def submitLogs(expID, slaves):
                 )
             )
 
-        output(
-            "exec-wait {0} 60000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not submit logs; "
-            "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
-        )
+    for s in slaves:
+        output("exec-wait {0} {1}".format(s, BEST_EFFORT_SCP_WAIT_MS))
 
     for s in slaves:
         output("sync {0}".format(s))
@@ -530,7 +539,6 @@ def generateCommands(expID, peers, clients):
     unsetBandwidth(expID, bandwidths)
 
     saveConfig(expID, slaves)
-
     submitLogs(expID, slaves)
     updateStatus(expID)
     output("")
