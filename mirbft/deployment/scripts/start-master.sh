@@ -112,7 +112,6 @@ patch_master_commands() {
   log "Patch do master-commands concluído."
 }
 
-# >>> IMPORTANTE: executar o patch de verdade
 patch_master_commands "${local_master_cmd}"
 
 # ---------------------------------------------------------------------------
@@ -186,10 +185,9 @@ fi
 
 # ---------------------------------------------------------------------------
 # 9) Iniciar discoverymaster no master
-#    **CORREÇÃO AQUI**: wrapper com trap para SEMPRE escrever DONE no status
+#    CORREÇÃO: wrapper sem set -u (pra trap não quebrar) + trap robusto
 # ---------------------------------------------------------------------------
 
-# Mantém compatibilidade com seu deploy-remote.sh
 remote_status_file="${remote_status_file:-${REMOTE_STATUS_FILE:-${remote_work_dir}/status}}"
 
 log "Iniciando discoverymaster (nohup) no master (wrapper garantindo DONE em ${remote_status_file})..."
@@ -198,19 +196,20 @@ remote_exec "
   cd '${remote_work_dir}'
   rm -f '${remote_status_file}' '${remote_work_dir}/master-ready' 2>/dev/null || true
 
-  # Wrapper: quando o discoverymaster sair (por sucesso ou erro),
-  # escreve DONE com rc e timestamp. (SIGKILL não dá para trapar.)
   nohup bash -lc '
-    set -euo pipefail
-    trap \"rc=\$?; echo DONE rc=\$rc at=\$(date -Iseconds) > \"\"${remote_status_file}\"\"\" EXIT
+    set -e
+    STATUS_FILE=\"${remote_status_file}\"
+    trap \"rc=\$?; echo DONE rc=\$rc at=\$(date -Iseconds) > \\\"\$STATUS_FILE\\\"\" EXIT
     exec \"${remote_bin_dir}/discoverymaster\" master \"${master_ip}:${DISCOVERY_PORT}\" \"${remote_work_dir}/master-commands.cmd\"
   ' > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null &
 "
 
 log "Checando se o master está escutando na porta ${DISCOVERY_PORT}..."
-if ! remote_exec "ss -lntp | grep \":${DISCOVERY_PORT} \"" >/dev/null 2>&1; then
+# (grep sem espaço no fim, ss varia entre distros)
+if ! remote_exec "ss -lntp | grep -q \":${DISCOVERY_PORT}\"" >/dev/null 2>&1; then
   log "FATAL: master não parece escutando na porta ${DISCOVERY_PORT}. Veja: ${remote_work_dir}/logs/discoverymaster.log"
   remote_exec "tail -n 120 '${remote_work_dir}/logs/discoverymaster.log' || true"
+  remote_exec "test -f '${remote_status_file}' && tail -n 5 '${remote_status_file}' || true"
   exit 1
 fi
 
