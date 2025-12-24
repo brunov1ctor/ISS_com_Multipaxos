@@ -136,6 +136,7 @@ log_i "Gerando master-commands.cmd a partir do template..."
 envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
   < "$template_path" > "$exp_data_dir/$local_master_command_file"
 
+# Mantém isso (bom), mas agora não dependemos mais dele para ter DONE.
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 log_i "master-commands.cmd pronto: $exp_data_dir/$local_master_command_file"
 
@@ -199,6 +200,30 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 log_i "Todos os slaves disparados."
 
 # =====================================================================
+# 7b) **CORREÇÃO**: esperar DONE antes de buscar resultados
+# =====================================================================
+
+master_done_timeout_secs="${MASTER_DONE_TIMEOUT_SECS:-900}"  # 15min default
+log_i "Aguardando DONE no status do master: ${remote_status_file} (timeout=${master_done_timeout_secs}s)..."
+
+done_ok=false
+for ((i=0; i<master_done_timeout_secs; i++)); do
+  if rsh "$master_ip" "test -f '${remote_status_file}' && tail -n 1 '${remote_status_file}' | grep -q '^DONE'"; then
+    done_ok=true
+    break
+  fi
+  sleep 1
+done
+
+if $done_ok; then
+  log_i "Master sinalizou DONE: $(rsh "$master_ip" "tail -n 1 '${remote_status_file}' || true")"
+else
+  log_w "Timeout esperando DONE. Vou tentar fetch mesmo assim (pode vir incompleto)."
+  log_w "Últimas linhas do status no master:"
+  rsh "$master_ip" "tail -n 5 '${remote_status_file}' || true" || true
+fi
+
+# =====================================================================
 # 8) Fetch de resultados (sempre para exp_data_dir/experiment-output)
 # =====================================================================
 
@@ -221,14 +246,11 @@ log_i "fetch-results.sh OK. Log: $exp_data_dir/$local_result_fetching_log"
 
 # =====================================================================
 # 8b) Publicar (cópia) para /users/<user>/iss/experiment-output
-#     (mantém canônico no exp_data_dir e só sincroniza para o publish)
 # =====================================================================
 
 log_i "Publicando (cópia) resultados em: ${published_root}"
 mkdir -p "${published_root}"
 
-# Copia o conteúdo de exp_data_dir/experiment-output/* para published_root/
-# (sem depender de symlink; sem mudar o verify do deploy.sh)
 rsync -rtz --delete \
   "${exp_data_dir}/experiment-output/" \
   "${published_root}/"

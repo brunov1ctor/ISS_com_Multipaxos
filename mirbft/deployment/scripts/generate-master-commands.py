@@ -107,9 +107,7 @@ def pushConfigFiles(expID, slaves):
     # Verifica cedo: config existe e tem conteúdo
     output("# verify config arrived")
     for s in slaves:
-        output(
-            "exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE)
-        )
+        output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
         output(
             "exec-wait {0} 2000 "
             "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Config missing after fetch; "
@@ -509,12 +507,8 @@ def generateCommands(expID, peers, clients):
     waitForSlaves(slaves)
     createLogDir(expID)
 
-    # garante config/ antes de baixar (não custa)
     ensureConfigDir(slaves)
-
     pushConfigFiles(expID, configFiles)
-
-    # Snapshot imediato do config para este run (corrige o “config global”)
     snapshotConfigNow(expID, slaves)
 
     setBandwidth(expID, bandwidths)
@@ -523,7 +517,6 @@ def generateCommands(expID, peers, clients):
     stopPeers(list(peers))
     unsetBandwidth(expID, bandwidths)
 
-    # best-effort extra
     saveConfig(expID, slaves)
 
     submitLogs(expID, slaves)
@@ -734,8 +727,10 @@ if deplType not in {"local", "cloud", "remote"}:
     )
 
 if deplType == "remote":
+    # Config sempre dentro de iss/experiment-config no $HOME remoto (compatível com o template)
     MASTER_CONFIG_DIR = "iss/experiment-config"
-    MASTER_EXP_DIR = "iss/current-deployment-data"
+    # **CORREÇÃO**: não usar iss/current-deployment-data; usa iss/ como root canônico
+    MASTER_EXP_DIR = "iss"
 
 inFileName = sys.argv[2]
 outFile = open(sys.argv[3], "w")
