@@ -179,6 +179,10 @@ remote_exec "
   nohup bash -lc '
     set +e
     STATUS_FILE=\"${remote_status_file}\"
+    # Garante que o diretório do status existe (evita falha se alguém removeu o arquivo ou o diretório pai).
+    mkdir -p \"\$(dirname \"\$STATUS_FILE\")\" 2>/dev/null || true
+    : > \"\$STATUS_FILE\" 2>/dev/null || true
+    chmod 664 \"\$STATUS_FILE\" 2>/dev/null || true
     echo STARTING at=\$(date -Iseconds) > \"\$STATUS_FILE\"
 
     \"${remote_bin_dir}/discoverymaster\" \"${DISCOVERY_PORT}\" file \"${remote_work_dir}/master-commands.cmd\"
