@@ -30,10 +30,6 @@ BEST_EFFORT_WAIT_MS = 15000       # cp/dir
 BEST_EFFORT_TAR_WAIT_MS = 120000  # tar pode demorar com logs grandes
 BEST_EFFORT_SCP_WAIT_MS = 180000  # scp pode oscilar
 
-# Stop peers: best-effort / hard-stop sequencing
-PEER_STOP_WAIT_MS = 2000
-PEER_STOP_KILL_WAIT_MS = 2000
-
 lastFinished = -1
 deploymentSchedule = []
 numSlaves = defaultdict(int)
@@ -386,52 +382,15 @@ def runLocalClients(expID, clients):
 
 def stopPeers(peers):
     """
-    NÃO usar exec-signal: em alguns cenários ele não derruba o orderingpeer
-    e o master fica preso/sem progresso.
-
-    Estratégia:
-      - pkill -INT (graceful)
-      - espera curta
-      - pkill -TERM
-      - espera curta
-      - pkill -KILL (garantia)
-    Tudo BEST-EFFORT (sem FAILED).
+    CORREÇÃO:
+    - Não tente matar orderingpeer via 'exec-start ... pkill ...', porque o discoveryslave
+      rejeita novos exec-start enquanto ele considera que já existe um comando em execução
+      (o processo iniciado por exec-start anterior).
+    - Use o comando nativo 'stop <tag>' do framework, que encerra o processo do tag.
     """
-    output("# stop peers (best-effort: INT -> TERM -> KILL)")
+    output("# stop peers (framework stop)")
     for p in peers:
-        output(
-            "exec-start {0} /dev/null bash -lc \"pkill -INT  -f '/users/Bruno/go/bin/orderingpeer' || true\"".format(
-                p
-            )
-        )
-    for p in peers:
-        output("exec-wait {0} {1}".format(p, PEER_STOP_WAIT_MS))
-    for p in peers:
-        output("sync {0}".format(p))
-
-    for p in peers:
-        output(
-            "exec-start {0} /dev/null bash -lc \"pkill -TERM -f '/users/Bruno/go/bin/orderingpeer' || true\"".format(
-                p
-            )
-        )
-    for p in peers:
-        output("exec-wait {0} {1}".format(p, PEER_STOP_WAIT_MS))
-    for p in peers:
-        output("sync {0}".format(p))
-
-    for p in peers:
-        output(
-            "exec-start {0} /dev/null bash -lc \"pkill -KILL -f '/users/Bruno/go/bin/orderingpeer' || true\"".format(
-                p
-            )
-        )
-    for p in peers:
-        output("exec-wait {0} {1}".format(p, PEER_STOP_KILL_WAIT_MS))
-    for p in peers:
-        output("sync {0}".format(p))
-
-    # Mantém o "wait" original como buffer global
+        output("stop {0}".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
     output("")
 
