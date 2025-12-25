@@ -57,7 +57,7 @@ debug_dir="${exp_data_dir}/_debug"
 mkdir -p "${debug_dir}"
 debug_log="${debug_dir}/start-master.${master_ip}.log"
 
-# Loga tudo em arquivo, mas mantém terminal mais limpo
+# Loga tudo em arquivo + também mostra no terminal (mas sem spam)
 exec > >(tee -a "${debug_log}") 2>&1
 
 log "master_ip=${master_ip} port=${DISCOVERY_PORT} user=${remote_user}"
@@ -158,8 +158,13 @@ fi
 
 # ---------------------------------------------------------------------------
 # Iniciar discoverymaster no master
-# CORREÇÃO CRÍTICA: usar assinatura certa:
+# Assinatura correta:
 #   discoverymaster <PORT> file <MASTER_COMMANDS_FILE>
+#
+# WRAPPER ROBUSTO:
+#   - cria status sempre
+#   - registra EXIT rc=...
+#   - não depende de trap
 # ---------------------------------------------------------------------------
 
 remote_status_file="${remote_status_file:-${REMOTE_STATUS_FILE:-${remote_work_dir}/status}}"
@@ -172,21 +177,28 @@ remote_exec "
   rm -f '${remote_status_file}' '${remote_work_dir}/master-ready' '\$ready_file' 2>/dev/null || true
 
   nohup bash -lc '
-    set -e
+    set +e
     STATUS_FILE=\"${remote_status_file}\"
-    trap \"rc=\$?; echo DONE rc=\$rc at=\$(date -Iseconds) > \\\"\$STATUS_FILE\\\"\" EXIT
-    exec \"${remote_bin_dir}/discoverymaster\" \"${DISCOVERY_PORT}\" file \"${remote_work_dir}/master-commands.cmd\"
+    echo STARTING at=\$(date -Iseconds) > \"\$STATUS_FILE\"
+
+    \"${remote_bin_dir}/discoverymaster\" \"${DISCOVERY_PORT}\" file \"${remote_work_dir}/master-commands.cmd\"
+    rc=\$?
+
+    echo EXIT rc=\$rc at=\$(date -Iseconds) > \"\$STATUS_FILE\"
+    exit \$rc
   ' > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null &
 "
 
-# Checar porta
+# Espera curtinho o LISTEN (2s) e valida. Se morrer rápido, status vai ter EXIT.
+sleep 2
+
 if ! remote_exec "ss -lntp | grep -q \":${DISCOVERY_PORT}\"" >/dev/null 2>&1; then
-  log "FATAL: discoverymaster não escutando :${DISCOVERY_PORT}"
+  log "WARN: discoverymaster não está LISTEN em :${DISCOVERY_PORT} (pode ter encerrado)."
+  remote_exec "ls -la '${remote_status_file}' 2>/dev/null || true; tail -n 5 '${remote_status_file}' 2>/dev/null || true"
   remote_exec "tail -n 120 '${remote_work_dir}/logs/discoverymaster.log' || true"
-  remote_exec "test -f '${remote_status_file}' && tail -n 5 '${remote_status_file}' || true"
   exit 1
 fi
 
-log "discoverymaster up on ${master_ip}:${DISCOVERY_PORT}"
+log "discoverymaster LISTEN on ${master_ip}:${DISCOVERY_PORT}"
 exit 0
 
