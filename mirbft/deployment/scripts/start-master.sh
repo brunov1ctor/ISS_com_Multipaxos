@@ -5,16 +5,14 @@ ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
 log() { echo "[start-master][$(ts)] $*"; }
 
 # ---------------------------------------------------------------------------
-# 1) Entrada e defaults robustos
-# ---------------------------------------------------------------------------
-
-# Ordem dos parâmetros:
+# Args:
 #   $1 = remote_user
 #   $2 = master_ip
 #   $3 = remote_work_dir
 #   $4 = remote_bin_dir
 #   $5 = exp_data_dir
 #   $6 = local_master_cmd
+# ---------------------------------------------------------------------------
 
 remote_user="${1:-${remote_user:-${REMOTE_USER:-$USER}}}"
 master_ip="${2:-${master_ip:-${MASTER_IP:-}}}"
@@ -28,33 +26,26 @@ ssh_options="${ssh_options:-${SSH_OPTIONS:-"-o StrictHostKeyChecking=no -o UserK
 
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Se exp_data_dir não vier por env/arg, tenta deduzir do PWD
+# Deduz exp_data_dir do PWD se possível
 if [[ -z "${exp_data_dir}" ]]; then
   if [[ "$PWD" =~ deployment-data/remote-[0-9]{4}$ ]]; then
     exp_data_dir="$PWD"
   fi
 fi
 
-# ---------------------------------------------------------------------------
-# 2) Checagens básicas
-# ---------------------------------------------------------------------------
-
+# Checagens
 if [[ -z "${master_ip}" ]]; then
   echo "FATAL: master_ip vazio (configure MASTER_IP/master_ip)." >&2
   exit 1
 fi
-
 if [[ -z "${exp_data_dir}" ]]; then
   echo "FATAL: exp_data_dir vazio (configure EXP_DATA_DIR/exp_data_dir)." >&2
   exit 1
 fi
 
-if [[ -z "${local_master_cmd}" ]]; then
-  if [[ -f "${exp_data_dir}/master-commands.cmd" ]]; then
-    local_master_cmd="${exp_data_dir}/master-commands.cmd"
-  fi
+if [[ -z "${local_master_cmd}" && -f "${exp_data_dir}/master-commands.cmd" ]]; then
+  local_master_cmd="${exp_data_dir}/master-commands.cmd"
 fi
-
 if [[ -z "${local_master_cmd}" || ! -f "${local_master_cmd}" ]]; then
   echo "FATAL: não encontrei master-commands.cmd." >&2
   echo "  exp_data_dir=${exp_data_dir}" >&2
@@ -66,30 +57,23 @@ debug_dir="${exp_data_dir}/_debug"
 mkdir -p "${debug_dir}"
 debug_log="${debug_dir}/start-master.${master_ip}.log"
 
-# Tudo logado nesse arquivo também
+# Loga tudo em arquivo, mas mantém terminal mais limpo
 exec > >(tee -a "${debug_log}") 2>&1
 
-log "remote_user=${remote_user}"
-log "master_ip=${master_ip}"
-log "ssh_options=${ssh_options}"
-log "remote_work_dir=${remote_work_dir}"
-log "remote_bin_dir=${remote_bin_dir}"
-log "exp_data_dir=${exp_data_dir}"
-log "DISCOVERY_PORT=${DISCOVERY_PORT}"
+log "master_ip=${master_ip} port=${DISCOVERY_PORT} user=${remote_user}"
+log "remote_work_dir=${remote_work_dir} remote_bin_dir=${remote_bin_dir}"
 log "local_master_cmd=${local_master_cmd}"
 log "debug_log=${debug_log}"
 
 # ---------------------------------------------------------------------------
-# 3) Patch do master-commands.cmd (não depender de PATH + paths consistentes)
+# Patch do master-commands.cmd (paths absolutos + layout remoto consistente)
 # ---------------------------------------------------------------------------
 
 patch_master_commands() {
   local f="$1"
   local bak="${f}.bak.$(date +%s)"
 
-  log "Ajustando master-commands.cmd (paths absolutos, sem sed frágil)..."
   cp -f "$f" "$bak"
-  log "Backup salvo em: $bak"
 
   # Trocas robustas (perl)
   perl -0777 -pe "s#\\bstubborn-scp\\.sh\\b#${remote_work_dir}/scripts/stubborn-scp.sh#g" -i "$f"
@@ -98,24 +82,22 @@ patch_master_commands() {
 
   # Ajusta caminhos remotos usados no master-commands (mantendo $own_public_ip literal)
   perl -0777 -pe "s#\\\$own_public_ip:iss/experiment-config/#\\\$own_public_ip:${remote_work_dir}/experiment-config/#g" -i "$f"
-  # Remove o layout legado current-deployment-data: tudo vive em ${remote_work_dir}/
   perl -0777 -pe "s#\\\$own_public_ip:iss/current-deployment-data/#\\\$own_public_ip:${remote_work_dir}/#g" -i "$f"
 
   # Garante criação dos diretórios essenciais no início
   if ! grep -q "mkdir -p ${remote_work_dir}/config" "$f"; then
-    log "Inserindo criação de diretórios essenciais no início do master-commands."
     printf "exec-start __all__ /dev/null mkdir -p %s/config %s/logs %s/tls-data %s/experiment-output %s/raw-results\nexec-wait __all__ 2000\n\n" \
       "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" \
       | cat - "$f" > "${f}.tmp" && mv -f "${f}.tmp" "$f"
   fi
 
-  log "Patch do master-commands concluído."
+  log "master-commands patched (bak: $(basename "$bak"))"
 }
 
 patch_master_commands "${local_master_cmd}"
 
 # ---------------------------------------------------------------------------
-# 4) Exec remoto helper
+# Exec remoto helper
 # ---------------------------------------------------------------------------
 
 remote_exec() {
@@ -123,10 +105,9 @@ remote_exec() {
 }
 
 # ---------------------------------------------------------------------------
-# 5) Garantir diretórios no master
+# Diretórios básicos no master
 # ---------------------------------------------------------------------------
 
-log "Criando diretórios básicos no master..."
 remote_exec "mkdir -p \
   '${remote_work_dir}' \
   '${remote_work_dir}/logs' \
@@ -138,7 +119,7 @@ remote_exec "mkdir -p \
 "
 
 # ---------------------------------------------------------------------------
-# 6) Copiar TLS (tls-data) para o master
+# Copiar TLS (tls-data) para o master
 # ---------------------------------------------------------------------------
 
 local_tls_dir="$(cd "${this_dir}/.." && pwd)/tls-data"
@@ -147,71 +128,65 @@ if [[ ! -d "${local_tls_dir}" ]]; then
   exit 1
 fi
 
-log "Copiando TLS de ${local_tls_dir} para o master (${remote_work_dir}/tls-data)..."
 scp ${ssh_options} -r "${local_tls_dir}/"* "${remote_user}@${master_ip}:${remote_work_dir}/tls-data/"
 
-log "Validando presença de TLS no master..."
 remote_exec "test -f '${remote_work_dir}/tls-data/ca.pem' -a -f '${remote_work_dir}/tls-data/auth.pem' -a -f '${remote_work_dir}/tls-data/auth.key'" || {
-  echo "FATAL: tls-data não foi copiado corretamente para o master em ${remote_work_dir}/tls-data." >&2
+  echo "FATAL: tls-data não foi copiado corretamente para ${remote_work_dir}/tls-data." >&2
   remote_exec "ls -la '${remote_work_dir}/tls-data' || true"
   exit 1
 }
 
 # ---------------------------------------------------------------------------
-# 7) Copiar master-commands.cmd e scripts auxiliares
+# Copiar master-commands.cmd e scripts auxiliares
 # ---------------------------------------------------------------------------
 
-log "Copiando master-commands.cmd para o master..."
 scp ${ssh_options} "${local_master_cmd}" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd"
 
-log "Copiando scripts auxiliares (stubborn-scp.sh, global-vars.sh)..."
 scp ${ssh_options} "${this_dir}/stubborn-scp.sh" "${remote_user}@${master_ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
 scp ${ssh_options} "${this_dir}/global-vars.sh"   "${remote_user}@${master_ip}:${remote_work_dir}/scripts/global-vars.sh"
 remote_exec "chmod +x '${remote_work_dir}/scripts/'*.sh || true"
 
 # ---------------------------------------------------------------------------
-# 8) Copiar experiment-config para o master (usa exp_data_dir primeiro)
+# Copiar experiment-config para o master
 # ---------------------------------------------------------------------------
 
 if [[ -d "${exp_data_dir}/experiment-config" ]]; then
-  log "Copiando configs de ${exp_data_dir}/experiment-config para o master..."
   scp ${ssh_options} -r "${exp_data_dir}/experiment-config" "${remote_user}@${master_ip}:${remote_work_dir}/"
-elif [[ -d "/users/${remote_user}/iss/experiment-config" ]]; then
-  log "Copiando configs de /users/${remote_user}/iss/experiment-config para o master..."
-  scp ${ssh_options} -r "/users/${remote_user}/iss/experiment-config" "${remote_user}@${master_ip}:${remote_work_dir}/"
 else
-  log "WARN: nenhum diretório experiment-config encontrado (nem em exp_data_dir nem em /users/${remote_user}/iss)."
+  log "WARN: ${exp_data_dir}/experiment-config não encontrado."
 fi
 
 # ---------------------------------------------------------------------------
-# 9) Iniciar discoverymaster no master
-#    CORREÇÃO: wrapper sem set -u (pra trap não quebrar) + trap robusto
+# Iniciar discoverymaster no master
+# CORREÇÃO CRÍTICA: usar assinatura certa:
+#   discoverymaster <PORT> file <MASTER_COMMANDS_FILE>
 # ---------------------------------------------------------------------------
 
 remote_status_file="${remote_status_file:-${REMOTE_STATUS_FILE:-${remote_work_dir}/status}}"
 
-log "Iniciando discoverymaster (nohup) no master (wrapper garantindo DONE em ${remote_status_file})..."
+log "starting discoverymaster..."
+
 remote_exec "
   set -euo pipefail
   cd '${remote_work_dir}'
-  rm -f '${remote_status_file}' '${remote_work_dir}/master-ready' 2>/dev/null || true
+  rm -f '${remote_status_file}' '${remote_work_dir}/master-ready' '\$ready_file' 2>/dev/null || true
 
   nohup bash -lc '
     set -e
     STATUS_FILE=\"${remote_status_file}\"
     trap \"rc=\$?; echo DONE rc=\$rc at=\$(date -Iseconds) > \\\"\$STATUS_FILE\\\"\" EXIT
-    exec \"${remote_bin_dir}/discoverymaster\" master \"${master_ip}:${DISCOVERY_PORT}\" \"${remote_work_dir}/master-commands.cmd\"
+    exec \"${remote_bin_dir}/discoverymaster\" \"${DISCOVERY_PORT}\" file \"${remote_work_dir}/master-commands.cmd\"
   ' > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null &
 "
 
-log "Checando se o master está escutando na porta ${DISCOVERY_PORT}..."
-# (grep sem espaço no fim, ss varia entre distros)
+# Checar porta
 if ! remote_exec "ss -lntp | grep -q \":${DISCOVERY_PORT}\"" >/dev/null 2>&1; then
-  log "FATAL: master não parece escutando na porta ${DISCOVERY_PORT}. Veja: ${remote_work_dir}/logs/discoverymaster.log"
+  log "FATAL: discoverymaster não escutando :${DISCOVERY_PORT}"
   remote_exec "tail -n 120 '${remote_work_dir}/logs/discoverymaster.log' || true"
   remote_exec "test -f '${remote_status_file}' && tail -n 5 '${remote_status_file}' || true"
   exit 1
 fi
 
-log "Master ativo em ${master_ip}:${DISCOVERY_PORT}."
+log "discoverymaster up on ${master_ip}:${DISCOVERY_PORT}"
+exit 0
 
