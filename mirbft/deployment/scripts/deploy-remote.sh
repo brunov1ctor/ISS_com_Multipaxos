@@ -8,7 +8,6 @@ log_i() { echo "[INFO  ][$(ts)] $*"; }
 log_w() { echo "[WARN  ][$(ts)] $*" >&2; }
 log_e() { echo "[ERRO  ][$(ts)] $*" >&2; }
 
-# Aceita: true/false/1/0/yes/no
 cancel_instances="${cancel_instances:-false}"
 
 # =====================================================================
@@ -21,7 +20,6 @@ if [[ -z "${exp_data_dir:-}" || -z "${instance_info_file:-}" ]]; then
   exit 1
 fi
 
-# Resolva para caminho absoluto para evitar CWD quebrar scripts internos
 if command -v realpath >/dev/null 2>&1; then
   instance_info_file="$(realpath "${instance_info_file}")"
   exp_data_dir="$(realpath "${exp_data_dir}")"
@@ -42,17 +40,15 @@ ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/d
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 DISC_PORT="${master_port:-${MASTER_PORT:-9999}}"
 
-# Caminho canônico do experimento no remoto (1 root só)
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
 remote_experiment_output_dir="${remote_experiment_output_dir:-${remote_work_dir}/experiment-output}"
 
-# Publicação local (consolidado no master/node-0): por padrão, /users/<user>/iss/experiment-output
 published_root="${published_root:-${PUBLISHED_ROOT:-${remote_work_dir}/experiment-output}}"
 
 rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
 
 # =====================================================================
-# 2) Descobrir IP do master e copiar instance-info para o experimento local
+# 2) Descobrir IP do master
 # =====================================================================
 
 master_ip="$(awk 'NF>=4 && $4=="master"{print $2; exit}' "$instance_info_file" || true)"
@@ -71,7 +67,7 @@ log_i "Published root (local): ${published_root}"
 log_i "Discovery port: ${DISC_PORT}"
 
 # =====================================================================
-# 2b) TLS: gerar auth.pem com SAN de IPs públicos (col2) + privados (col3)
+# 2b) TLS: gerar auth.pem com SAN dos IPs públicos+privados
 # =====================================================================
 
 log_i "Gerando certificado TLS (auth.pem) com SAN dos IPs públicos+privados do cluster..."
@@ -137,15 +133,14 @@ log_i "Gerando master-commands.cmd a partir do template..."
 envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
   < "$template_path" > "$exp_data_dir/$local_master_command_file"
 
-# Mantém isso (bom), mas agora não dependemos mais dele para ter DONE.
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 log_i "master-commands.cmd pronto: $exp_data_dir/$local_master_command_file"
 
 # =====================================================================
-# 5) Reset remoto: matar processos + recriar layout canônico
+# 5) Reset remoto
 # =====================================================================
 
-log_i "Reset remoto: limpando ${remote_work_dir} e recriando layout canônico (sem current-deployment-data)."
+log_i "Reset remoto: limpando ${remote_work_dir} e recriando layout canônico."
 
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET || true
@@ -158,7 +153,8 @@ mkdir -p '${remote_work_dir}' \
          '${remote_work_dir}/tls-data' \
          '${remote_work_dir}/experiment-output' \
          '${remote_work_dir}/raw-results'
-echo RUNNING > '${remote_status_file}'
+# status pode ser recriado pelo start-master, mas já deixa algo aqui
+echo RUNNING > '${remote_status_file}' 2>/dev/null || true
 EOF_RESET
   sleep 0.1
 done
@@ -167,7 +163,7 @@ wait
 log_i "Reset remoto concluído."
 
 # =====================================================================
-# 6) Start master + validações
+# 6) Start master
 # =====================================================================
 
 log_i "Iniciando master em $master_ip..."
@@ -189,7 +185,7 @@ rsh "$master_ip" "ss -lntp | grep \":${DISC_PORT} \"" >/dev/null \
 log_i "discoverymaster OK."
 
 # =====================================================================
-# 7) Start slaves (peers + 1client)
+# 7) Start slaves
 # =====================================================================
 
 log_i "Iniciando slaves peers..."
@@ -201,15 +197,16 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 log_i "Todos os slaves disparados."
 
 # =====================================================================
-# 7b) **CORREÇÃO**: esperar DONE antes de buscar resultados
+# 7b) Esperar DONE no status do master (ROBUSTO)
 # =====================================================================
 
-master_done_timeout_secs="${MASTER_DONE_TIMEOUT_SECS:-7200}"  # 2h default
+master_done_timeout_secs="${MASTER_DONE_TIMEOUT_SECS:-7200}"
 log_i "Aguardando DONE no status do master: ${remote_status_file} (timeout=${master_done_timeout_secs}s)..."
 
 done_ok=false
 for ((i=0; i<master_done_timeout_secs; i++)); do
-  if rsh "$master_ip" "test -f '${remote_status_file}' && tail -n 1 '${remote_status_file}' | grep -q '^DONE'"; then
+  # CORREÇÃO: procurar DONE em qualquer linha do arquivo, não só tail -n1
+  if rsh "$master_ip" "test -f '${remote_status_file}' && grep -q '^DONE' '${remote_status_file}'"; then
     done_ok=true
     break
   fi
@@ -217,15 +214,16 @@ for ((i=0; i<master_done_timeout_secs; i++)); do
 done
 
 if $done_ok; then
-  log_i "Master sinalizou DONE: $(rsh "$master_ip" "tail -n 1 '${remote_status_file}' || true")"
+  log_i "Master sinalizou DONE."
+  rsh "$master_ip" "tail -n 5 '${remote_status_file}' || true" || true
 else
   log_w "Timeout esperando DONE. Vou tentar fetch mesmo assim (pode vir incompleto)."
   log_w "Últimas linhas do status no master:"
-  rsh "$master_ip" "tail -n 5 '${remote_status_file}' || true" || true
+  rsh "$master_ip" "tail -n 10 '${remote_status_file}' || true" || true
 fi
 
 # =====================================================================
-# 8) Fetch de resultados (sempre para exp_data_dir/experiment-output)
+# 8) Fetch de resultados
 # =====================================================================
 
 log_i "Coletando resultados para exp_data_dir=${exp_data_dir} ..."
@@ -246,7 +244,7 @@ fi
 log_i "fetch-results.sh OK. Log: $exp_data_dir/$local_result_fetching_log"
 
 # =====================================================================
-# 8b) Publicar (cópia) para /users/<user>/iss/experiment-output
+# 8b) Publicar
 # =====================================================================
 
 log_i "Publicando (cópia) resultados em: ${published_root}"

@@ -57,7 +57,7 @@ debug_dir="${exp_data_dir}/_debug"
 mkdir -p "${debug_dir}"
 debug_log="${debug_dir}/start-master.${master_ip}.log"
 
-# Loga tudo em arquivo + também mostra no terminal (mas sem spam)
+# Loga tudo em arquivo + também mostra no terminal
 exec > >(tee -a "${debug_log}") 2>&1
 
 log "master_ip=${master_ip} port=${DISCOVERY_PORT} user=${remote_user}"
@@ -75,16 +75,13 @@ patch_master_commands() {
 
   cp -f "$f" "$bak"
 
-  # Trocas robustas (perl)
   perl -0777 -pe "s#\\bstubborn-scp\\.sh\\b#${remote_work_dir}/scripts/stubborn-scp.sh#g" -i "$f"
   perl -0777 -pe "s#\\borderingpeer\\b#${remote_bin_dir}/orderingpeer#g" -i "$f"
   perl -0777 -pe "s#\\borderingclient\\b#${remote_bin_dir}/orderingclient#g" -i "$f"
 
-  # Ajusta caminhos remotos usados no master-commands (mantendo $own_public_ip literal)
   perl -0777 -pe "s#\\\$own_public_ip:iss/experiment-config/#\\\$own_public_ip:${remote_work_dir}/experiment-config/#g" -i "$f"
   perl -0777 -pe "s#\\\$own_public_ip:iss/current-deployment-data/#\\\$own_public_ip:${remote_work_dir}/#g" -i "$f"
 
-  # Garante criação dos diretórios essenciais no início
   if ! grep -q "mkdir -p ${remote_work_dir}/config" "$f"; then
     printf "exec-start __all__ /dev/null mkdir -p %s/config %s/logs %s/tls-data %s/experiment-output %s/raw-results\nexec-wait __all__ 2000\n\n" \
       "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" "${remote_work_dir}" \
@@ -161,10 +158,9 @@ fi
 # Assinatura correta:
 #   discoverymaster <PORT> file <MASTER_COMMANDS_FILE>
 #
-# WRAPPER ROBUSTO:
-#   - cria status sempre
-#   - registra EXIT rc=...
-#   - não depende de trap
+# CORREÇÃO DEFINITIVA DO BUG:
+#   - se status some (arquivo ou diretório pai apagado), recria continuamente
+#   - se status virar diretório, remove e recria como arquivo
 # ---------------------------------------------------------------------------
 
 remote_status_file="${remote_status_file:-${REMOTE_STATUS_FILE:-${remote_work_dir}/status}}"
@@ -174,39 +170,56 @@ log "starting discoverymaster..."
 remote_exec "
   set -euo pipefail
   cd '${remote_work_dir}'
-  rm -f '${remote_status_file}' '${remote_work_dir}/master-ready' '\$ready_file' 2>/dev/null || true
+  rm -f '${remote_work_dir}/master-ready' 2>/dev/null || true
 
   nohup bash -lc '
     set +e
     STATUS_FILE=\"${remote_status_file}\"
-    # Garante que o diretório do status existe (evita falha se alguém removeu o arquivo ou o diretório pai).
-    mkdir -p \"\$(dirname \"\$STATUS_FILE\")\" 2>/dev/null || true
+    STATUS_DIR=\"\$(dirname \"\$STATUS_FILE\")\"
 
-    # === CORREÇÃO NECESSÁRIA ===
-    # Se alguém criou /users/Bruno/iss/status como DIRETÓRIO, rm -f não remove.
-    # Isso impede o arquivo status de nascer e o deploy trava esperando DONE.
+    mkdir -p \"\$STATUS_DIR\" 2>/dev/null || true
+
+    # Se existir como diretório, isso quebra rm -f e quebra o deploy. Corrige aqui.
     if [[ -d \"\$STATUS_FILE\" ]]; then rm -rf \"\$STATUS_FILE\" 2>/dev/null || true; fi
-    # ==========================
 
-    : > \"\$STATUS_FILE\" 2>/dev/null || true
+    echo STARTING at=\$(date -Iseconds) > \"\$STATUS_FILE\" 2>/dev/null || true
     chmod 664 \"\$STATUS_FILE\" 2>/dev/null || true
-    echo STARTING at=\$(date -Iseconds) > \"\$STATUS_FILE\"
+
+    # Watchdog: se apagarem /users/Bruno/iss/status (ou o diretório pai),
+    # recria para o deploy não travar esperando DONE.
+    (
+      while true; do
+        sleep 1
+        # se diretorio pai sumiu, recria
+        if [[ ! -d \"\$STATUS_DIR\" ]]; then mkdir -p \"\$STATUS_DIR\" 2>/dev/null || true; fi
+        # se status virou diretório, remove
+        if [[ -d \"\$STATUS_FILE\" ]]; then rm -rf \"\$STATUS_FILE\" 2>/dev/null || true; fi
+        # se status sumiu, recria
+        if [[ ! -f \"\$STATUS_FILE\" ]]; then
+          echo RUNNING-restored at=\$(date -Iseconds) > \"\$STATUS_FILE\" 2>/dev/null || true
+          chmod 664 \"\$STATUS_FILE\" 2>/dev/null || true
+        fi
+      done
+    ) &
+    WD_PID=\$!
 
     \"${remote_bin_dir}/discoverymaster\" \"${DISCOVERY_PORT}\" file \"${remote_work_dir}/master-commands.cmd\"
     rc=\$?
 
-    echo EXIT rc=\$rc at=\$(date -Iseconds) > \"\$STATUS_FILE\"
+    # encerra watchdog
+    kill \"\$WD_PID\" 2>/dev/null || true
+
+    echo EXIT rc=\$rc at=\$(date -Iseconds) > \"\$STATUS_FILE\" 2>/dev/null || true
     exit \$rc
   ' > '${remote_work_dir}/logs/discoverymaster.log' 2>&1 < /dev/null &
 "
 
-# Espera curtinho o LISTEN (2s) e valida. Se morrer rápido, status vai ter EXIT.
 sleep 2
 
 if ! remote_exec "ss -lntp | grep -q \":${DISCOVERY_PORT}\"" >/dev/null 2>&1; then
   log "WARN: discoverymaster não está LISTEN em :${DISCOVERY_PORT} (pode ter encerrado)."
-  remote_exec "ls -la '${remote_status_file}' 2>/dev/null || true; tail -n 5 '${remote_status_file}' 2>/dev/null || true"
-  remote_exec "tail -n 120 '${remote_work_dir}/logs/discoverymaster.log' || true"
+  remote_exec "ls -la '${remote_status_file}' 2>/dev/null || true; tail -n 10 '${remote_status_file}' 2>/dev/null || true"
+  remote_exec "tail -n 200 '${remote_work_dir}/logs/discoverymaster.log' || true"
   exit 1
 fi
 
