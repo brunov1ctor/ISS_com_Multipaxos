@@ -181,6 +181,13 @@ remote_exec "
     STATUS_FILE=\"${remote_status_file}\"
     # Garante que o diretório do status existe (evita falha se alguém removeu o arquivo ou o diretório pai).
     mkdir -p \"\$(dirname \"\$STATUS_FILE\")\" 2>/dev/null || true
+
+    # === CORREÇÃO NECESSÁRIA ===
+    # Se alguém criou /users/Bruno/iss/status como DIRETÓRIO, rm -f não remove.
+    # Isso impede o arquivo status de nascer e o deploy trava esperando DONE.
+    if [[ -d \"\$STATUS_FILE\" ]]; then rm -rf \"\$STATUS_FILE\" 2>/dev/null || true; fi
+    # ==========================
+
     : > \"\$STATUS_FILE\" 2>/dev/null || true
     chmod 664 \"\$STATUS_FILE\" 2>/dev/null || true
     echo STARTING at=\$(date -Iseconds) > \"\$STATUS_FILE\"
