@@ -9,7 +9,6 @@ SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 
-# Diretórios (relativos ao $HOME remoto via scp quando não há / absoluto)
 MASTER_CONFIG_DIR = "experiment-config"
 MASTER_EXP_DIR = "current-deployment-data"
 
@@ -22,13 +21,11 @@ LOCAL_MASTER_STATUS_FILE = "master-status"
 LOCAL_IP_ADDRESS = "127.0.0.1"
 LOCAL_MASTER_PORT = "9999"
 
-# Para dar tempo do fs assentar entre passos críticos (pouco, mas ajuda)
 FS_SETTLE_DELAY_MS = 2000
 
-# Timeouts mais generosos pros passos "best-effort"
-BEST_EFFORT_WAIT_MS = 15000       # cp/dir
-BEST_EFFORT_TAR_WAIT_MS = 120000  # tar pode demorar com logs grandes
-BEST_EFFORT_SCP_WAIT_MS = 180000  # scp pode oscilar
+BEST_EFFORT_WAIT_MS = 15000
+BEST_EFFORT_TAR_WAIT_MS = 120000
+BEST_EFFORT_SCP_WAIT_MS = 180000
 
 lastFinished = -1
 deploymentSchedule = []
@@ -70,7 +67,6 @@ def createLocalLogDir(expID):
 
 
 def ensureConfigDir(slaves):
-    # Garante diretório config/ no CWD do slave (onde o framework executa)
     output("# ensure config dir")
     for s in slaves:
         output("exec-start {0} /dev/null mkdir -p config".format(s))
@@ -104,14 +100,12 @@ def pushConfigFiles(expID, slaves):
                 SCP_RETRY_COUNT,
             )
         )
-        # Aqui É FALHA REAL: se não buscar config, o experimento está inválido.
         output(
             "exec-wait {0} 60000 "
             "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not fetch config; "
             "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
         )
 
-    # Verifica cedo: config existe e tem conteúdo (FALHA REAL)
     output("# verify config arrived")
     for s in slaves:
         output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
@@ -127,11 +121,6 @@ def pushConfigFiles(expID, slaves):
 
 
 def snapshotConfigNow(expID, slaves):
-    """
-    Snapshot do config do RUN *logo após* baixar.
-    Isso evita o bug clássico: runs seguintes sobrescrevem config/config.yml
-    antes do "save config" do run anterior.
-    """
     output("# snapshot config (per-run)")
     for s in slaves:
         output(
@@ -139,7 +128,6 @@ def snapshotConfigNow(expID, slaves):
                 s, SLAVE_CONFIG_FILE, expID
             )
         )
-        # Se snapshot falhar, a execução fica ambígua => manter FAILED aqui.
         output(
             "exec-wait {0} 5000 "
             "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not snapshot config; "
@@ -160,7 +148,6 @@ def pushLocalConfigFiles(expID, slaves):
         )
         output("exec-wait {0} {1}".format(s, FS_SETTLE_DELAY_MS))
 
-    # Verifica cedo (FALHA REAL)
     output("# verify config present (local)")
     for s in slaves:
         output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
@@ -184,7 +171,6 @@ def setBandwidth(expID, bandwidths):
                     s, expID, bandwidth
                 )
             )
-            # Se falhar, altera o experimento => manter FAILED.
             output(
                 "exec-wait {0} 2000 "
                 "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not set bandwidth; "
@@ -204,7 +190,6 @@ def unsetBandwidth(expID, bandwidths):
                     s, expID
                 )
             )
-            # BEST-EFFORT: não marcar FAILED; só tentar e seguir.
             output("exec-wait {0} 5000".format(s))
     for s in bandwidths:
         output("sync {0}".format(s))
@@ -230,36 +215,6 @@ def startPeers(expID, peers):
     output("")
 
 
-def startOldMirPeers(expID, peers):
-    output("# start oldmir peers")
-    for p in peers:
-        output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/peer.log server {2} ".format(
-                p, expID, OLDMIR_SERVER_CONFIG
-            )
-        )
-    output("")
-
-
-def startLocalPeers(expID, peers):
-    numPeers = 0
-    for p in peers:
-        numPeers += numSlaves[p]
-
-    output("# start local peers")
-    output("discover-reset {0}".format(numPeers))
-    for p in peers:
-        output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/peer.log orderingpeer "
-            "{2} {3}:{4} {3} {3} "
-            "experiment-output/{1}/slave-__id__/peer.trc experiment-output/{1}/slave-__id__/prof".format(
-                p, expID, SLAVE_CONFIG_FILE, LOCAL_IP_ADDRESS, LOCAL_MASTER_PORT
-            )
-        )
-    output("discover-wait")
-    output("")
-
-
 def runClients(expID, clients):
     output("# run clients")
     for c in clients:
@@ -272,7 +227,6 @@ def runClients(expID, clients):
         )
     timeout = CLIENT_TIMEOUT
     for c in clients:
-        # Aqui é FALHA REAL: client morreu/timeout => experimento inválido.
         output(
             "exec-wait {0} {2} "
             "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
@@ -283,111 +237,7 @@ def runClients(expID, clients):
     output("")
 
 
-def generateOldMirConfig(expID, peers, clients):
-    numPeers = 0
-    for p in peers:
-        numPeers += numSlaves[p]
-
-    output("# oldmir config")
-
-    output("discover-reset {0}".format(numPeers))
-    for p in peers:
-        output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/config-gen.log "
-            "oldmir-start.sh peer $own_public_ip:$master_port {2} {3} "
-            "experiment-output/{1}/slave-__id__/peer.log __public_ip__ __private_ip__".format(
-                p, expID, SLAVE_CONFIG_FILE, OLDMIR_SERVER_CONFIG
-            )
-        )
-    output("discover-wait")
-
-    for c in clients:
-        output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/config-gen.log "
-            "oldmir-start.sh client $own_public_ip:$master_port {2} {3} ".format(
-                c, expID, SLAVE_CONFIG_FILE, OLDMIR_CLIENT_CONFIG
-            )
-        )
-
-    timeoutSet = False
-    for p in peers:
-        timeout = CLIENT_TIMEOUT if not timeoutSet else 1000
-        timeoutSet = True
-        output(
-            "exec-wait {0} {2} "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Failed to generate configuration; "
-            "exec-wait {0} {3}".format(p, expID, timeout, FS_SETTLE_DELAY_MS)
-        )
-        output("sync {0}".format(p))
-
-    timeoutSet = False
-    for c in clients:
-        timeout = CLIENT_TIMEOUT if not timeoutSet else 1000
-        timeoutSet = True
-        output(
-            "exec-wait {0} {2} "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Failed to generate configuration; "
-            "exec-wait {0} {3}".format(c, expID, timeout, FS_SETTLE_DELAY_MS)
-        )
-        output("sync {0}".format(c))
-    output("")
-
-
-def runOldMirClients(expID, clients):
-    output("# run oldmir clients")
-    for c in clients:
-        output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/clients.log client {2} ".format(
-                c, expID, OLDMIR_CLIENT_CONFIG
-            )
-        )
-    timeoutSet = False
-    for c in clients:
-        timeout = CLIENT_TIMEOUT if not timeoutSet else 1000
-        timeoutSet = True
-        output(
-            "exec-wait {0} {2} "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
-            "exec-wait {0} {3}".format(c, expID, timeout, FS_SETTLE_DELAY_MS)
-        )
-        output("sync {0}".format(c))
-    output("")
-
-
-def runLocalClients(expID, clients):
-    output("wait for 2s")
-    output("# run local clients")
-
-    for c in clients:
-        output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/clients.log orderingclient "
-            "{2} {3}:{4} experiment-output/{1}/slave-__id__/client "
-            "experiment-output/{1}/slave-__id__/prof-client".format(
-                c, expID, SLAVE_CONFIG_FILE, LOCAL_IP_ADDRESS, LOCAL_MASTER_PORT
-            )
-        )
-
-    timeoutSet = False
-    for c in clients:
-        timeout = CLIENT_TIMEOUT if not timeoutSet else 1000
-        timeoutSet = True
-        output(
-            "exec-wait {0} {2} "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
-            "exec-wait {0} {3}".format(c, expID, timeout, FS_SETTLE_DELAY_MS)
-        )
-        output("sync {0}".format(c))
-    output("")
-
-
 def stopPeers(peers):
-    """
-    CORREÇÃO:
-    - Não tente matar orderingpeer via 'exec-start ... pkill ...', porque o discoveryslave
-      rejeita novos exec-start enquanto ele considera que já existe um comando em execução
-      (o processo iniciado por exec-start anterior).
-    - Use o comando nativo 'stop <tag>' do framework, que encerra o processo do tag.
-    """
     output("# stop peers (framework stop)")
     for p in peers:
         output("stop {0}".format(p))
@@ -396,14 +246,9 @@ def stopPeers(peers):
 
 
 def saveConfig(expID, slaves):
-    # BEST-EFFORT: garantir diretório e copiar config.final, sem marcar FAILED por timeout.
     output("# Save config (best-effort, ensure dir exists)")
     for s in slaves:
-        output(
-            "exec-start {0} /dev/null mkdir -p experiment-output/{1}/slave-__id__".format(
-                s, expID
-            )
-        )
+        output("exec-start {0} /dev/null mkdir -p experiment-output/{1}/slave-__id__".format(s, expID))
     for s in slaves:
         output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
 
@@ -423,24 +268,12 @@ def saveConfig(expID, slaves):
 
 def submitLogs(expID, slaves):
     output("# submit logs")
-
-    # BEST-EFFORT: tar + scp sem marcar FAILED.
-    # (Se falhar, o experimento ainda pode ser válido; só perde coleta.)
     for s in slaves:
-        output(
-            "exec-start {0} /dev/null sh -lc 'mkdir -p experiment-output/{1}/slave-__id__'".format(
-                s, expID
-            )
-        )
+        output("exec-start {0} /dev/null sh -lc 'mkdir -p experiment-output/{1}/slave-__id__'".format(s, expID))
     for s in slaves:
         output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
 
     for s in slaves:
-        output(
-            "exec-start {0} /dev/null echo '[logs] tar experiment-output/{1}/slave-__id__ -> experiment-output-{1}-slave-__id__.tar.gz'".format(
-                s, expID
-            )
-        )
         output(
             "exec-start {0} /dev/null tar czf experiment-output-{1}-slave-__id__.tar.gz experiment-output/{1}/slave-__id__".format(
                 s, expID
@@ -451,36 +284,17 @@ def submitLogs(expID, slaves):
 
     for s in slaves:
         if deplType == "remote":
-            output(
-                "exec-start {0} /dev/null echo '[logs] scp experiment-output-{1}-slave-__id__.tar.gz -> $own_public_ip:{2}/raw-results/'".format(
-                    s, expID, MASTER_EXP_DIR
-                )
-            )
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
                 "experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
             )
-            output(
-                scp_cmd.format(
-                    s,
-                    expID,
-                    SCP_RETRY_COUNT,
-                    MASTER_EXP_DIR,
-                )
-            )
+            output(scp_cmd.format(s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR))
         else:
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
                 "-i $ssh_key_file experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
             )
-            output(
-                scp_cmd.format(
-                    s,
-                    expID,
-                    SCP_RETRY_COUNT,
-                    MASTER_EXP_DIR,
-                )
-            )
+            output(scp_cmd.format(s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR))
 
     for s in slaves:
         output("exec-wait {0} {1}".format(s, BEST_EFFORT_SCP_WAIT_MS))
@@ -496,12 +310,6 @@ def updateStatus(finishedExpID):
     output("")
 
 
-def updateLocalStatus(finishedExpID):
-    output("# update local status")
-    output("write-file {0} {1}".format(LOCAL_MASTER_STATUS_FILE, finishedExpID))
-    output("")
-
-
 def stopAll():
     output("# stop all")
     output("stop __all__")
@@ -510,11 +318,6 @@ def stopAll():
 
 def writeReadyFile():
     output("write-file $ready_file READY")
-    output("")
-
-
-def writeLocalReadyFile():
-    output("write-file master-ready READY")
     output("")
 
 
@@ -551,67 +354,6 @@ def generateCommands(expID, peers, clients):
     output("")
 
 
-def generateOldMirCommands(expID, peers, clients):
-    output("#========================================")
-    output("# run {0} oldmir".format(expID))
-    output("#========================================")
-    output("")
-
-    config = peers.copy()
-    config.update(clients)
-
-    configFiles = {key: val[0] for key, val in config.items()}
-    bandwidths = {key: val[1] for key, val in config.items()}
-
-    slaves = list(peers) + list(clients)
-
-    waitForSlaves(slaves)
-    createLogDir(expID)
-
-    ensureConfigDir(slaves)
-    pushConfigFiles(expID, configFiles)
-    snapshotConfigNow(expID, slaves)
-
-    setBandwidth(expID, bandwidths)
-    generateOldMirConfig(expID, list(peers), list(clients))
-    runOldMirClients(expID, list(clients))
-    stopPeers(list(peers))
-    unsetBandwidth(expID, bandwidths)
-
-    saveConfig(expID, slaves)
-    submitLogs(expID, slaves)
-    updateStatus(expID)
-    output("")
-
-
-def generateLocalCommands(expID, peers, clients):
-    output("#========================================")
-    output("# run {0} local".format(expID))
-    output("#========================================")
-    output("")
-
-    config = peers.copy()
-    config.update(clients)
-
-    configFiles = {key: val[0] for key, val in config.items()}
-    bandwidths = {key: val[1] for key, val in config.items()}
-
-    slaves = list(peers) + list(clients)
-
-    waitForSlaves(slaves)
-    createLocalLogDir(expID)
-
-    ensureConfigDir(slaves)
-    pushLocalConfigFiles(expID, configFiles)
-    snapshotConfigNow(expID, slaves)
-
-    startLocalPeers(expID, list(peers))
-    runLocalClients(expID, list(clients))
-    stopPeers(list(peers))
-    updateLocalStatus(expID)
-    output("")
-
-
 def deploy(tokens):
     global defaultMachine
     global deploymentSchedule
@@ -629,15 +371,10 @@ def deploy(tokens):
                 n = int(tokens[0])
                 tag = tokens[1]
                 templateFile = machine
-
                 numSlaves[tag] += n
                 deploymentSchedule.append((lastFinished, n, tag, templateFile))
             else:
-                sys.exit(
-                    "ic-parse-experiment.py: deploy: must specify machine template before token '{0}'".format(
-                        tokens[0]
-                    )
-                )
+                sys.exit("ic-parse-experiment.py: deploy: must specify machine template before token '{0}'".format(tokens[0]))
             tokens = tokens[2:]
 
 
@@ -646,11 +383,6 @@ def run(expID, tokens):
     global idOffset
     global experimentIdDigits
     global skipAllExisting
-
-    runOldMir = False
-    if tokens[0] == "oldmir":
-        runOldMir = True
-        tokens = tokens[1:]
 
     if expID == "next":
         expID = ("{:0" + str(experimentIdDigits) + "d}").format(idOffset)
@@ -665,9 +397,7 @@ def run(expID, tokens):
     if os.path.isdir(outdir) and skipAllExisting:
         skip = True
     elif os.path.isdir(outdir):
-        sys.stderr.write(
-            "{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir)
-        )
+        sys.stderr.write("{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir))
         sys.stderr.flush()
         answer = sys.stdin.readline().strip()
         while answer not in {"s", "S", "a", "A", "c", "C"}:
@@ -708,32 +438,19 @@ def run(expID, tokens):
                 if os.path.isfile(configFile):
                     role[tokens[0]] = (config, bandwidth)
                 else:
-                    sys.exit(
-                        "ic-parse-experiment.py: config file not found: {0}".format(
-                            configFile
-                        )
-                    )
+                    sys.exit("ic-parse-experiment.py: config file not found: {0}".format(configFile))
             else:
-                sys.exit(
-                    "ic-parse-experiment.py: run {0}: must specify role and config before token '{1}'".format(
-                        expID, tokens[0]
-                    )
-                )
+                sys.exit("ic-parse-experiment.py: run {0}: must specify role and config before token '{1}'".format(expID, tokens[0]))
             tokens = tokens[1:]
 
     if not skip:
-        if runOldMir:
-            generateOldMirCommands(expID, peers, clients)
-        elif deplType in {"cloud", "remote"}:
+        if deplType in {"cloud", "remote"}:
             generateCommands(expID, peers, clients)
         elif deplType == "local":
-            generateLocalCommands(expID, peers, clients)
+            # não usado aqui
+            pass
         else:
-            sys.exit(
-                "generate-master-commands.py: unknown deployment type: {0} only know 'local' and 'cloud'".format(
-                    deplType
-                )
-            )
+            sys.exit("generate-master-commands.py: unknown deployment type")
 
     lastFinished = expID
 
@@ -743,20 +460,12 @@ def printDeploymentSchedule():
         print("{0} {1} {2} {3}".format(expID, n, tag, templateFile))
 
 
-# ============================================================
-# main
-# ============================================================
-
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
-    sys.exit(
-        "generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'"
-    )
+    sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
 
 if deplType == "remote":
-    # Config sempre dentro de iss/experiment-config no $HOME remoto (compatível com o template)
     MASTER_CONFIG_DIR = "iss/experiment-config"
-    # **CORREÇÃO**: não usar iss/current-deployment-data; usa iss/ como root canônico
     MASTER_EXP_DIR = "iss"
 
 inFileName = sys.argv[2]
@@ -773,7 +482,8 @@ experimentIdDigits = 3
 idOffset = 0
 
 if deplType == "local":
-    writeLocalReadyFile()
+    output("write-file master-ready READY")
+    output("")
 else:
     writeReadyFile()
 
@@ -803,10 +513,7 @@ output("#========================================")
 output("")
 output("# wait all slaves")
 waitForSlaves(numSlaves.keys())
-
 stopAll()
-
 printDeploymentSchedule()
-
 outFile.close()
 
