@@ -131,9 +131,10 @@ export ssh_key_file="${remote_private_key_file:-}"
 export own_public_ip="$master_ip"
 export master_port="${DISC_PORT}"
 export status_file="$remote_status_file"
+export ready_file="${remote_ready_file:-${remote_work_dir}/master-ready}"
 
 log_i "Gerando master-commands.cmd a partir do template..."
-envsubst '$ssh_key_file $own_public_ip $master_port $status_file' \
+envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
   < "$template_path" > "$exp_data_dir/$local_master_command_file"
 
 # Mantém isso (bom), mas agora não dependemos mais dele para ter DONE.
