@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import os.path
 import sys
 from collections import defaultdict
@@ -10,10 +9,14 @@ SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 
-MASTER_CONFIG_DIR = "experiment-config"
-MASTER_EXP_DIR = "current-deployment-data"
+# Base dir onde o ISS roda (nos slaves e no master)
+BASE_DIR = os.environ.get("ISS_BASE_DIR", "/users/Bruno/iss")
 
-SLAVE_CONFIG_FILE = "config/config.yml"
+MASTER_CONFIG_DIR = f"{BASE_DIR}/experiment-config"
+MASTER_EXP_DIR = BASE_DIR
+
+# Tudo absoluto nos slaves (evita depender do cwd do discoveryslave)
+SLAVE_CONFIG_FILE = f"{BASE_DIR}/config/config.yml"
 
 OLDMIR_SERVER_CONFIG = "config/oldmir-config-server.yml"
 OLDMIR_CLIENT_CONFIG = "config/oldmir-config-client.yml"
@@ -33,10 +36,8 @@ deploymentSchedule = []
 numSlaves = defaultdict(int)
 skipAllExisting = False
 
-
 def output(data: str):
     print(data, file=outFile)
-
 
 def waitForSlaves(slaves):
     output("# wait slaves")
@@ -44,43 +45,41 @@ def waitForSlaves(slaves):
         output("wait for slaves {0} {1}".format(s, numSlaves[s]))
     output("")
 
+def _exp_slave_dir(expID: str) -> str:
+    return f"{BASE_DIR}/experiment-output/{expID}/slave-__id__"
 
 def createLogDir(expID):
     output("# mkdir log dir")
     output(
-        "exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__".format(
-            expID
-        )
+        "exec-start __all__ /dev/null mkdir -p {0}".format(_exp_slave_dir(expID))
     )
     output("exec-wait __all__ {0}".format(FS_SETTLE_DELAY_MS))
     output("")
-
 
 def createLocalLogDir(expID):
     output("# mkdir local log dir")
     output(
-        "exec-start __all__ /dev/null mkdir -p experiment-output/{0}/slave-__id__/config".format(
-            expID
-        )
+        "exec-start __all__ /dev/null mkdir -p {0}/config".format(_exp_slave_dir(expID))
     )
     output("exec-wait __all__ {0}".format(FS_SETTLE_DELAY_MS))
     output("")
 
-
 def ensureConfigDir(slaves):
     output("# ensure config dir")
     for s in slaves:
-        output("exec-start {0} /dev/null mkdir -p config".format(s))
+        output("exec-start {0} /dev/null mkdir -p {1}/config".format(s, BASE_DIR))
     for s in slaves:
         output("exec-wait {0} {1}".format(s, FS_SETTLE_DELAY_MS))
     for s in slaves:
         output("sync {0}".format(s))
     output("")
 
-
 def pushConfigFiles(expID, slaves):
     output("# push config")
     for s, configFile in slaves.items():
+        # destino absoluto no slave
+        dest = SLAVE_CONFIG_FILE
+
         if deplType == "remote":
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-config.log stubborn-scp.sh {5} "
@@ -91,20 +90,21 @@ def pushConfigFiles(expID, slaves):
                 "exec-start {0} scp-output-{1}-config.log stubborn-scp.sh {5} "
                 "-i $ssh_key_file $own_public_ip:{2}/{3} {4}"
             )
+
         output(
             scp_cmd.format(
                 s,
                 expID,
                 MASTER_CONFIG_DIR,
                 configFile,
-                SLAVE_CONFIG_FILE,
+                dest,
                 SCP_RETRY_COUNT,
             )
         )
         output(
             "exec-wait {0} 60000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not fetch config; "
-            "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
+            "exec-start {0} {1}/FAILED echo Could not fetch config; "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
         )
 
     output("# verify config arrived")
@@ -112,32 +112,30 @@ def pushConfigFiles(expID, slaves):
         output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
         output(
             "exec-wait {0} 2000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Config missing after fetch; "
-            "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
+            "exec-start {0} {1}/FAILED echo Config missing after fetch; "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
         )
 
     for s in slaves:
         output("sync {0}".format(s))
     output("")
-
 
 def snapshotConfigNow(expID, slaves):
     output("# snapshot config (per-run)")
     for s in slaves:
         output(
-            "exec-start {0} /dev/null cp {1} experiment-output/{2}/slave-__id__/config.yml".format(
-                s, SLAVE_CONFIG_FILE, expID
+            "exec-start {0} /dev/null cp {1} {2}/config.yml".format(
+                s, SLAVE_CONFIG_FILE, _exp_slave_dir(expID)
             )
         )
         output(
             "exec-wait {0} 5000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not snapshot config; "
-            "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
+            "exec-start {0} {1}/FAILED echo Could not snapshot config; "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
         )
     for s in slaves:
         output("sync {0}".format(s))
     output("")
-
 
 def pushLocalConfigFiles(expID, slaves):
     output("# push local config")
@@ -154,14 +152,13 @@ def pushLocalConfigFiles(expID, slaves):
         output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
         output(
             "exec-wait {0} 2000 "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Config missing (local); "
-            "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
+            "exec-start {0} {1}/FAILED echo Config missing (local); "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
         )
 
     for s in slaves:
         output("sync {0}".format(s))
     output("")
-
 
 def setBandwidth(expID, bandwidths):
     output("# set bandwidth")
@@ -174,13 +171,12 @@ def setBandwidth(expID, bandwidths):
             )
             output(
                 "exec-wait {0} 2000 "
-                "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Could not set bandwidth; "
-                "exec-wait {0} {2}".format(s, expID, FS_SETTLE_DELAY_MS)
+                "exec-start {0} {1}/FAILED echo Could not set bandwidth; "
+                "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
             )
     for s in bandwidths:
         output("sync {0}".format(s))
     output("")
-
 
 def unsetBandwidth(expID, bandwidths):
     output("# unset bandwidth")
@@ -196,7 +192,6 @@ def unsetBandwidth(expID, bandwidths):
         output("sync {0}".format(s))
     output("")
 
-
 def startPeers(expID, peers):
     numPeers = 0
     for p in peers:
@@ -206,37 +201,34 @@ def startPeers(expID, peers):
     output("discover-reset {0}".format(numPeers))
     for p in peers:
         output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/peer.log orderingpeer "
+            "exec-start {0} {1}/peer.log orderingpeer "
             "{2} $own_public_ip:$master_port __public_ip__ __private_ip__ "
-            "experiment-output/{1}/slave-__id__/peer.trc experiment-output/{1}/slave-__id__/prof".format(
-                p, expID, SLAVE_CONFIG_FILE
+            "{1}/peer.trc {1}/prof".format(
+                p, _exp_slave_dir(expID), SLAVE_CONFIG_FILE
             )
         )
     output("discover-wait")
     output("")
 
-
 def runClients(expID, clients):
     output("# run clients")
     for c in clients:
         output(
-            "exec-start {0} experiment-output/{1}/slave-__id__/clients.log orderingclient "
-            "{2} $own_public_ip:$master_port experiment-output/{1}/slave-__id__/client "
-            "experiment-output/{1}/slave-__id__/prof-client".format(
-                c, expID, SLAVE_CONFIG_FILE
+            "exec-start {0} {1}/clients.log orderingclient "
+            "{2} $own_public_ip:$master_port {1}/client {1}/prof-client".format(
+                c, _exp_slave_dir(expID), SLAVE_CONFIG_FILE
             )
         )
     timeout = CLIENT_TIMEOUT
     for c in clients:
         output(
             "exec-wait {0} {2} "
-            "exec-start {0} experiment-output/{1}/slave-__id__/FAILED echo Client failed or timed out; "
-            "exec-wait {0} {3}".format(c, expID, timeout, FS_SETTLE_DELAY_MS)
+            "exec-start {0} {1}/FAILED echo Client failed or timed out; "
+            "exec-wait {0} {3}".format(c, _exp_slave_dir(expID), timeout, FS_SETTLE_DELAY_MS)
         )
         output("sync {0}".format(c))
         timeout //= 2
     output("")
-
 
 def stopPeers(peers):
     output("# stop peers (framework stop)")
@@ -245,18 +237,17 @@ def stopPeers(peers):
     output("wait for {0}".format(SIGNAL_DELAY))
     output("")
 
-
 def saveConfig(expID, slaves):
     output("# Save config (best-effort, ensure dir exists)")
     for s in slaves:
-        output("exec-start {0} /dev/null mkdir -p experiment-output/{1}/slave-__id__".format(s, expID))
+        output("exec-start {0} /dev/null mkdir -p {1}".format(s, _exp_slave_dir(expID)))
     for s in slaves:
         output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
 
     for s in slaves:
         output(
-            "exec-start {0} /dev/null cp {1} experiment-output/{2}/slave-__id__/config.final.yml".format(
-                s, SLAVE_CONFIG_FILE, expID
+            "exec-start {0} /dev/null cp {1} {2}/config.final.yml".format(
+                s, SLAVE_CONFIG_FILE, _exp_slave_dir(expID)
             )
         )
     for s in slaves:
@@ -266,18 +257,17 @@ def saveConfig(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
-
 def submitLogs(expID, slaves):
     output("# submit logs")
     for s in slaves:
-        output("exec-start {0} /dev/null sh -lc 'mkdir -p experiment-output/{1}/slave-__id__'".format(s, expID))
+        output("exec-start {0} /dev/null sh -lc 'mkdir -p {1}'".format(s, _exp_slave_dir(expID)))
     for s in slaves:
         output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
 
     for s in slaves:
         output(
-            "exec-start {0} /dev/null tar czf experiment-output-{1}-slave-__id__.tar.gz experiment-output/{1}/slave-__id__".format(
-                s, expID
+            "exec-start {0} /dev/null tar czf {1}/experiment-output-{2}-slave-__id__.tar.gz {3}".format(
+                s, BASE_DIR, expID, _exp_slave_dir(expID)
             )
         )
     for s in slaves:
@@ -285,18 +275,17 @@ def submitLogs(expID, slaves):
 
     for s in slaves:
         if deplType == "remote":
-            # IMPORTANT: MASTER_EXP_DIR must be absolute to avoid dumping into a relative path on master.
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
-                "experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
+                "{3}/experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{4}/raw-results/"
             )
-            output(scp_cmd.format(s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR))
+            output(scp_cmd.format(s, expID, SCP_RETRY_COUNT, BASE_DIR, MASTER_EXP_DIR))
         else:
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
-                "-i $ssh_key_file experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
+                "-i $ssh_key_file {3}/experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{4}/raw-results/"
             )
-            output(scp_cmd.format(s, expID, SCP_RETRY_COUNT, MASTER_EXP_DIR))
+            output(scp_cmd.format(s, expID, SCP_RETRY_COUNT, BASE_DIR, MASTER_EXP_DIR))
 
     for s in slaves:
         output("exec-wait {0} {1}".format(s, BEST_EFFORT_SCP_WAIT_MS))
@@ -305,23 +294,19 @@ def submitLogs(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
-
-def updateStatus(finishedExpID):
+def updateStatus(value: str):
     output("# update status")
-    output("write-file $status_file {0}".format(finishedExpID))
+    output("write-file $status_file {0}".format(value))
     output("")
-
 
 def stopAll():
     output("# stop all")
     output("stop __all__")
     output("wait for {0}".format(STOP_SLAVES_DELAY))
 
-
 def writeReadyFile():
     output("write-file $ready_file READY")
     output("")
-
 
 def generateCommands(expID, peers, clients):
     output("#========================================")
@@ -352,9 +337,10 @@ def generateCommands(expID, peers, clients):
 
     saveConfig(expID, slaves)
     submitLogs(expID, slaves)
+
+    # marca progresso
     updateStatus(expID)
     output("")
-
 
 def deploy(tokens):
     global defaultMachine
@@ -376,9 +362,12 @@ def deploy(tokens):
                 numSlaves[tag] += n
                 deploymentSchedule.append((lastFinished, n, tag, templateFile))
             else:
-                sys.exit("ic-parse-experiment.py: deploy: must specify machine template before token '{0}'".format(tokens[0]))
+                sys.exit(
+                    "ic-parse-experiment.py: deploy: must specify machine template before token '{0}'".format(
+                        tokens[0]
+                    )
+                )
             tokens = tokens[2:]
-
 
 def run(expID, tokens):
     global lastFinished
@@ -399,7 +388,9 @@ def run(expID, tokens):
     if os.path.isdir(outdir) and skipAllExisting:
         skip = True
     elif os.path.isdir(outdir):
-        sys.stderr.write("{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir))
+        sys.stderr.write(
+            "{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir)
+        )
         sys.stderr.flush()
         answer = sys.stdin.readline().strip()
         while answer not in {"s", "S", "a", "A", "c", "C"}:
@@ -413,7 +404,7 @@ def run(expID, tokens):
             skip = True
             skipAllExisting = True
         elif answer in {"c", "C"}:
-            os._exit(1)
+            sys.exit("User abort.")
 
     clients = {}
     peers = {}
@@ -442,7 +433,11 @@ def run(expID, tokens):
                 else:
                     sys.exit("ic-parse-experiment.py: config file not found: {0}".format(configFile))
             else:
-                sys.exit("ic-parse-experiment.py: run {0}: must specify role and config before token '{1}'".format(expID, tokens[0]))
+                sys.exit(
+                    "ic-parse-experiment.py: run {0}: must specify role and config before token '{1}'".format(
+                        expID, tokens[0]
+                    )
+                )
             tokens = tokens[1:]
 
     if not skip:
@@ -455,29 +450,20 @@ def run(expID, tokens):
 
     lastFinished = expID
 
-
 def printDeploymentSchedule():
     for expID, n, tag, templateFile in deploymentSchedule:
         print("{0} {1} {2} {3}".format(expID, n, tag, templateFile))
 
-
-# ---------------------------
-# CLI / mode selection
-# ---------------------------
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
     sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
 
+# remote também usa o mesmo BASE_DIR absoluto no master
 inFileName = sys.argv[2]
 outFile = open(sys.argv[3], "w")
 
 local_exp_data = sys.argv[4]
 local_config_dir = "config"
-
-# Normalize local_exp_data to absolute path (prevents many path bugs)
-if not local_exp_data.startswith("/"):
-    user = os.environ.get("USER", "Bruno")
-    local_exp_data = f"/users/{user}/" + local_exp_data.lstrip("/")
 
 defaultConfig = ""
 defaultMachine = ""
@@ -485,13 +471,6 @@ defaultBandwidth = "unlimited"
 
 experimentIdDigits = 3
 idOffset = 0
-
-if deplType == "remote":
-    # CRITICAL FIX:
-    # Use ABSOLUTE paths on the master, so scp target becomes /users/<user>/iss/raw-results/
-    user = os.environ.get("USER", "Bruno")
-    MASTER_EXP_DIR = f"/users/{user}/iss"
-    MASTER_CONFIG_DIR = f"{MASTER_EXP_DIR}/experiment-config"
 
 if deplType == "local":
     output("write-file master-ready READY")
@@ -526,6 +505,10 @@ output("")
 output("# wait all slaves")
 waitForSlaves(numSlaves.keys())
 stopAll()
+
+# IMPORTANT: quem espera pelo status normalmente espera DONE
+updateStatus("DONE")
+
 printDeploymentSchedule()
 outFile.close()
 
