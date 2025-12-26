@@ -252,6 +252,28 @@ def stopPeers(peers):
     output("")
 
 
+def stopPeerProcesses(expID, peers):
+    """Stop only orderingpeer processes (not the slave framework).
+
+    The `stop <tag>` command stops the discoveryslave framework for that tag.
+    After that, `exec-start`/`scp`/`tar` steps will fail.
+
+    We therefore send a best-effort SIGINT to orderingpeer processes *via exec-start*,
+    keep the framework alive to package logs, and only then `stop peers` at the end.
+    """
+    output("# stop orderingpeer processes (keep discoveryslave alive)")
+    for p in peers:
+        # -f to also match when patched to absolute path; || true to avoid non-zero if already exited
+        output(
+            "exec-start {0} /dev/null sh -lc 'pkill -INT -f "
+            "\"(^|/)(orderingpeer)(\\s|$)\" || true'".format(p)
+        )
+    for p in peers:
+        output("exec-wait {0} 6000".format(p))
+        output("sync {0}".format(p))
+    output("")
+
+
 def saveConfig(expID, slaves):
     output("# Save config (best-effort, ensure dir exists)")
     for s in slaves:
@@ -352,11 +374,18 @@ def generateCommands(expID, peers, clients):
     setBandwidth(expID, bandwidths)
     startPeers(expID, list(peers))
     runClients(expID, list(clients))
-    stopPeers(list(peers))
+
+    # IMPORTANT: do NOT stop the slave framework before packaging/scp.
+    # Stop only the orderingpeer processes first, then unset tc, then package + scp,
+    # and only after that stop the framework.
+    stopPeerProcesses(expID, list(peers))
     unsetBandwidth(expID, bandwidths)
 
     saveConfig(expID, slaves)
     submitLogs(expID, slaves)
+
+    # Now it's safe to stop the peers tag (framework stop).
+    stopPeers(list(peers))
 
     # marca progresso
     updateStatus(expID)
@@ -518,19 +547,5 @@ with open(inFileName) as inFile:
         elif tokens[0] == "bandwidth:":
             defaultBandwidth = tokens[1]
         else:
-            sys.exit("ic-parse-experiment.py: Unsupported command: {0}".format(tokens[0]))
-
-output("#========================================")
-output("# wrap up")
-output("#========================================")
-output("")
-output("# wait all slaves")
-waitForSlaves(numSlaves.keys())
-stopAll()
-
-# IMPORTANT: quem espera pelo status normalmente espera DONE
-updateStatus("DONE")
-
-printDeploymentSchedule()
-outFile.close()
+            sys.exit("generate-master-commands.py: unknown token: {0}".format(tokens[0]))
 
