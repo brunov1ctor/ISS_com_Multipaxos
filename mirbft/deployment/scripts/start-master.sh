@@ -5,7 +5,10 @@
 # - semântica:
 #     * status_file = estado lógico do experimento (DONE/ANALYZED terminal)
 #     * status_exit_file = resultado do processo do discoverymaster (EXIT rc=...)
-# - compatível com discoverymaster que usa flags (-addr/-cmd) OU args posicionais.
+# - compatível com discoverymaster que suporta:
+#     A) "master addr:port cmdfile"  (preferido neste repo)
+#     B) legacy: "<port> file <cmdfile>"
+#     C) (fallback) flags -addr/-cmd (caso exista em outro commit)
 
 set -euo pipefail
 
@@ -107,9 +110,10 @@ fi
 : > \"\$status_exit_file\" 2>/dev/null || true
 echo READY > \"\$ready_file\" 2>/dev/null || true
 
-# Detecta CLI do discoverymaster:
-# - se --help mencionar \"-addr\" e \"-cmd\" => usa flags
-# - caso contrário => usa args posicionais: <addr> <cmdfile>
+addr=\"0.0.0.0:\$master_port\"
+port=\"\$master_port\"
+
+# Descobre qual CLI existe neste binário.
 help_out=\"\"
 if \"\$bin\" --help >/tmp/dm.help 2>&1; then
   help_out=\"\$(cat /tmp/dm.help || true)\"
@@ -117,13 +121,17 @@ else
   help_out=\"\$(cat /tmp/dm.help || true)\"
 fi
 
-addr=\"0.0.0.0:\$master_port\"
-
 run_cmd=()
-if echo \"\$help_out\" | grep -q \"-addr\" && echo \"\$help_out\" | grep -q \"-cmd\"; then
+
+# Preferido neste repo: modo \"master\"
+if echo \"\$help_out\" | grep -q \"discoverymaster master\"; then
+  run_cmd=(\"\$bin\" master \"\$addr\" \"\$cmd_file\")
+# Fallback: flags (se algum commit antigo usar isso)
+elif echo \"\$help_out\" | grep -q \"-addr\" && echo \"\$help_out\" | grep -q \"-cmd\"; then
   run_cmd=(\"\$bin\" -addr \"\$addr\" -cmd \"\$cmd_file\")
+# Último fallback: modo legado (porta pura + file)
 else
-  run_cmd=(\"\$bin\" \"\$addr\" \"\$cmd_file\")
+  run_cmd=(\"\$bin\" \"\$port\" file \"\$cmd_file\")
 fi
 
 # Executa sem deixar -e matar o wrapper antes de capturar rc
@@ -144,7 +152,7 @@ fi
 exit \$rc
 ' >/dev/null 2>&1 & echo STARTED" | tee -a "$debug_log"
 
-# 5) Validação leve (não aborta aqui; deploy-remote valida de verdade)
+# 5) Validação leve (o deploy-remote valida de verdade)
 sleep 1
 if ! rsh "$master_ip" "ss -lntp 2>/dev/null | grep -q \":${master_port} \""; then
   log_w "discoverymaster ainda não aparece escutando ${master_port}. Veja: ${remote_logs_dir}/discoverymaster.log" | tee -a "$debug_log"
