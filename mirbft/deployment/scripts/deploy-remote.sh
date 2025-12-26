@@ -32,7 +32,12 @@ local_master_command_file="${local_master_command_file:-master-commands.cmd}"
 local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
 
 remote_user="${remote_user:-${USER}}"
-remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+#
+# IMPORTANTE:
+#   Não use /users/<user>/iss para armazenar logs/artifacts do experimento.
+#   Esse caminho tende a estourar quota (logs + scp-output + raw-results).
+#   Por padrão, use um workdir efêmero em /tmp.
+remote_work_dir="${remote_work_dir:-/tmp/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
@@ -116,6 +121,10 @@ deployment_file="$exp_data_dir/deployment.dpl"
 if [[ ! -f "$template_path" ]]; then
   log_i "Gerando master-commands-template.cmd..."
   [[ -f "$deployment_file" ]] || { log_e "Deployment file não encontrado: $deployment_file"; exit 1; }
+
+  # Garante que o template use o mesmo BASE_DIR do workdir remoto.
+  export ISS_BASE_DIR="$remote_work_dir"
+
   python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir" \
     || { log_e "Falha ao gerar master-commands-template.cmd"; exit 1; }
 else
@@ -155,8 +164,7 @@ mkdir -p '${remote_work_dir}' \
          '${remote_work_dir}/scripts' \
          '${remote_work_dir}/tls-data' \
          '${remote_work_dir}/experiment-config' \
-         '${remote_work_dir}/experiment-output' \
-         '${remote_work_dir}/raw-results'
+         '${remote_work_dir}/experiment-output'
 # status pode ser recriado pelo start-master, mas já deixa algo aqui
 echo RUNNING > '${remote_status_file}' 2>/dev/null || true
 EOF_RESET

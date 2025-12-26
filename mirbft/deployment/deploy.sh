@@ -238,84 +238,61 @@ fi
 mkdir -p "$exp_data_dir/logs" "$exp_data_dir/_debug"
 
 log_info "Garantidos diretórios locais em $exp_data_dir:"
-if $new_experiment; then
-  log_info "  - raiz do experimento (config/ ficará a cargo do generate-config.sh)"
-else
-  log_info "  - config/ (já existente ou criado agora)"
-fi
 log_info "  - logs/"
 log_info "  - _debug/"
+log_info "  - config/ (se aplicável)"
 
 ########################################
-# Preflight de build
+# Preflight build
 ########################################
 
-log_sep "[BUILD] Preflight: garantindo binários locais"
-if ! ensure_local_binaries; then
-  log_err "Preflight de build falhou. Abortando deploy."
-  exit 1
-fi
+ensure_local_binaries
 
 ########################################
-# Geração de configurações (apenas para 'new')
+# (Opcional) gerar config e deployment csv/dpl
 ########################################
 
 if $new_experiment; then
-  if [ -n "$config_generator_script" ]; then
-    if [[ "$config_generator_script" != /* ]]; then
+  log_sep "[INIT] Gerando config/deployment para o novo experimento"
+
+  # Gera config/ e deployment.csv/deployment.dpl via generator
+  if [[ ! -x "$config_generator_script" ]]; then
+    # resolve relativo ao deploy_dir se vier sem path
+    if [[ -x "$deploy_dir/$config_generator_script" ]]; then
       config_generator_script="$deploy_dir/$config_generator_script"
     fi
-
-    if [ ! -x "$config_generator_script" ]; then
-      log_err "Script de geração de config não é executável ou não existe: $config_generator_script"
-      exit 1
-    fi
-
-    log_sep "[CONFIG] Gerando configurações de experimento"
-    log_info "Script: $config_generator_script"
-    log_info "Exp dir: $exp_data_dir"
-    log_info "exp_id_offset: 0"
-
-    if ! "$config_generator_script" "$exp_data_dir" 0; then
-      log_err "Geração de config falhou para $exp_data_dir"
-      exit 1
-    fi
-  else
-    log_warn "Novo experimento, mas nenhum script de config informado. Assumindo que configs já existem."
   fi
-fi
 
-########################################
-# Preparar experiment-config/ para o start-master.sh
-########################################
+  if [[ ! -x "$config_generator_script" ]]; then
+    log_err "Config generator não encontrado/não executável: $config_generator_script"
+    exit 3
+  fi
 
-if [ -d "$exp_data_dir/config" ] || ls "$exp_data_dir"/config-*.yml >/dev/null 2>&1; then
-  log_sep "[CONFIG] Preparando experiment-config/ para deploy remoto"
-  rm -rf "$exp_data_dir/experiment-config"
-  mkdir -p "$exp_data_dir/experiment-config"
+  log_info "Config generator: $config_generator_script"
+  log_info "exp_data_dir    : $exp_data_dir"
 
-  cp "$exp_data_dir"/config-*.yml "$exp_data_dir/experiment-config/" 2>/dev/null || true
-  cp "$exp_data_dir"/config/config-*.yml "$exp_data_dir/experiment-config/" 2>/dev/null || true
+  (
+    cd "$deploy_dir" || exit 1
+    "$config_generator_script" "$exp_data_dir"
+  )
 
-  log_info "Configs copiados para $exp_data_dir/experiment-config:"
-  ls "$exp_data_dir/experiment-config" || true
-else
-  log_warn "Nenhum config-*.yml encontrado em $exp_data_dir ou $exp_data_dir/config; experiment-config/ não foi montado."
+  if [ ! -f "$exp_data_dir/$csv_filename" ] || [ ! -f "$exp_data_dir/$dpl_filename" ]; then
+    log_err "Arquivos esperados não foram gerados em $exp_data_dir: $csv_filename / $dpl_filename"
+    exit 4
+  fi
+
+  log_info "OK: gerados $csv_filename e $dpl_filename"
 fi
 
 if $init_only; then
-  log_info "Init only solicitado. Diretório do experimento: $exp_data_dir"
+  log_warn "--init-only: saindo após gerar experimento/config."
+  echo "Experiment data directory: $exp_data_dir"
   exit 0
 fi
 
 ########################################
-# Deploy remoto (EXECUTAR, NÃO SOURCEAR)
+# Exporta variáveis para deploy-remote.sh
 ########################################
-
-log_sep "[DEPLOY] Iniciando deploy remoto"
-log_info "Exp dir        : $exp_data_dir"
-log_info "Instance-info  : $instance_info_file"
-log_info "Data root      : $deployment_data_root"
 
 export exp_data_dir
 export instance_info_file
@@ -368,12 +345,13 @@ then
 fi
 
 ########################################
-# Publicar resultados em /users/Bruno/iss/experiment-output
+# Publicar resultados (evite /users/<user>/iss)
 ########################################
 
-log_sep "[PUBLISH] Exportando métricas para /users/${USER}/iss/experiment-output"
+log_sep "[PUBLISH] Exportando métricas para deployment-data/published/experiment-output"
 
-publish_root="/users/${USER}/iss/experiment-output"
+# Mantém um lugar fixo dentro do deployment-data (sem quota de /users).
+publish_root="${deployment_data_root}/published/experiment-output"
 publish_name="$(basename "$exp_data_dir")"     # ex: remote-0000
 publish_dir="${publish_root}/${publish_name}"
 
