@@ -11,7 +11,15 @@ STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 
 # Base dir onde o ISS roda (nos slaves e no master)
-BASE_DIR = os.environ.get("ISS_BASE_DIR", "/users/Bruno/iss")
+#
+# IMPORTANTE:
+#   Evite /users/<user>/iss (quota/arquivos pesados). O deploy exporta
+#   ISS_BASE_DIR para apontar para o workdir remoto; este default só é
+#   usado quando o ambiente não define ISS_BASE_DIR.
+BASE_DIR = os.environ.get(
+    "ISS_BASE_DIR",
+    f"/tmp/{os.environ.get('USER', 'user')}/iss",
+)
 
 MASTER_CONFIG_DIR = f"{BASE_DIR}/experiment-config"
 MASTER_EXP_DIR = BASE_DIR
@@ -86,14 +94,15 @@ def pushConfigFiles(expID, slaves):
         # destino absoluto no slave
         dest = SLAVE_CONFIG_FILE
 
+        # Não gere scp-output-* em disco: direciona stdout/err para /dev/null.
         if deplType == "remote":
             scp_cmd = (
-                "exec-start {0} scp-output-{1}-config.log stubborn-scp.sh {5} "
+                "exec-start {0} /dev/null stubborn-scp.sh {5} "
                 "$own_public_ip:{2}/{3} {4}"
             )
         else:
             scp_cmd = (
-                "exec-start {0} scp-output-{1}-config.log stubborn-scp.sh {5} "
+                "exec-start {0} /dev/null stubborn-scp.sh {5} "
                 "-i $ssh_key_file $own_public_ip:{2}/{3} {4}"
             )
 
@@ -296,40 +305,11 @@ def saveConfig(expID, slaves):
 
 
 def submitLogs(expID, slaves):
-    output("# submit logs")
+    # submitLogs era a etapa que empacotava + copiava logs via tar/scp (pesado)
+    # e ainda criava scp-output-*.log. Desativado por padrão.
+    output("# submit logs (DESATIVADO - evita tar/scp pesado e scp-output-*.log)")
     for s in slaves:
-        output("exec-start {0} /dev/null sh -lc 'mkdir -p {1}'".format(s, _exp_slave_dir(expID)))
-    for s in slaves:
-        output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
-
-    for s in slaves:
-        output(
-            "exec-start {0} /dev/null tar czf {1}/experiment-output-{2}-slave-__id__.tar.gz {3}".format(
-                s, BASE_DIR, expID, _exp_slave_dir(expID)
-            )
-        )
-    for s in slaves:
-        output("exec-wait {0} {1}".format(s, BEST_EFFORT_TAR_WAIT_MS))
-
-    for s in slaves:
-        if deplType == "remote":
-            scp_cmd = (
-                "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
-                "{3}/experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{4}/raw-results/"
-            )
-            output(scp_cmd.format(s, expID, SCP_RETRY_COUNT, BASE_DIR, MASTER_EXP_DIR))
-        else:
-            scp_cmd = (
-                "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
-                "-i $ssh_key_file {3}/experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{4}/raw-results/"
-            )
-            output(scp_cmd.format(s, expID, SCP_RETRY_COUNT, BASE_DIR, MASTER_EXP_DIR))
-
-    for s in slaves:
-        output("exec-wait {0} {1}".format(s, BEST_EFFORT_SCP_WAIT_MS))
-
-    for s in slaves:
-        output("sync {0}".format(s))
+        output("exec-start {0} /dev/null true".format(s))
     output("")
 
 
@@ -382,6 +362,7 @@ def generateCommands(expID, peers, clients):
     unsetBandwidth(expID, bandwidths)
 
     saveConfig(expID, slaves)
+    # NÃO empacota/copia logs via tar/scp (pesado) e NÃO gera scp-output-*.log.
     submitLogs(expID, slaves)
 
     # Now it's safe to stop the peers tag (framework stop).
@@ -520,32 +501,60 @@ defaultConfig = ""
 defaultMachine = ""
 defaultBandwidth = "unlimited"
 
-experimentIdDigits = 3
+# ------------------------------------------------------------
+# Parse do .dpl (mesmo formato do script original)
+# ------------------------------------------------------------
+
+with open(inFileName) as f:
+    lines = f.readlines()
+
+tokens = []
+for l in lines:
+    l = l.strip()
+    if l == "" or l.startswith("#"):
+        continue
+    tokens += l.split()
+
+defaultMachine = ""
+defaultConfig = ""
+defaultBandwidth = "unlimited"
+
 idOffset = 0
+experimentIdDigits = 4
 
-if deplType == "local":
-    output("write-file master-ready READY")
-    output("")
-else:
-    writeReadyFile()
+# Sintaxe do dpl: <n> <tag> machine: <template> run: <id> peers:/clients: ...
+# O parser original usa essas sentinelas:
+defaultMachine = ""
+defaultConfig = ""
+defaultBandwidth = "unlimited"
+defaultMachineTag = ""
+defaultConfigTag = ""
 
-with open(inFileName) as inFile:
-    for line in inFile:
-        if line.strip() == "" or line.strip().startswith("#"):
-            continue
-
-        tokens = line.split()
-
-        if tokens[0] == "deploy":
-            deploy(tokens[1:])
-        elif tokens[0] == "run":
-            run(tokens[1], tokens[2:])
-        elif tokens[0] == "config:":
-            defaultConfig = tokens[1]
-        elif tokens[0] == "machine:":
-            defaultMachine = tokens[1]
-        elif tokens[0] == "bandwidth:":
-            defaultBandwidth = tokens[1]
+# O arquivo .dpl é interpretado por dois comandos principais: deploy(...) e run(...)
+i = 0
+while i < len(tokens):
+    t = tokens[i]
+    if t == "deploy:":
+        i += 1
+        deploy(tokens[i:])
+        break
+    elif t == "run:":
+        expID = tokens[i + 1]
+        # consome "run:" e expID
+        i += 2
+        run(expID, tokens[i:])
+        break
+    else:
+        # Cabeçalho default
+        if t == "machine:":
+            defaultMachine = tokens[i + 1]
+            i += 2
+        elif t == "config:":
+            defaultConfig = tokens[i + 1]
+            i += 2
+        elif t == "bandwidth:":
+            defaultBandwidth = tokens[i + 1]
+            i += 2
         else:
-            sys.exit("generate-master-commands.py: unknown token: {0}".format(tokens[0]))
+            i += 1
 
