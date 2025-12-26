@@ -14,8 +14,8 @@ SCP_RETRY_COUNT = "10"
 #
 # IMPORTANTE:
 #   Evite /users/<user>/iss (quota/arquivos pesados). O deploy exporta
-#   ISS_BASE_DIR para apontar para o workdir remoto; este default só é
-#   usado quando o ambiente não define ISS_BASE_DIR.
+#   ISS_BASE_DIR para apontar para o workdir remoto. Se ISS_BASE_DIR não
+#   estiver definido, use /tmp/<USER>/iss.
 BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
     f"/tmp/{os.environ.get('USER', 'user')}/iss",
@@ -94,7 +94,7 @@ def pushConfigFiles(expID, slaves):
         # destino absoluto no slave
         dest = SLAVE_CONFIG_FILE
 
-        # Não gere scp-output-* em disco: direciona stdout/err para /dev/null.
+        # NÃO crie scp-output-*.log em disco: joga stdout/err em /dev/null.
         if deplType == "remote":
             scp_cmd = (
                 "exec-start {0} /dev/null stubborn-scp.sh {5} "
@@ -305,9 +305,9 @@ def saveConfig(expID, slaves):
 
 
 def submitLogs(expID, slaves):
-    # submitLogs era a etapa que empacotava + copiava logs via tar/scp (pesado)
-    # e ainda criava scp-output-*.log. Desativado por padrão.
-    output("# submit logs (DESATIVADO - evita tar/scp pesado e scp-output-*.log)")
+    # submitLogs empacota + copia logs via tar/scp (pesado) e ainda criava scp-output-*.log.
+    # Desativado por padrão para não lotar quota.
+    output("# submit logs (DESATIVADO: sem tar/scp pesado e sem scp-output-*.log)")
     for s in slaves:
         output("exec-start {0} /dev/null true".format(s))
     output("")
@@ -362,7 +362,6 @@ def generateCommands(expID, peers, clients):
     unsetBandwidth(expID, bandwidths)
 
     saveConfig(expID, slaves)
-    # NÃO empacota/copia logs via tar/scp (pesado) e NÃO gera scp-output-*.log.
     submitLogs(expID, slaves)
 
     # Now it's safe to stop the peers tag (framework stop).
@@ -501,60 +500,32 @@ defaultConfig = ""
 defaultMachine = ""
 defaultBandwidth = "unlimited"
 
-# ------------------------------------------------------------
-# Parse do .dpl (mesmo formato do script original)
-# ------------------------------------------------------------
-
-with open(inFileName) as f:
-    lines = f.readlines()
-
-tokens = []
-for l in lines:
-    l = l.strip()
-    if l == "" or l.startswith("#"):
-        continue
-    tokens += l.split()
-
-defaultMachine = ""
-defaultConfig = ""
-defaultBandwidth = "unlimited"
-
+experimentIdDigits = 3
 idOffset = 0
-experimentIdDigits = 4
 
-# Sintaxe do dpl: <n> <tag> machine: <template> run: <id> peers:/clients: ...
-# O parser original usa essas sentinelas:
-defaultMachine = ""
-defaultConfig = ""
-defaultBandwidth = "unlimited"
-defaultMachineTag = ""
-defaultConfigTag = ""
+if deplType == "local":
+    output("write-file master-ready READY")
+    output("")
+else:
+    writeReadyFile()
 
-# O arquivo .dpl é interpretado por dois comandos principais: deploy(...) e run(...)
-i = 0
-while i < len(tokens):
-    t = tokens[i]
-    if t == "deploy:":
-        i += 1
-        deploy(tokens[i:])
-        break
-    elif t == "run:":
-        expID = tokens[i + 1]
-        # consome "run:" e expID
-        i += 2
-        run(expID, tokens[i:])
-        break
-    else:
-        # Cabeçalho default
-        if t == "machine:":
-            defaultMachine = tokens[i + 1]
-            i += 2
-        elif t == "config:":
-            defaultConfig = tokens[i + 1]
-            i += 2
-        elif t == "bandwidth:":
-            defaultBandwidth = tokens[i + 1]
-            i += 2
+with open(inFileName) as inFile:
+    for line in inFile:
+        if line.strip() == "" or line.strip().startswith("#"):
+            continue
+
+        tokens = line.split()
+
+        if tokens[0] == "deploy":
+            deploy(tokens[1:])
+        elif tokens[0] == "run":
+            run(tokens[1], tokens[2:])
+        elif tokens[0] == "config:":
+            defaultConfig = tokens[1]
+        elif tokens[0] == "machine:":
+            defaultMachine = tokens[1]
+        elif tokens[0] == "bandwidth:":
+            defaultBandwidth = tokens[1]
         else:
-            i += 1
+            sys.exit("generate-master-commands.py: unknown token: {0}".format(tokens[0]))
 
