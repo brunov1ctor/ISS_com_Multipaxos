@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
+import os
 import os.path
 import sys
 from collections import defaultdict
 
-CLIENT_TIMEOUT = 480000  # ms
+CLIENT_TIMEOUT = int(os.environ.get("ISS_CLIENT_TIMEOUT_MS", "480000"))  # ms
 
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
@@ -36,8 +37,10 @@ deploymentSchedule = []
 numSlaves = defaultdict(int)
 skipAllExisting = False
 
+
 def output(data: str):
     print(data, file=outFile)
+
 
 def waitForSlaves(slaves):
     output("# wait slaves")
@@ -45,16 +48,17 @@ def waitForSlaves(slaves):
         output("wait for slaves {0} {1}".format(s, numSlaves[s]))
     output("")
 
+
 def _exp_slave_dir(expID: str) -> str:
     return f"{BASE_DIR}/experiment-output/{expID}/slave-__id__"
 
+
 def createLogDir(expID):
     output("# mkdir log dir")
-    output(
-        "exec-start __all__ /dev/null mkdir -p {0}".format(_exp_slave_dir(expID))
-    )
+    output("exec-start __all__ /dev/null mkdir -p {0}".format(_exp_slave_dir(expID)))
     output("exec-wait __all__ {0}".format(FS_SETTLE_DELAY_MS))
     output("")
+
 
 def createLocalLogDir(expID):
     output("# mkdir local log dir")
@@ -63,6 +67,7 @@ def createLocalLogDir(expID):
     )
     output("exec-wait __all__ {0}".format(FS_SETTLE_DELAY_MS))
     output("")
+
 
 def ensureConfigDir(slaves):
     output("# ensure config dir")
@@ -73,6 +78,7 @@ def ensureConfigDir(slaves):
     for s in slaves:
         output("sync {0}".format(s))
     output("")
+
 
 def pushConfigFiles(expID, slaves):
     output("# push config")
@@ -120,6 +126,7 @@ def pushConfigFiles(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
+
 def snapshotConfigNow(expID, slaves):
     output("# snapshot config (per-run)")
     for s in slaves:
@@ -136,6 +143,7 @@ def snapshotConfigNow(expID, slaves):
     for s in slaves:
         output("sync {0}".format(s))
     output("")
+
 
 def pushLocalConfigFiles(expID, slaves):
     output("# push local config")
@@ -160,6 +168,7 @@ def pushLocalConfigFiles(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
+
 def setBandwidth(expID, bandwidths):
     output("# set bandwidth")
     for s, bandwidth in bandwidths.items():
@@ -178,6 +187,7 @@ def setBandwidth(expID, bandwidths):
         output("sync {0}".format(s))
     output("")
 
+
 def unsetBandwidth(expID, bandwidths):
     output("# unset bandwidth")
     for s, bandwidth in bandwidths.items():
@@ -192,6 +202,7 @@ def unsetBandwidth(expID, bandwidths):
         output("sync {0}".format(s))
     output("")
 
+
 def startPeers(expID, peers):
     numPeers = 0
     for p in peers:
@@ -203,12 +214,11 @@ def startPeers(expID, peers):
         output(
             "exec-start {0} {1}/peer.log orderingpeer "
             "{2} $own_public_ip:$master_port __public_ip__ __private_ip__ "
-            "{1}/peer.trc {1}/prof".format(
-                p, _exp_slave_dir(expID), SLAVE_CONFIG_FILE
-            )
+            "{1}/peer.trc {1}/prof".format(p, _exp_slave_dir(expID), SLAVE_CONFIG_FILE)
         )
     output("discover-wait")
     output("")
+
 
 def runClients(expID, clients):
     output("# run clients")
@@ -219,6 +229,10 @@ def runClients(expID, clients):
                 c, _exp_slave_dir(expID), SLAVE_CONFIG_FILE
             )
         )
+
+    # IMPORTANTE:
+    # - Não reduzir timeout por cliente: isso pode fazer o 2º/3º cliente falhar “cedo demais”
+    #   em execuções com múltiplos clientes.
     timeout = CLIENT_TIMEOUT
     for c in clients:
         output(
@@ -227,8 +241,8 @@ def runClients(expID, clients):
             "exec-wait {0} {3}".format(c, _exp_slave_dir(expID), timeout, FS_SETTLE_DELAY_MS)
         )
         output("sync {0}".format(c))
-        timeout //= 2
     output("")
+
 
 def stopPeers(peers):
     output("# stop peers (framework stop)")
@@ -236,6 +250,7 @@ def stopPeers(peers):
         output("stop {0}".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
     output("")
+
 
 def saveConfig(expID, slaves):
     output("# Save config (best-effort, ensure dir exists)")
@@ -256,6 +271,7 @@ def saveConfig(expID, slaves):
     for s in slaves:
         output("sync {0}".format(s))
     output("")
+
 
 def submitLogs(expID, slaves):
     output("# submit logs")
@@ -294,19 +310,23 @@ def submitLogs(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
+
 def updateStatus(value: str):
     output("# update status")
     output("write-file $status_file {0}".format(value))
     output("")
+
 
 def stopAll():
     output("# stop all")
     output("stop __all__")
     output("wait for {0}".format(STOP_SLAVES_DELAY))
 
+
 def writeReadyFile():
     output("write-file $ready_file READY")
     output("")
+
 
 def generateCommands(expID, peers, clients):
     output("#========================================")
@@ -342,6 +362,7 @@ def generateCommands(expID, peers, clients):
     updateStatus(expID)
     output("")
 
+
 def deploy(tokens):
     global defaultMachine
     global deploymentSchedule
@@ -369,6 +390,7 @@ def deploy(tokens):
                 )
             tokens = tokens[2:]
 
+
 def run(expID, tokens):
     global lastFinished
     global idOffset
@@ -388,9 +410,7 @@ def run(expID, tokens):
     if os.path.isdir(outdir) and skipAllExisting:
         skip = True
     elif os.path.isdir(outdir):
-        sys.stderr.write(
-            "{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir)
-        )
+        sys.stderr.write("{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir))
         sys.stderr.flush()
         answer = sys.stdin.readline().strip()
         while answer not in {"s", "S", "a", "A", "c", "C"}:
@@ -450,9 +470,11 @@ def run(expID, tokens):
 
     lastFinished = expID
 
+
 def printDeploymentSchedule():
     for expID, n, tag, templateFile in deploymentSchedule:
         print("{0} {1} {2} {3}".format(expID, n, tag, templateFile))
+
 
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
