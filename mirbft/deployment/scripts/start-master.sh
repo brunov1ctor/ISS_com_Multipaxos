@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # start-master.sh
 # - inicia o discoverymaster remotamente
-# - sincroniza master-commands + tls-data
+# - sincroniza master-commands + tls-data + (FIX) experiment-config
 # - semântica:
 #     * status_file = estado lógico do experimento (DONE/ANALYZED terminal)
 #     * status_exit_file = resultado do processo do discoverymaster (EXIT rc=...)
@@ -37,8 +37,11 @@ local_master_cmd="$6"
 
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 
+# scp não entende -T; então usamos um conjunto compatível se quiser sobrescrever externamente.
+scp_options="${scp_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+
 rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
-scp_to_master() { scp $ssh_options "${1}" "${remote_user}@${master_ip}:${2}"; }
+scp_to_master() { scp $scp_options "${1}" "${remote_user}@${master_ip}:${2}"; }
 
 status_file="${status_file:-${remote_work_dir}/status}"
 ready_file="${ready_file:-${remote_work_dir}/master-ready}"
@@ -47,6 +50,7 @@ master_port="${master_port:-9999}"
 status_exit_file="${status_exit_file:-${status_file}.exit}"
 remote_tls_dir="${remote_work_dir}/tls-data"
 remote_logs_dir="${remote_work_dir}/logs"
+remote_experiment_config_dir="${remote_work_dir}/experiment-config"
 
 debug_log="${exp_data_dir}/_debug/start-master.${master_ip}.log"
 mkdir -p "$(dirname "$debug_log")"
@@ -62,7 +66,7 @@ if [[ ! -f "$local_master_cmd" ]]; then
 fi
 
 # 1) Layout remoto mínimo
-rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_tls_dir}' '${remote_logs_dir}'" || {
+rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_tls_dir}' '${remote_logs_dir}' '${remote_experiment_config_dir}'" || {
   log_e "Falha ao preparar diretórios remotos." | tee -a "$debug_log"
   exit 1
 }
@@ -71,10 +75,43 @@ rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_tls_dir}' '${remote_lo
 scp_to_master "$local_master_cmd" "${remote_work_dir}/master-commands.cmd"
 
 # 2b) Reforça tls-data (opcional)
-if [[ -d "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data" ]]; then
-  local_tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
+local_tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
+if [[ -d "$local_tls_dir" ]]; then
   tar -C "$local_tls_dir" -czf - . | rsh "$master_ip" "tar -C '${remote_tls_dir}' -xzf -" || true
 fi
+
+# 2c) (FIX) Publicar experiment-config no master ANTES de iniciar discoverymaster
+log_i "Publicando experiment-config/ no master..." | tee -a "$debug_log"
+
+if [[ ! -d "${exp_data_dir}/experiment-config" ]]; then
+  log_e "Diretório local ausente: ${exp_data_dir}/experiment-config" | tee -a "$debug_log"
+  exit 1
+fi
+
+# copia arquivos (não o diretório) para manter layout /users/Bruno/iss/experiment-config/*.yml
+(
+  shopt -s nullglob
+  files=( "${exp_data_dir}/experiment-config/"* )
+  if (( ${#files[@]} == 0 )); then
+    log_e "Nenhum arquivo em ${exp_data_dir}/experiment-config (nada para publicar)." | tee -a "$debug_log"
+    exit 1
+  fi
+
+  rsh "$master_ip" "mkdir -p '${remote_experiment_config_dir}'" || true
+
+  # scp dos arquivos
+  scp $scp_options -r "${files[@]}" "${remote_user}@${master_ip}:${remote_experiment_config_dir}/" \
+    || { log_e "Falha ao copiar experiment-config/ para o master." | tee -a "$debug_log"; exit 1; }
+)
+
+# sanity check forte (o mesmo caminho que o stubborn-scp usa)
+if ! rsh "$master_ip" "test -s '${remote_experiment_config_dir}/config-0000.yml'"; then
+  log_e "Master NÃO tem ${remote_experiment_config_dir}/config-0000.yml após publish." | tee -a "$debug_log"
+  rsh "$master_ip" "ls -lah '${remote_experiment_config_dir}' || true" || true
+  exit 1
+fi
+
+log_i "experiment-config OK no master." | tee -a "$debug_log"
 
 # 3) Mata instâncias antigas do discoverymaster
 rsh "$master_ip" "killall -9 discoverymaster 2>/dev/null || true"
