@@ -32,11 +32,7 @@ local_master_command_file="${local_master_command_file:-master-commands.cmd}"
 local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
 
 remote_user="${remote_user:-${USER}}"
-#
-# IMPORTANTE:
-#   Não use /users/<user>/iss para armazenar logs/artifacts do experimento.
-#   Esse caminho tende a estourar quota (logs + scp-output + raw-results).
-#   Por padrão, use um workdir efêmero em /tmp.
+# IMPORTANTE: não use /users/<user>/iss (quota). Default em /tmp.
 remote_work_dir="${remote_work_dir:-/tmp/${remote_user}/iss}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 
@@ -51,7 +47,8 @@ DISC_PORT="${master_port:-${MASTER_PORT:-9999}}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
 remote_experiment_output_dir="${remote_experiment_output_dir:-${remote_work_dir}/experiment-output}"
 
-published_root="${published_root:-${PUBLISHED_ROOT:-${remote_work_dir}/experiment-output}}"
+# Publicação local (no node-0). Evite /users.
+published_root="${published_root:-${PUBLISHED_ROOT:-${exp_data_dir}/published/experiment-output}}"
 
 rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
 
@@ -121,10 +118,6 @@ deployment_file="$exp_data_dir/deployment.dpl"
 if [[ ! -f "$template_path" ]]; then
   log_i "Gerando master-commands-template.cmd..."
   [[ -f "$deployment_file" ]] || { log_e "Deployment file não encontrado: $deployment_file"; exit 1; }
-
-  # Garante que o template use o mesmo BASE_DIR do workdir remoto.
-  export ISS_BASE_DIR="$remote_work_dir"
-
   python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir" \
     || { log_e "Falha ao gerar master-commands-template.cmd"; exit 1; }
 else
@@ -164,7 +157,8 @@ mkdir -p '${remote_work_dir}' \
          '${remote_work_dir}/scripts' \
          '${remote_work_dir}/tls-data' \
          '${remote_work_dir}/experiment-config' \
-         '${remote_work_dir}/experiment-output'
+         '${remote_work_dir}/experiment-output' \
+         '${remote_work_dir}/raw-results'
 # status pode ser recriado pelo start-master, mas já deixa algo aqui
 echo RUNNING > '${remote_status_file}' 2>/dev/null || true
 EOF_RESET
@@ -198,11 +192,6 @@ log_i "discoverymaster OK."
 
 # =====================================================================
 # 6b) Publicar experiment-config/ no master ANTES de startar slaves
-#
-# Os slaves puxam o config via stubborn-scp.sh a partir do master:
-#   ${master_ip}:${remote_work_dir}/experiment-config/config-XXXX.yml
-# Se isso ainda não existir quando o discoverymaster disparar os comandos,
-# o scp falha com "No such file or directory".
 # =====================================================================
 
 log_i "Publicando experiment-config/ no master antes de iniciar os slaves..."
@@ -221,12 +210,10 @@ fi
     exit 1
   fi
 
-  # Usa scp_options (sem -T) e copia os arquivos individualmente.
   scp $scp_options -r "${files[@]}" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" \
     || { log_e "Falha ao copiar experiment-config/ para o master."; exit 1; }
 )
 
-# Sanity check do primeiro config (evita correr e descobrir no meio do experimento)
 rsh "$master_ip" "test -s '${remote_work_dir}/experiment-config/config-0000.yml'" \
   || { log_e "Master não possui config-0000.yml após publish."; rsh "$master_ip" "ls -la '${remote_work_dir}/experiment-config' || true" || true; exit 1; }
 
@@ -251,7 +238,6 @@ log_i "Aguardando DONE no status do master: ${remote_status_file} (timeout=${mas
 
 done_ok=false
 for ((i=0; i<master_done_timeout_secs; i++)); do
-  # CORREÇÃO: procurar DONE em qualquer linha do arquivo, não só tail -n1
   if rsh "$master_ip" "test -f '${remote_status_file}' && grep -q '^DONE' '${remote_status_file}'"; then
     done_ok=true
     break
@@ -290,7 +276,7 @@ fi
 log_i "fetch-results.sh OK. Log: $exp_data_dir/$local_result_fetching_log"
 
 # =====================================================================
-# 8b) Publicar
+# 8b) Publicar (cópia local opcional)
 # =====================================================================
 
 log_i "Publicando (cópia) resultados em: ${published_root}"

@@ -46,7 +46,6 @@ ensure_local_binaries() {
     return 0
   fi
 
-  # Diretório do repositório (mirbft/)
   local repo_dir
   repo_dir="$(cd "$deploy_dir/.." && pwd)"
 
@@ -55,7 +54,6 @@ ensure_local_binaries() {
     return 1
   fi
 
-  # Onde o go install joga os binários
   local local_bin_dir
   local_bin_dir="${GOBIN:-}"
   if [ -z "$local_bin_dir" ]; then
@@ -166,11 +164,9 @@ if [ "$#" -lt 1 ]; then
   usage
 fi
 
-# 1º argumento após 'remote' = instance-info
 instance_info_file="$1"
 shift || true
 
-# Resolve instance-info em relação ao diretório de deployment, se precisar
 if [[ ! -f "$instance_info_file" ]]; then
   if [[ -f "$deploy_dir/$instance_info_file" ]]; then
     instance_info_file="$deploy_dir/$instance_info_file"
@@ -184,7 +180,6 @@ fi
 
 log_info "Using instance-info file: $instance_info_file"
 
-# 2º argumento: "new" ou diretório do experimento
 if [ "$#" -lt 1 ]; then
   usage
 fi
@@ -255,9 +250,7 @@ ensure_local_binaries
 if $new_experiment; then
   log_sep "[INIT] Gerando config/deployment para o novo experimento"
 
-  # Gera config/ e deployment.csv/deployment.dpl via generator
   if [[ ! -x "$config_generator_script" ]]; then
-    # resolve relativo ao deploy_dir se vier sem path
     if [[ -x "$deploy_dir/$config_generator_script" ]]; then
       config_generator_script="$deploy_dir/$config_generator_script"
     fi
@@ -300,7 +293,6 @@ export deployment_data_root
 export dpl_filename
 export csv_filename
 
-# Executa como subprocesso (permite deploy-remote.sh usar exit sem matar deploy.sh)
 if ! bash "$deploy_dir/scripts/deploy-remote.sh"; then
   rc=$?
   log_err "scripts/deploy-remote.sh falhou (rc=$rc)."
@@ -345,29 +337,25 @@ then
 fi
 
 ########################################
-# Publicar resultados (evite /users/<user>/iss)
+# Publicar resultados (evitar /users/<user>/iss por quota)
 ########################################
 
 log_sep "[PUBLISH] Exportando métricas para deployment-data/published/experiment-output"
 
-# Mantém um lugar fixo dentro do deployment-data (sem quota de /users).
 publish_root="${deployment_data_root}/published/experiment-output"
 publish_name="$(basename "$exp_data_dir")"     # ex: remote-0000
 publish_dir="${publish_root}/${publish_name}"
 
 mkdir -p "$publish_dir"
 
-# Copia o summary e os artefatos para um lugar “fixo”
 cp -f "$result_summary_path" "$publish_dir/result-summary.csv"
 rsync -a --delete \
   "$exp_data_dir/experiment-output/" \
   "$publish_dir/experiment-output/"
 
-# (Opcional) guardar alguns metadados úteis
 cp -f "$exp_data_dir/$csv_filename" "$publish_dir/$csv_filename" 2>/dev/null || true
 cp -f "$exp_data_dir/$dpl_filename" "$publish_dir/$dpl_filename" 2>/dev/null || true
 
-# latest -> último experimento
 ln -sfn "$publish_dir" "${publish_root}/latest"
 
 log_info "Publicado em: $publish_dir"
