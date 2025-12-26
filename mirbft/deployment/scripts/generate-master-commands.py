@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import os.path
 import sys
 from collections import defaultdict
@@ -284,6 +285,7 @@ def submitLogs(expID, slaves):
 
     for s in slaves:
         if deplType == "remote":
+            # IMPORTANT: MASTER_EXP_DIR must be absolute to avoid dumping into a relative path on master.
             scp_cmd = (
                 "exec-start {0} scp-output-{1}-logs.log stubborn-scp.sh {2} "
                 "experiment-output-{1}-slave-__id__.tar.gz $own_public_ip:{3}/raw-results/"
@@ -411,7 +413,7 @@ def run(expID, tokens):
             skip = True
             skipAllExisting = True
         elif answer in {"c", "C"}:
-            os.exit("User abort.")
+            os._exit(1)
 
     clients = {}
     peers = {}
@@ -447,7 +449,6 @@ def run(expID, tokens):
         if deplType in {"cloud", "remote"}:
             generateCommands(expID, peers, clients)
         elif deplType == "local":
-            # não usado aqui
             pass
         else:
             sys.exit("generate-master-commands.py: unknown deployment type")
@@ -460,13 +461,12 @@ def printDeploymentSchedule():
         print("{0} {1} {2} {3}".format(expID, n, tag, templateFile))
 
 
+# ---------------------------
+# CLI / mode selection
+# ---------------------------
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
     sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
-
-if deplType == "remote":
-    MASTER_CONFIG_DIR = "iss/experiment-config"
-    MASTER_EXP_DIR = "iss"
 
 inFileName = sys.argv[2]
 outFile = open(sys.argv[3], "w")
@@ -474,12 +474,24 @@ outFile = open(sys.argv[3], "w")
 local_exp_data = sys.argv[4]
 local_config_dir = "config"
 
+# Normalize local_exp_data to absolute path (prevents many path bugs)
+if not local_exp_data.startswith("/"):
+    user = os.environ.get("USER", "Bruno")
+    local_exp_data = f"/users/{user}/" + local_exp_data.lstrip("/")
+
 defaultConfig = ""
 defaultMachine = ""
 defaultBandwidth = "unlimited"
 
 experimentIdDigits = 3
 idOffset = 0
+
+if deplType == "remote":
+    # CRITICAL FIX:
+    # Use ABSOLUTE paths on the master, so scp target becomes /users/<user>/iss/raw-results/
+    user = os.environ.get("USER", "Bruno")
+    MASTER_EXP_DIR = f"/users/{user}/iss"
+    MASTER_CONFIG_DIR = f"{MASTER_EXP_DIR}/experiment-config"
 
 if deplType == "local":
     output("write-file master-ready READY")
