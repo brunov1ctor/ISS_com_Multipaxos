@@ -56,7 +56,8 @@ def _exp_slave_dir(expID: str) -> str:
 
 def createLogDir(expID):
     output("# mkdir log dir")
-    output("exec-start __all__ /dev/null mkdir -p {0}".format(_exp_slave_dir(expID)))
+    # Use '-' as output sink: the slave will discard stdout/stderr without creating any file.
+    output("exec-start __all__ - mkdir -p {0}".format(_exp_slave_dir(expID)))
     output("exec-wait __all__ {0}".format(FS_SETTLE_DELAY_MS))
     output("")
 
@@ -64,7 +65,7 @@ def createLogDir(expID):
 def ensureConfigDir(slaves):
     output("# ensure config dir")
     for s in slaves:
-        output("exec-start {0} /dev/null mkdir -p {1}/config".format(s, BASE_DIR))
+        output("exec-start {0} - mkdir -p {1}/config".format(s, BASE_DIR))
     for s in slaves:
         output("exec-wait {0} {1}".format(s, FS_SETTLE_DELAY_MS))
     for s in slaves:
@@ -77,15 +78,16 @@ def pushConfigFiles(expID, slaves):
     for s, configFile in slaves.items():
         dest = SLAVE_CONFIG_FILE
 
-        # NÃO gravar scp-output-*.log em disco => /dev/null
+        # Não queremos gerar arquivos de log "scp-output-*.log" no filesystem do nó.
+        # Para isso, usamos '-' como output sink (o discoveryslave descarta stdout/stderr).
         if deplType == "remote":
             scp_cmd = (
-                "exec-start {0} /dev/null stubborn-scp.sh {5} "
+                "exec-start {0} - stubborn-scp.sh {5} "
                 "$own_public_ip:{2}/{3} {4}"
             )
         else:
             scp_cmd = (
-                "exec-start {0} /dev/null stubborn-scp.sh {5} "
+                "exec-start {0} - stubborn-scp.sh {5} "
                 "-i $ssh_key_file $own_public_ip:{2}/{3} {4}"
             )
 
@@ -107,7 +109,7 @@ def pushConfigFiles(expID, slaves):
 
     output("# verify config arrived")
     for s in slaves:
-        output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
+        output("exec-start {0} - test -s {1}".format(s, SLAVE_CONFIG_FILE))
         output(
             "exec-wait {0} 2000 "
             "exec-start {0} {1}/FAILED echo Config missing after fetch; "
@@ -123,7 +125,7 @@ def snapshotConfigNow(expID, slaves):
     output("# snapshot config (per-run)")
     for s in slaves:
         output(
-            "exec-start {0} /dev/null cp {1} {2}/config.yml".format(
+            "exec-start {0} - cp {1} {2}/config.yml".format(
                 s, SLAVE_CONFIG_FILE, _exp_slave_dir(expID)
             )
         )
@@ -221,7 +223,7 @@ def stopPeerProcesses(expID, peers):
     output("# stop orderingpeer processes (keep discoveryslave alive)")
     for p in peers:
         output(
-            "exec-start {0} /dev/null sh -lc 'pkill -INT -f "
+            "exec-start {0} - sh -lc 'pkill -INT -f "
             "\"(^|/)(orderingpeer)(\\s|$)\" || true'".format(p)
         )
     for p in peers:
@@ -233,13 +235,13 @@ def stopPeerProcesses(expID, peers):
 def saveConfig(expID, slaves):
     output("# Save config (best-effort, ensure dir exists)")
     for s in slaves:
-        output("exec-start {0} /dev/null mkdir -p {1}".format(s, _exp_slave_dir(expID)))
+        output("exec-start {0} - mkdir -p {1}".format(s, _exp_slave_dir(expID)))
     for s in slaves:
         output("exec-wait {0} {1}".format(s, BEST_EFFORT_WAIT_MS))
 
     for s in slaves:
         output(
-            "exec-start {0} /dev/null cp {1} {2}/config.final.yml".format(
+            "exec-start {0} - cp {1} {2}/config.final.yml".format(
                 s, SLAVE_CONFIG_FILE, _exp_slave_dir(expID)
             )
         )
@@ -255,7 +257,7 @@ def submitLogs(expID, slaves):
     # DESATIVADO (não empacota/copiar logs pesados e não cria scp-output-*.log)
     output("# submit logs (DESATIVADO)")
     for s in slaves:
-        output("exec-start {0} /dev/null true".format(s))
+        output("exec-start {0} - true".format(s))
     output("")
 
 
