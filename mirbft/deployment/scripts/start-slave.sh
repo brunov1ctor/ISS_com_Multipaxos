@@ -21,6 +21,7 @@ export DISCOVERY_PORT
 
 echo "[start-slave] tag=${tag} master=${master_ip}:${DISCOVERY_PORT} pub=${own_public_ip} priv=${own_private_ip}"
 echo "[start-slave] remote_work_dir=${remote_work_dir} remote_exp_dir=${remote_exp_dir}"
+echo "[start-slave] remote_base_dir=${remote_base_dir} (configs/TLS)"
 
 ########################################
 # Mata processos antigos
@@ -51,12 +52,15 @@ rm -rf "${remote_exp_dir}/slave-state"  2>/dev/null || true
 ########################################
 # Prepara diretórios
 ########################################
-# diretórios “globais” no work_dir
+# diretórios “globais” (pesado) no work_dir
 mkdir -p \
   "${remote_work_dir}/logs" \
-  "${remote_work_dir}/bin" \
-  "${remote_work_dir}/config" \
-  "${remote_work_dir}/tls-data"
+  "${remote_work_dir}/bin"
+
+# diretórios leves (configs/TLS) em /users/<user>/iss
+mkdir -p \
+  "${remote_base_dir}/config" \
+  "${remote_base_dir}/tls-data"
 
 # diretórios do experimento (onde o discovery/peers vão gravar)
 mkdir -p \

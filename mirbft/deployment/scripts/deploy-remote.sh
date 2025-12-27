@@ -27,9 +27,11 @@ local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
 
 remote_user="${remote_user:-${USER}}"
 
-# ✅ NÃO usar /users/<user>/iss por causa de quota (gera experiment-output/, pid, etc.)
 remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
+
+# Diretório leve (configs/TLS) permanece em /users/<user>/iss.
+remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
 
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 
@@ -55,6 +57,7 @@ cp -f "$instance_info_file" "$exp_data_dir/$instance_info_file_name"
 log_i "instance-info: $instance_info_file"
 log_i "Master IP: $master_ip"
 log_i "Remote exp dir: ${remote_exp_dir}"
+log_i "Remote base dir (configs/TLS): ${remote_base_dir}"
 log_i "Remote experiment-output dir: ${remote_experiment_output_dir}"
 log_i "Published root (local): ${published_root}"
 log_i "Discovery port: ${DISC_PORT}"
@@ -122,13 +125,19 @@ for ip in $(awk '{print $2}' "$instance_info_file"); do
 tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
 killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
 rm -rf '${remote_work_dir}'
+
+# pesado: /tmp (logs, status, experiment-output)
 mkdir -p '${remote_work_dir}' \
          '${remote_work_dir}/logs' \
          '${remote_work_dir}/scripts' \
-         '${remote_work_dir}/tls-data' \
-         '${remote_work_dir}/experiment-config' \
          '${remote_work_dir}/experiment-output' \
          '${remote_work_dir}/raw-results'
+
+# leve: /users (configs/TLS)
+mkdir -p '${remote_base_dir}' \
+         '${remote_base_dir}/experiment-config' \
+         '${remote_base_dir}/config' \
+         '${remote_base_dir}/tls-data'
 echo RUNNING > '${remote_status_file}' 2>/dev/null || true
 EOF_RESET
   sleep 0.1
