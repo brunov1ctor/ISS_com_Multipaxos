@@ -27,7 +27,7 @@ fi
 mkdir -p "${exp_dir}/experiment-output" "${exp_dir}/_fetched_tars" "${exp_dir}/_debug"
 
 # Layout canônico (permite override via env exportado pelo deploy-remote.sh)
-remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
 # no layout atual NÃO existe current-deployment-data; tudo vive direto em ${remote_work_dir}
 remote_exp_dir="${REMOTE_EXP_DIR:-${remote_exp_dir:-${remote_work_dir}}}"
 remote_experiment_output_dir="${REMOTE_EXPERIMENT_OUTPUT_DIR:-${remote_experiment_output_dir:-${remote_work_dir}/experiment-output}}"

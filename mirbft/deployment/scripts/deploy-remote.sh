@@ -27,8 +27,8 @@ local_result_fetching_log="${local_result_fetching_log:-result-fetching.log}"
 
 remote_user="${remote_user:-${USER}}"
 
-# ✅ VOLTA PRA /users (teu layout real)
-remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+# ✅ NÃO usar /users/<user>/iss por causa de quota (gera experiment-output/, pid, etc.)
+remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
 
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"

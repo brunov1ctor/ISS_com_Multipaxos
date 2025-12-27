@@ -55,8 +55,15 @@ default_instance_info=last-cloud-instance-info
 # Usuário remoto nos nós do Emulab (padrão = usuário atual do shell).
 remote_user="${remote_user:-$USER}"
 
-# Diretório de trabalho remoto (por padrão /users/<remote_user>/iss no Emulab).
-remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+# Diretório de trabalho remoto.
+#
+# IMPORTANTE (quota em /users):
+#   NÃO usamos mais /users/<user>/iss como default, porque isso acaba gerando
+#   artefatos temporários/grandes (ex.: experiment-output/, scp-output-*.log,
+#   discoverymaster.pid) em um filesystem com quota apertada.
+#
+# Default novo: /tmp/iss-<user>
+remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
 
 # Arquivos de status/log remotos.
 remote_status_file="$remote_work_dir/status"

@@ -43,7 +43,7 @@ fi
 
 SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
 
-remote_work_dir="${remote_work_dir:-/users/${remote_user}/iss}"
+remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"
 # Layout canônico: usa o mesmo root (remote_work_dir) como exp_dir.
