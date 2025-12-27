@@ -2,13 +2,15 @@
 # start-master.sh
 # - inicia o discoverymaster remotamente
 # - sincroniza master-commands + tls-data
-# - semântica:
-#     * status_file = estado lógico do experimento (DONE/ANALYZED terminal)
-#     * status_exit_file = resultado do processo do discoverymaster (EXIT rc=...)
-# - compatível com discoverymaster que suporta:
-#     A) "master addr:port cmdfile"  (preferido neste repo)
-#     B) legacy: "<port> file <cmdfile>"
-#     C) (fallback) flags -addr/-cmd (caso exista em outro commit)
+# - publica experiment-config (a partir de exp_data_dir/config ou exp_data_dir/experiment-config)
+# - FORÇA o discoverymaster no modo "master" (evita cair no LEGACY -> SIGBUS)
+#
+# Semântica:
+#   * status_file       = estado lógico do experimento (DONE/ANALYZED terminal)
+#   * status_exit_file  = resultado do processo do discoverymaster (EXIT rc=...)
+#
+# Requisitos:
+#   - discoverymaster suporta: discoverymaster master <addr:port> <cmdfile>
 
 set -euo pipefail
 
@@ -36,9 +38,10 @@ exp_data_dir="$5"
 local_master_cmd="$6"
 
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+scp_options="${scp_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 
 rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
-scp_to_master() { scp $ssh_options "${1}" "${remote_user}@${master_ip}:${2}"; }
+scp_to_master() { scp $scp_options "${1}" "${remote_user}@${master_ip}:${2}"; }
 
 status_file="${status_file:-${remote_work_dir}/status}"
 ready_file="${ready_file:-${remote_work_dir}/master-ready}"
@@ -62,7 +65,7 @@ if [[ ! -f "$local_master_cmd" ]]; then
 fi
 
 # 1) Layout remoto mínimo
-rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_tls_dir}' '${remote_logs_dir}'" || {
+rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_tls_dir}' '${remote_logs_dir}' '${remote_work_dir}/experiment-config' '${remote_work_dir}/config'" || {
   log_e "Falha ao preparar diretórios remotos." | tee -a "$debug_log"
   exit 1
 }
@@ -71,39 +74,46 @@ rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_tls_dir}' '${remote_lo
 scp_to_master "$local_master_cmd" "${remote_work_dir}/master-commands.cmd"
 
 # 2b) Reforça tls-data (opcional)
-if [[ -d "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data" ]]; then
-  local_tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
+local_tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
+if [[ -d "$local_tls_dir" ]]; then
   tar -C "$local_tls_dir" -czf - . | rsh "$master_ip" "tar -C '${remote_tls_dir}' -xzf -" || true
 fi
 
-# 2c) Se existir experiment-config/ local, publica no master (ajuda quando o master-commands manda slaves puxarem config via scp)
+# 2c) Publica configs para o master em ${remote_work_dir}/experiment-config
+#     - prioridade: exp_data_dir/experiment-config/*
+#     - fallback:   exp_data_dir/config/config-*.yml  (o que o generator cria)
+publish_src=""
 if [[ -d "${exp_data_dir}/experiment-config" ]]; then
-  log_i "Publicando experiment-config/ no master..." | tee -a "$debug_log"
-  rsh "$master_ip" "mkdir -p '${remote_work_dir}/experiment-config'" || true
+  publish_src="${exp_data_dir}/experiment-config"
+elif [[ -d "${exp_data_dir}/config" ]]; then
+  publish_src="${exp_data_dir}/config"
+fi
 
+if [[ -n "$publish_src" ]]; then
+  log_i "Publicando configs do experimento no master: ${publish_src} -> ${remote_work_dir}/experiment-config/" | tee -a "$debug_log"
   shopt -s nullglob
-  files=("${exp_data_dir}/experiment-config/"*)
+  files=( "${publish_src}/"*.yml "${publish_src}/"*.yaml )
   if (( ${#files[@]} > 0 )); then
-    # scp não aceita algumas flags (ex.: -T). Use um conjunto compatível.
-    scp_options="${scp_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
-    scp $scp_options -r "${files[@]}" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" \
-      || log_w "Falha ao copiar experiment-config/ (continuando)."
-    rsh "$master_ip" "test -s '${remote_work_dir}/experiment-config/config-0000.yml'" \
-      && log_i "experiment-config OK no master." | tee -a "$debug_log" \
-      || log_w "experiment-config não validado (config-0000.yml ausente/0 bytes)." | tee -a "$debug_log"
+    scp $scp_options "${files[@]}" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" \
+      || log_w "Falha ao copiar configs para experiment-config/ (continuando)." | tee -a "$debug_log"
   else
-    log_w "Nenhum arquivo em ${exp_data_dir}/experiment-config; não publiquei nada." | tee -a "$debug_log"
+    log_w "Nenhum .yml/.yaml em ${publish_src}; não publiquei configs." | tee -a "$debug_log"
   fi
+
+  # valida presença do config-0000.yml no master (é o primeiro que o master-commands costuma pedir)
+  rsh "$master_ip" "test -s '${remote_work_dir}/experiment-config/config-0000.yml'" \
+    && log_i "experiment-config OK no master (config-0000.yml presente)." | tee -a "$debug_log" \
+    || log_w "experiment-config sem config-0000.yml (pode falhar fetch do config)." | tee -a "$debug_log"
+else
+  log_w "Sem ${exp_data_dir}/experiment-config e sem ${exp_data_dir}/config; não publiquei configs no master." | tee -a "$debug_log"
 fi
 
 # 3) Mata instâncias antigas do discoverymaster
 rsh "$master_ip" "killall -9 discoverymaster 2>/dev/null || true"
 
-# 4) Inicia discoverymaster com wrapper robusto
+# 4) Inicia discoverymaster com wrapper robusto (FORÇANDO master mode e bind no master_ip)
 log_i "starting discoverymaster..." | tee -a "$debug_log"
 
-# IMPORTANT: rode o wrapper sob nohup, senão o processo pode morrer quando o SSH fecha
-# (isso fazia o discoverymaster encerrar cedo e o deploy ficar “travado” esperando DONE).
 rsh "$master_ip" "nohup bash -lc '
 set -euo pipefail
 
@@ -114,6 +124,7 @@ status_file=\"${status_file}\"
 status_exit_file=\"${status_exit_file}\"
 ready_file=\"${ready_file}\"
 master_port=\"${master_port}\"
+master_ip=\"${master_ip}\"
 
 cmd_file=\"${remote_work_dir}/master-commands.cmd\"
 log_file=\"${remote_logs_dir}/discoverymaster.log\"
@@ -121,7 +132,6 @@ bin=\"${remote_bin_dir}/discoverymaster\"
 
 mkdir -p \"\$(dirname \"\$status_file\")\" \"\$(dirname \"\$status_exit_file\")\" \"\$(dirname \"\$ready_file\")\" \"\$(dirname \"\$log_file\")\"
 
-# Se status já estiver terminal, preserva.
 cur=\"\$(
   ( test -f \"\$status_file\" && cat \"\$status_file\" || true ) | tr -d \"\r\" | tail -n 1
 )\"
@@ -132,31 +142,11 @@ fi
 : > \"\$status_exit_file\" 2>/dev/null || true
 echo READY > \"\$ready_file\" 2>/dev/null || true
 
-addr=\"0.0.0.0:\$master_port\"
-port=\"\$master_port\"
+addr=\"\$master_ip:\$master_port\"
 
-# Descobre qual CLI existe neste binário.
-help_out=\"\"
-if \"\$bin\" --help >/tmp/dm.help 2>&1; then
-  help_out=\"\$(cat /tmp/dm.help || true)\"
-else
-  help_out=\"\$(cat /tmp/dm.help || true)\"
-fi
+# FORÇA master mode (sem detecção por --help)
+run_cmd=(\"\$bin\" master \"\$addr\" \"\$cmd_file\")
 
-run_cmd=()
-
-# Preferido neste repo: modo \"master\"
-if echo \"\$help_out\" | grep -q \"discoverymaster master\"; then
-  run_cmd=(\"\$bin\" master \"\$addr\" \"\$cmd_file\")
-# Fallback: flags (se algum commit antigo usar isso)
-elif echo \"\$help_out\" | grep -q \"-addr\" && echo \"\$help_out\" | grep -q \"-cmd\"; then
-  run_cmd=(\"\$bin\" -addr \"\$addr\" -cmd \"\$cmd_file\")
-# Último fallback: modo legado (porta pura + file)
-else
-  run_cmd=(\"\$bin\" \"\$port\" file \"\$cmd_file\")
-fi
-
-# Executa sem deixar -e matar o wrapper antes de capturar rc
 set +e
 \"\${run_cmd[@]}\" >>\"\$log_file\" 2>&1
 rc=\$?
@@ -174,7 +164,7 @@ fi
 exit \$rc
 ' </dev/null >/dev/null 2>&1 & echo STARTED" | tee -a "$debug_log"
 
-# 5) Validação leve (o deploy-remote valida de verdade)
+# 5) Validação leve
 sleep 1
 if ! rsh "$master_ip" "ss -lntp 2>/dev/null | grep -q \":${master_port} \""; then
   log_w "discoverymaster ainda não aparece escutando ${master_port}. Veja: ${remote_logs_dir}/discoverymaster.log" | tee -a "$debug_log"
