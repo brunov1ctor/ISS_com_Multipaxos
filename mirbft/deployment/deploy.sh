@@ -220,36 +220,20 @@ else
   log_info "Usando experimento existente: $exp_data_dir"
 fi
 
-########################################
-# Criação de diretórios locais do experimento
-########################################
-
-if $new_experiment; then
-  mkdir -p "$exp_data_dir"
-else
-  mkdir -p "$exp_data_dir/config"
-fi
-
-mkdir -p "$exp_data_dir/logs" "$exp_data_dir/_debug"
-
 log_info "Garantidos diretórios locais em $exp_data_dir:"
+mkdir -p "$exp_data_dir/logs" "$exp_data_dir/_debug"
 log_info "  - logs/"
 log_info "  - _debug/"
-log_info "  - config/ (se aplicável)"
-
-########################################
-# Preflight build
-########################################
+if [ -d "$exp_data_dir/config" ] || $new_experiment; then
+  mkdir -p "$exp_data_dir/config"
+  log_info "  - config/ (se aplicável)"
+fi
 
 ensure_local_binaries
 
-########################################
-# (Opcional) gerar config e deployment csv/dpl
-########################################
+log_sep "[INIT] Gerando config/deployment para o novo experimento"
 
 if $new_experiment; then
-  log_sep "[INIT] Gerando config/deployment para o novo experimento"
-
   if [[ ! -x "$config_generator_script" ]]; then
     if [[ -x "$deploy_dir/$config_generator_script" ]]; then
       config_generator_script="$deploy_dir/$config_generator_script"
@@ -257,111 +241,38 @@ if $new_experiment; then
   fi
 
   if [[ ! -x "$config_generator_script" ]]; then
-    log_err "Config generator não encontrado/não executável: $config_generator_script"
-    exit 3
+    log_err "Config generator não encontrado ou não executável: $config_generator_script"
+    exit 1
   fi
 
   log_info "Config generator: $config_generator_script"
   log_info "exp_data_dir    : $exp_data_dir"
 
-  (
-    cd "$deploy_dir" || exit 1
-    "$config_generator_script" "$exp_data_dir"
-  )
+  "$config_generator_script" "$exp_data_dir" \
+    | tee "$exp_data_dir/logs/config-generator.log"
 
   if [ ! -f "$exp_data_dir/$csv_filename" ] || [ ! -f "$exp_data_dir/$dpl_filename" ]; then
-    log_err "Arquivos esperados não foram gerados em $exp_data_dir: $csv_filename / $dpl_filename"
-    exit 4
+    log_err "Config generator não gerou $csv_filename e/ou $dpl_filename em $exp_data_dir"
+    exit 1
   fi
 
   log_info "OK: gerados $csv_filename e $dpl_filename"
+else
+  if [ ! -f "$exp_data_dir/$csv_filename" ] || [ ! -f "$exp_data_dir/$dpl_filename" ]; then
+    log_err "Experimento existente sem $csv_filename/$dpl_filename: $exp_data_dir"
+    exit 1
+  fi
 fi
 
 if $init_only; then
-  log_warn "--init-only: saindo após gerar experimento/config."
-  echo "Experiment data directory: $exp_data_dir"
+  log_warn "init-only -> parando após gerar config."
   exit 0
 fi
 
-########################################
-# Exporta variáveis para deploy-remote.sh
-########################################
-
+log_sep "[REMOTE] Deploy remoto + start"
 export exp_data_dir
 export instance_info_file
-export deployment_data_root
-export dpl_filename
-export csv_filename
 
-if ! bash "$deploy_dir/scripts/deploy-remote.sh"; then
-  rc=$?
-  log_err "scripts/deploy-remote.sh falhou (rc=$rc)."
-  exit "$rc"
-fi
-
-########################################
-# Verificação de resultados reais
-########################################
-
-log_sep "[VERIFY] Checando se existem resultados reais"
-
-if [[ ! -d "$exp_data_dir/experiment-output" ]]; then
-  log_err "Sem experiment-output em $exp_data_dir. Deploy não gerou métricas reais."
-  exit 9
-fi
-
-cnt="$(find "$exp_data_dir/experiment-output" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
-
-if [[ "$cnt" == "0" ]]; then
-  log_err "experiment-output existe mas está vazio. Deploy inválido (sem métricas)."
-  log_err "Dica: veja $exp_data_dir/result-fetching.log e $exp_data_dir/_debug/master-diag.txt (se existirem)."
-  exit 10
-fi
-
-log_info "OK: experiment-output contém dados ($cnt dirs)."
-
-########################################
-# Geração de resumo dos resultados
-########################################
-
-log_sep "[SUMMARY] Gerando result-summary.csv"
-
-result_summary_path="$exp_data_dir/$result_summary_file"
-if ! "$deploy_dir/scripts/analyze/summarize.sh" \
-  "$exp_data_dir/$csv_filename" \
-  "$exp_data_dir/experiment-output" \
-  | tee "$result_summary_path"
-then
-  log_err "Falha ao gerar resumo em $result_summary_path"
-  exit 11
-fi
-
-########################################
-# Publicar resultados (evitar /users/<user>/iss por quota)
-########################################
-
-log_sep "[PUBLISH] Exportando métricas para deployment-data/published/experiment-output"
-
-publish_root="${deployment_data_root}/published/experiment-output"
-publish_name="$(basename "$exp_data_dir")"     # ex: remote-0000
-publish_dir="${publish_root}/${publish_name}"
-
-mkdir -p "$publish_dir"
-
-cp -f "$result_summary_path" "$publish_dir/result-summary.csv"
-rsync -a --delete \
-  "$exp_data_dir/experiment-output/" \
-  "$publish_dir/experiment-output/"
-
-cp -f "$exp_data_dir/$csv_filename" "$publish_dir/$csv_filename" 2>/dev/null || true
-cp -f "$exp_data_dir/$dpl_filename" "$publish_dir/$dpl_filename" 2>/dev/null || true
-
-ln -sfn "$publish_dir" "${publish_root}/latest"
-
-log_info "Publicado em: $publish_dir"
-log_info "Atalho: ${publish_root}/latest"
-
-echo
-echo "Done. Experiment data directory: $exp_data_dir"
-exit 0
+# Este script faz reset remoto + start master/slaves
+bash "$deploy_dir/scripts/deploy-remote.sh"
 
