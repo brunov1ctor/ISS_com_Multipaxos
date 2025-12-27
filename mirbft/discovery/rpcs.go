@@ -19,9 +19,9 @@ import (
 	"sort"
 	"sync/atomic"
 
-	logger "github.com/rs/zerolog/log"
 	"github.com/hyperledger-labs/mirbft/crypto"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
+	logger "github.com/rs/zerolog/log"
 	"google.golang.org/grpc/peer"
 )
 
@@ -92,13 +92,20 @@ func (ds *DiscoveryServer) RegisterPeer(ctx context.Context, req *pb.RegisterPee
 	// This step should be executed once after collecting all peer identities, since it depends on the number of peers
 	ds.keyGenOnce.Do(ds.generateTBLSKeys)
 
+	// Snapshot shared data under lock to avoid races with resets or parallel RPCs.
+	ds.mu.Lock()
+	peers := append([]*pb.NodeIdentity(nil), ds.peerIdentities...)
+	tblsPub := append([]byte(nil), ds.TBLSPublicKey...)
+	share := append([]byte(nil), ds.TBLSPrivateKeyShares[newID]...)
+	ds.mu.Unlock()
+
 	// Notify node, sending it the full membership list and its own new ID and key.
 	return &pb.RegisterPeerResponse{
 		NewPeerId:        newID,
 		PrivKey:          privKeyBytes,
-		TblsPubKey:       ds.TBLSPublicKey,
-		TblsPrivKeyShare: ds.TBLSPrivateKeyShares[newID],
-		Peers:            ds.peerIdentities,
+		TblsPubKey:       tblsPub,
+		TblsPrivKeyShare: share,
+		Peers:            peers,
 	}, nil
 
 }
@@ -158,9 +165,12 @@ func (ds *DiscoveryServer) RegisterClient(ctx context.Context, req *pb.RegisterC
 	// Should be executed once, after collecting peerIdentities, since it depends on the number of peers.
 
 	// Return the new client ID and a list of identities of the peers
+	ds.mu.Lock()
+	peers := append([]*pb.NodeIdentity(nil), ds.peerIdentities...)
+	ds.mu.Unlock()
 	return &pb.RegisterClientResponse{
 		NewClientId: newClientID,
-		Peers:       ds.peerIdentities,
+		Peers:       peers,
 	}, nil
 }
 
@@ -257,6 +267,9 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 func (ds *DiscoveryServer) collectPeerIdentities() {
 	logger.Info().Msg("Generating membership list.")
 
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
 	// Allocate slice with identities
 	ds.peerIdentities = make([]*pb.NodeIdentity, 0)
 
@@ -275,7 +288,12 @@ func (ds *DiscoveryServer) collectPeerIdentities() {
 
 // Generates keys for the BLS threshold cryptosystem
 func (ds *DiscoveryServer) generateTBLSKeys() {
-	n := len(ds.peerIdentities)
+	// Copy identities under lock so we don't race with reset/collection.
+	ds.mu.Lock()
+	ids := append([]*pb.NodeIdentity(nil), ds.peerIdentities...)
+	ds.mu.Unlock()
+
+	n := len(ids)
 	f := (n - 1) / 3
 	t := 2*f + 1
 	pubKey, privKeyShares := crypto.TBLSKeyGeneration(t, n)
@@ -293,8 +311,10 @@ func (ds *DiscoveryServer) generateTBLSKeys() {
 		}
 		serializedPrivKeyShares = append(serializedPrivKeyShares, serialized)
 	}
+	ds.mu.Lock()
 	ds.TBLSPublicKey = serializedPubKey
 	ds.TBLSPrivateKeyShares = serializedPrivKeyShares
+	ds.mu.Unlock()
 }
 
 // Creates a new slave with a fresh ID and adds it to the local list of slaves.
@@ -328,3 +348,4 @@ func (ds *DiscoveryServer) addNewSlave(ctx context.Context, tag string) *slave {
 	// Return freshly created slave.
 	return newSlave
 }
+
