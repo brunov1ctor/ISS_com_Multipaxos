@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-	"path/filepath"
 
 	"github.com/rs/zerolog"
 	logger "github.com/rs/zerolog/log"
@@ -168,30 +169,38 @@ cmdLoop:
 				// Create Command to execute
 				execCmd = exec.Command(cmd.ExecStart.Name, cmd.ExecStart.Args...)
 
-				// Ensure output directory exists (robust in case experiment-output/<id>/slave-__id__ was not created yet)
-				outDir := filepath.Dir(cmd.ExecStart.OutputFileName)
-				if err := os.MkdirAll(outDir, 0755); err != nil {
-					logger.Error().
-						Err(err).
-						Str("outDir", outDir).
-						Msg("Could not create directory for ExecStart output file")
+				// Output handling:
+				//  - If OutputFileName == "-" (or empty), discard output WITHOUT creating any file.
+				//  - Otherwise, create the output file and redirect stdout/stderr there.
+				if cmd.ExecStart.OutputFileName == "-" || cmd.ExecStart.OutputFileName == "" {
+					execCmd.Stdout = io.Discard
+					execCmd.Stderr = io.Discard
+					execOutFile = nil
 				} else {
-					logger.Debug().
-						Str("outDir", outDir).
-						Str("outFileName", cmd.ExecStart.OutputFileName).
-						Msg("ExecStart output directory ensured")
-				}
+					// Ensure output directory exists (robust in case experiment-output/<id>/slave-__id__ was not created yet)
+					outDir := filepath.Dir(cmd.ExecStart.OutputFileName)
+					if err := os.MkdirAll(outDir, 0755); err != nil {
+						logger.Error().
+							Err(err).
+							Str("outDir", outDir).
+							Msg("Could not create directory for ExecStart output file")
+					} else {
+						logger.Debug().
+							Str("outDir", outDir).
+							Str("outFileName", cmd.ExecStart.OutputFileName).
+							Msg("ExecStart output directory ensured")
+					}
 
-				// Open output file (will be closed when executing the ExecWait command)
-				if execOutFile, err = os.Create(cmd.ExecStart.OutputFileName); err != nil {
-					logger.Error().
-						Err(err).
-						Str("outFileName", cmd.ExecStart.OutputFileName).
-						Msg("Could not open file for writing")
-					// Redirect Command's output to file
-				} else {
-					execCmd.Stdout = execOutFile
-					execCmd.Stderr = execOutFile
+					// Open output file (will be closed when executing the ExecWait command)
+					if execOutFile, err = os.Create(cmd.ExecStart.OutputFileName); err != nil {
+						logger.Error().
+							Err(err).
+							Str("outFileName", cmd.ExecStart.OutputFileName).
+							Msg("Could not open file for writing")
+					} else {
+						execCmd.Stdout = execOutFile
+						execCmd.Stderr = execOutFile
+					}
 				}
 
 				// Launch Command
