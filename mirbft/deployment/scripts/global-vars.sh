@@ -65,6 +65,11 @@ remote_user="${remote_user:-$USER}"
 # Default novo: /tmp/iss-<user>
 remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
 
+# Diretório "leve" (configs/TLS/scripts) mantido em /users/<user>/iss.
+# Isso evita que templates/commands que referenciam /users/<user>/iss quebrem
+# quando remote_work_dir aponta para /tmp.
+remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
+
 # Arquivos de status/log remotos.
 remote_status_file="$remote_work_dir/status"
 remote_ready_file="$remote_work_dir/master-ready"
@@ -77,8 +82,10 @@ remote_slave_log="$remote_work_dir/slave-log.log"
 # (Evita duplicação de tls-data/ e raw-results/ e diretórios vazios.)
 remote_exp_dir="$remote_work_dir"
 
-# Diretório de configs remotas (onde deploy.sh copia config-000X.yml).
-remote_config_dir="$remote_work_dir/experiment-config"
+# Diretórios leves em /users (configs/TLS)
+remote_config_dir="${remote_base_dir}/experiment-config"
+remote_cfg_dir="${remote_base_dir}/config"
+remote_tls_dir="${remote_base_dir}/tls-data"
 
 #########################################
 # GOPATH e binários remotos (Emulab)
@@ -90,7 +97,10 @@ remote_bin_dir="${remote_bin_dir:-$remote_gopath/bin}"
 
 # Código remoto (se você quiser clonar o repositório também nos slaves).
 remote_code_dir="$remote_work_dir/mirbft"
-remote_tls_directory="$remote_code_dir/tls-data"
+
+# Mantém compatibilidade com scripts antigos que esperavam um "remote_tls_directory".
+# Agora o TLS canônico fica em ${remote_tls_dir}.
+remote_tls_directory="$remote_tls_dir"
 
 # Arquivos de log compactados gerados pelos slaves.
 remote_log_archives="experiment-output-*.tar.gz"

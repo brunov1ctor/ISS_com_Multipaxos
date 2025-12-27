@@ -48,14 +48,17 @@ ready_file="${ready_file:-${remote_work_dir}/master-ready}"
 master_port="${master_port:-9999}"
 
 status_exit_file="${status_exit_file:-${status_file}.exit}"
-remote_tls_dir="${remote_work_dir}/tls-data"
+remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
+remote_tls_dir="${remote_tls_dir:-${remote_base_dir}/tls-data}"
+remote_config_dir="${remote_config_dir:-${remote_base_dir}/experiment-config}"
+remote_cfg_dir="${remote_cfg_dir:-${remote_base_dir}/config}"
 remote_logs_dir="${remote_work_dir}/logs"
 
 debug_log="${exp_data_dir}/_debug/start-master.${master_ip}.log"
 mkdir -p "$(dirname "$debug_log")"
 
 log_i "master_ip=${master_ip} port=${master_port} user=${remote_user}" | tee -a "$debug_log"
-log_i "remote_work_dir=${remote_work_dir} remote_bin_dir=${remote_bin_dir}" | tee -a "$debug_log"
+log_i "remote_work_dir=${remote_work_dir} remote_base_dir=${remote_base_dir} remote_bin_dir=${remote_bin_dir}" | tee -a "$debug_log"
 log_i "local_master_cmd=${local_master_cmd}" | tee -a "$debug_log"
 log_i "status_file=${status_file} status_exit_file=${status_exit_file} ready_file=${ready_file}" | tee -a "$debug_log"
 
@@ -65,7 +68,9 @@ if [[ ! -f "$local_master_cmd" ]]; then
 fi
 
 # 1) Layout remoto mínimo
-rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_tls_dir}' '${remote_logs_dir}' '${remote_work_dir}/experiment-config' '${remote_work_dir}/config'" || {
+#    - pesado: remote_work_dir (logs/status/master-commands)
+#    - leve : remote_base_dir (tls-data, experiment-config, config)
+rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_logs_dir}' '${remote_base_dir}' '${remote_tls_dir}' '${remote_config_dir}' '${remote_cfg_dir}'" || {
   log_e "Falha ao preparar diretórios remotos." | tee -a "$debug_log"
   exit 1
 }
@@ -79,7 +84,7 @@ if [[ -d "$local_tls_dir" ]]; then
   tar -C "$local_tls_dir" -czf - . | rsh "$master_ip" "tar -C '${remote_tls_dir}' -xzf -" || true
 fi
 
-# 2c) Publica configs para o master em ${remote_work_dir}/experiment-config
+# 2c) Publica configs para o master em ${remote_config_dir}
 #     - prioridade: exp_data_dir/experiment-config/*
 #     - fallback:   exp_data_dir/config/config-*.yml  (o que o generator cria)
 publish_src=""
@@ -90,18 +95,18 @@ elif [[ -d "${exp_data_dir}/config" ]]; then
 fi
 
 if [[ -n "$publish_src" ]]; then
-  log_i "Publicando configs do experimento no master: ${publish_src} -> ${remote_work_dir}/experiment-config/" | tee -a "$debug_log"
+  log_i "Publicando configs do experimento no master: ${publish_src} -> ${remote_config_dir}/" | tee -a "$debug_log"
   shopt -s nullglob
   files=( "${publish_src}/"*.yml "${publish_src}/"*.yaml )
   if (( ${#files[@]} > 0 )); then
-    scp $scp_options "${files[@]}" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" \
+    scp $scp_options "${files[@]}" "${remote_user}@${master_ip}:${remote_config_dir}/" \
       || log_w "Falha ao copiar configs para experiment-config/ (continuando)." | tee -a "$debug_log"
   else
     log_w "Nenhum .yml/.yaml em ${publish_src}; não publiquei configs." | tee -a "$debug_log"
   fi
 
   # valida presença do config-0000.yml no master (é o primeiro que o master-commands costuma pedir)
-  rsh "$master_ip" "test -s '${remote_work_dir}/experiment-config/config-0000.yml'" \
+  rsh "$master_ip" "test -s '${remote_config_dir}/config-0000.yml'" \
     && log_i "experiment-config OK no master (config-0000.yml presente)." | tee -a "$debug_log" \
     || log_w "experiment-config sem config-0000.yml (pode falhar fetch do config)." | tee -a "$debug_log"
 else
