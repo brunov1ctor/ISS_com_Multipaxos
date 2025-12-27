@@ -1,16 +1,4 @@
 #!/usr/bin/env bash
-# start-master.sh
-# - inicia o discoverymaster remotamente
-# - sincroniza master-commands + tls-data
-# - publica experiment-config (a partir de exp_data_dir/config ou exp_data_dir/experiment-config)
-# - FORÇA o discoverymaster no modo "master" (evita cair no LEGACY -> SIGBUS)
-#
-# Semântica:
-#   * status_file       = estado lógico do experimento (DONE/ANALYZED terminal)
-#   * status_exit_file  = resultado do processo do discoverymaster (EXIT rc=...)
-#
-# Requisitos:
-#   - discoverymaster suporta: discoverymaster master <addr:port> <cmdfile>
 
 set -euo pipefail
 
@@ -41,7 +29,6 @@ ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/d
 scp_options="${scp_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 
 rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
-scp_to_master() { scp $scp_options "${1}" "${remote_user}@${master_ip}:${2}"; }
 
 status_file="${status_file:-${remote_work_dir}/status}"
 ready_file="${ready_file:-${remote_work_dir}/master-ready}"
@@ -71,7 +58,7 @@ rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_tls_dir}' '${remote_lo
 }
 
 # 2) Copia master-commands para o remote_work_dir
-scp_to_master "$local_master_cmd" "${remote_work_dir}/master-commands.cmd"
+scp $scp_options "$local_master_cmd" "${remote_user}@${master_ip}:${remote_work_dir}/master-commands.cmd"
 
 # 2b) Reforça tls-data (opcional)
 local_tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
@@ -80,8 +67,6 @@ if [[ -d "$local_tls_dir" ]]; then
 fi
 
 # 2c) Publica configs para o master em ${remote_work_dir}/experiment-config
-#     - prioridade: exp_data_dir/experiment-config/*
-#     - fallback:   exp_data_dir/config/config-*.yml  (o que o generator cria)
 publish_src=""
 if [[ -d "${exp_data_dir}/experiment-config" ]]; then
   publish_src="${exp_data_dir}/experiment-config"
@@ -91,16 +76,20 @@ fi
 
 if [[ -n "$publish_src" ]]; then
   log_i "Publicando configs do experimento no master: ${publish_src} -> ${remote_work_dir}/experiment-config/" | tee -a "$debug_log"
+
+  # Sem arrays: itera por glob e copia arquivo por arquivo
   shopt -s nullglob
-  files=( "${publish_src}/"*.yml "${publish_src}/"*.yaml )
-  if (( ${#files[@]} > 0 )); then
-    scp $scp_options "${files[@]}" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" \
-      || log_w "Falha ao copiar configs para experiment-config/ (continuando)." | tee -a "$debug_log"
-  else
+  copied_any=false
+  for f in "${publish_src}/"*.yml "${publish_src}/"*.yaml; do
+    copied_any=true
+    scp $scp_options "$f" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" \
+      || log_w "Falha ao copiar $f (continuando)." | tee -a "$debug_log"
+  done
+
+  if [[ "$copied_any" == "false" ]]; then
     log_w "Nenhum .yml/.yaml em ${publish_src}; não publiquei configs." | tee -a "$debug_log"
   fi
 
-  # valida presença do config-0000.yml no master (é o primeiro que o master-commands costuma pedir)
   rsh "$master_ip" "test -s '${remote_work_dir}/experiment-config/config-0000.yml'" \
     && log_i "experiment-config OK no master (config-0000.yml presente)." | tee -a "$debug_log" \
     || log_w "experiment-config sem config-0000.yml (pode falhar fetch do config)." | tee -a "$debug_log"
@@ -111,7 +100,7 @@ fi
 # 3) Mata instâncias antigas do discoverymaster
 rsh "$master_ip" "killall -9 discoverymaster 2>/dev/null || true"
 
-# 4) Inicia discoverymaster com wrapper robusto (FORÇANDO master mode e bind no master_ip)
+# 4) Inicia discoverymaster (FORÇANDO master mode e bind no master_ip)
 log_i "starting discoverymaster..." | tee -a "$debug_log"
 
 rsh "$master_ip" "nohup bash -lc '
@@ -132,9 +121,7 @@ bin=\"${remote_bin_dir}/discoverymaster\"
 
 mkdir -p \"\$(dirname \"\$status_file\")\" \"\$(dirname \"\$status_exit_file\")\" \"\$(dirname \"\$ready_file\")\" \"\$(dirname \"\$log_file\")\"
 
-cur=\"\$(
-  ( test -f \"\$status_file\" && cat \"\$status_file\" || true ) | tr -d \"\r\" | tail -n 1
-)\"
+cur=\"\$( ( test -f \"\$status_file\" && cat \"\$status_file\" || true ) | tr -d \"\r\" | tail -n 1 )\"
 if [[ \"\$cur\" != \"DONE\" && \"\$cur\" != \"ANALYZED\" ]]; then
   echo RUNNING > \"\$status_file\" 2>/dev/null || true
 fi
@@ -144,19 +131,14 @@ echo READY > \"\$ready_file\" 2>/dev/null || true
 
 addr=\"\$master_ip:\$master_port\"
 
-# FORÇA master mode (sem detecção por --help)
-run_cmd=(\"\$bin\" master \"\$addr\" \"\$cmd_file\")
-
 set +e
-\"\${run_cmd[@]}\" >>\"\$log_file\" 2>&1
+\"\$bin\" master \"\$addr\" \"\$cmd_file\" >>\"\$log_file\" 2>&1
 rc=\$?
 set -e
 
 echo \"EXIT rc=\$rc\" > \"\$status_exit_file\" 2>/dev/null || true
 
-cur2=\"\$(
-  ( test -f \"\$status_file\" && cat \"\$status_file\" || true ) | tr -d \"\r\" | tail -n 1
-)\"
+cur2=\"\$( ( test -f \"\$status_file\" && cat \"\$status_file\" || true ) | tr -d \"\r\" | tail -n 1 )\"
 if [[ \"\$cur2\" != \"DONE\" && \"\$cur2\" != \"ANALYZED\" ]]; then
   echo \"EXIT rc=\$rc\" > \"\$status_file\" 2>/dev/null || true
 fi
