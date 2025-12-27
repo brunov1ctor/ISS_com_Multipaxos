@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import os.path
 import sys
 from collections import defaultdict
 
@@ -10,25 +9,19 @@ SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 
-# Base dir onde o ISS roda (nos slaves e no master)
-#
-# IMPORTANTE:
-#   Evite /users/<user>/iss (quota/arquivos pesados). O deploy exporta
-#   ISS_BASE_DIR para apontar para o workdir remoto. Se ISS_BASE_DIR não
-#   estiver definido, use /tmp/<USER>/iss.
+# Base dir onde o ISS roda (nos slaves e no master).
+# Default em /users/<USER>/iss (teu ambiente já usa isso).
+# Pode sobrescrever com ISS_BASE_DIR se quiser.
 BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
-    f"/tmp/{os.environ.get('USER', 'user')}/iss",
+    f"/users/{os.environ.get('USER', 'user')}/iss",
 )
 
 MASTER_CONFIG_DIR = f"{BASE_DIR}/experiment-config"
 MASTER_EXP_DIR = BASE_DIR
 
-# Tudo absoluto nos slaves (evita depender do cwd do discoveryslave)
+# Tudo absoluto nos slaves
 SLAVE_CONFIG_FILE = f"{BASE_DIR}/config/config.yml"
-
-OLDMIR_SERVER_CONFIG = "config/oldmir-config-server.yml"
-OLDMIR_CLIENT_CONFIG = "config/oldmir-config-client.yml"
 
 LOCAL_MASTER_STATUS_FILE = "master-status"
 LOCAL_IP_ADDRESS = "127.0.0.1"
@@ -68,15 +61,6 @@ def createLogDir(expID):
     output("")
 
 
-def createLocalLogDir(expID):
-    output("# mkdir local log dir")
-    output(
-        "exec-start __all__ /dev/null mkdir -p {0}/config".format(_exp_slave_dir(expID))
-    )
-    output("exec-wait __all__ {0}".format(FS_SETTLE_DELAY_MS))
-    output("")
-
-
 def ensureConfigDir(slaves):
     output("# ensure config dir")
     for s in slaves:
@@ -91,10 +75,9 @@ def ensureConfigDir(slaves):
 def pushConfigFiles(expID, slaves):
     output("# push config")
     for s, configFile in slaves.items():
-        # destino absoluto no slave
         dest = SLAVE_CONFIG_FILE
 
-        # NÃO crie scp-output-*.log em disco: joga stdout/err em /dev/null.
+        # NÃO gravar scp-output-*.log em disco => /dev/null
         if deplType == "remote":
             scp_cmd = (
                 "exec-start {0} /dev/null stubborn-scp.sh {5} "
@@ -149,30 +132,6 @@ def snapshotConfigNow(expID, slaves):
             "exec-start {0} {1}/FAILED echo Could not snapshot config; "
             "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
         )
-    for s in slaves:
-        output("sync {0}".format(s))
-    output("")
-
-
-def pushLocalConfigFiles(expID, slaves):
-    output("# push local config")
-    for s, configFile in slaves.items():
-        output(
-            "exec-start {0} /dev/null cp {1}/{2} {3}".format(
-                s, local_config_dir, configFile, SLAVE_CONFIG_FILE
-            )
-        )
-        output("exec-wait {0} {1}".format(s, FS_SETTLE_DELAY_MS))
-
-    output("# verify config present (local)")
-    for s in slaves:
-        output("exec-start {0} /dev/null test -s {1}".format(s, SLAVE_CONFIG_FILE))
-        output(
-            "exec-wait {0} 2000 "
-            "exec-start {0} {1}/FAILED echo Config missing (local); "
-            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
-        )
-
     for s in slaves:
         output("sync {0}".format(s))
     output("")
@@ -239,9 +198,6 @@ def runClients(expID, clients):
             )
         )
 
-    # IMPORTANTE:
-    # - Não reduzir timeout por cliente: isso pode fazer o 2º/3º cliente falhar “cedo demais”
-    #   em execuções com múltiplos clientes.
     timeout = CLIENT_TIMEOUT
     for c in clients:
         output(
@@ -262,17 +218,8 @@ def stopPeers(peers):
 
 
 def stopPeerProcesses(expID, peers):
-    """Stop only orderingpeer processes (not the slave framework).
-
-    The `stop <tag>` command stops the discoveryslave framework for that tag.
-    After that, `exec-start`/`scp`/`tar` steps will fail.
-
-    We therefore send a best-effort SIGINT to orderingpeer processes *via exec-start*,
-    keep the framework alive to package logs, and only then `stop peers` at the end.
-    """
     output("# stop orderingpeer processes (keep discoveryslave alive)")
     for p in peers:
-        # -f to also match when patched to absolute path; || true to avoid non-zero if already exited
         output(
             "exec-start {0} /dev/null sh -lc 'pkill -INT -f "
             "\"(^|/)(orderingpeer)(\\s|$)\" || true'".format(p)
@@ -305,9 +252,8 @@ def saveConfig(expID, slaves):
 
 
 def submitLogs(expID, slaves):
-    # submitLogs empacota + copia logs via tar/scp (pesado) e ainda criava scp-output-*.log.
-    # Desativado por padrão para não lotar quota.
-    output("# submit logs (DESATIVADO: sem tar/scp pesado e sem scp-output-*.log)")
+    # DESATIVADO (não empacota/copiar logs pesados e não cria scp-output-*.log)
+    output("# submit logs (DESATIVADO)")
     for s in slaves:
         output("exec-start {0} /dev/null true".format(s))
     output("")
@@ -317,12 +263,6 @@ def updateStatus(value: str):
     output("# update status")
     output("write-file $status_file {0}".format(value))
     output("")
-
-
-def stopAll():
-    output("# stop all")
-    output("stop __all__")
-    output("wait for {0}".format(STOP_SLAVES_DELAY))
 
 
 def writeReadyFile():
@@ -355,19 +295,14 @@ def generateCommands(expID, peers, clients):
     startPeers(expID, list(peers))
     runClients(expID, list(clients))
 
-    # IMPORTANT: do NOT stop the slave framework before packaging/scp.
-    # Stop only the orderingpeer processes first, then unset tc, then package + scp,
-    # and only after that stop the framework.
     stopPeerProcesses(expID, list(peers))
     unsetBandwidth(expID, bandwidths)
 
     saveConfig(expID, slaves)
     submitLogs(expID, slaves)
 
-    # Now it's safe to stop the peers tag (framework stop).
     stopPeers(list(peers))
 
-    # marca progresso
     updateStatus(expID)
     output("")
 
@@ -393,7 +328,7 @@ def deploy(tokens):
                 deploymentSchedule.append((lastFinished, n, tag, templateFile))
             else:
                 sys.exit(
-                    "ic-parse-experiment.py: deploy: must specify machine template before token '{0}'".format(
+                    "generate-master-commands.py: deploy: must specify machine template before token '{0}'".format(
                         tokens[0]
                     )
                 )
@@ -460,10 +395,10 @@ def run(expID, tokens):
                 if os.path.isfile(configFile):
                     role[tokens[0]] = (config, bandwidth)
                 else:
-                    sys.exit("ic-parse-experiment.py: config file not found: {0}".format(configFile))
+                    sys.exit("generate-master-commands.py: config file not found: {0}".format(configFile))
             else:
                 sys.exit(
-                    "ic-parse-experiment.py: run {0}: must specify role and config before token '{1}'".format(
+                    "generate-master-commands.py: run {0}: must specify role and config before token '{1}'".format(
                         expID, tokens[0]
                     )
                 )
@@ -480,16 +415,10 @@ def run(expID, tokens):
     lastFinished = expID
 
 
-def printDeploymentSchedule():
-    for expID, n, tag, templateFile in deploymentSchedule:
-        print("{0} {1} {2} {3}".format(expID, n, tag, templateFile))
-
-
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
     sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
 
-# remote também usa o mesmo BASE_DIR absoluto no master
 inFileName = sys.argv[2]
 outFile = open(sys.argv[3], "w")
 
