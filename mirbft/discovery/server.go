@@ -18,8 +18,8 @@ import (
 	"net"
 	"sync"
 
-	logger "github.com/rs/zerolog/log"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
+	logger "github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 )
 
@@ -68,7 +68,11 @@ type DiscoveryServer struct {
 
 	// Channel indicating whether the ID distributor thread should stop.
 	// Pushing a value to this channel stops the ID distributor thread.
-	stopIDDistributor chan bool
+	stopIDDistributor chan struct{}
+
+	// Protects shared mutable state accessed by multiple RPC goroutines.
+	// In particular: peerIdentities and reset operations.
+	mu sync.Mutex
 
 	// When issuing a master command, this variable can be set to pointer to an actual WaitGroup.
 	// What WG will be initialized to the number of slaves to which the command is sent.
@@ -96,6 +100,7 @@ func NewDiscoveryServer() *DiscoveryServer {
 	ds.slaveIDs = make(chan int32)
 	ds.cmdIDs = make(chan int32)
 	ds.idResetChan = make(chan struct{})
+	ds.stopIDDistributor = make(chan struct{})
 
 	// Initially not waiting for any command.
 	ds.waitingForCmd = -1
@@ -159,7 +164,10 @@ loop:
 }
 
 func (ds *DiscoveryServer) StopIDDistribution() {
-	ds.stopIDDistributor <- true
+	// StopIDDistribution may be called more than once in some deployments.
+	// Closing an already closed channel panics; swallow that to make it idempotent.
+	defer func() { _ = recover() }()
+	close(ds.stopIDDistributor)
 }
 
 // Resets part of the server's state that deals with Peers and Clients.
@@ -177,7 +185,9 @@ func (ds *DiscoveryServer) resetPC(numPeers int) {
 
 	// Reset data structures holding peer information, as well as synchronization objects used for replying
 	ds.peers = sync.Map{} // TODO: Technically this may cause a race condition with accessing the map. Fix it!
+	ds.mu.Lock()
 	ds.peerIdentities = nil
+	ds.mu.Unlock()
 	ds.peerWg = sync.WaitGroup{}
 	ds.peerWg.Add(numPeers)
 	ds.syncWg = sync.WaitGroup{}
@@ -185,3 +195,4 @@ func (ds *DiscoveryServer) resetPC(numPeers int) {
 	ds.doOnce = sync.Once{}
 	ds.keyGenOnce = sync.Once{}
 }
+
