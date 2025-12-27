@@ -41,6 +41,12 @@ BEST_EFFORT_WAIT_MS = 15000
 BEST_EFFORT_TAR_WAIT_MS = 120000
 BEST_EFFORT_SCP_WAIT_MS = 180000
 
+# Link canônico (nos slaves) que o peer/client costuma esperar existir.
+# NÃO usar bash -lc aqui: o parser do framework pode “engolir” o -lc como um único arg e quebrar (exit status 2).
+REMOTE_WORK_DIR = os.environ.get("ISS_REMOTE_WORK_DIR", "/tmp/iss-Bruno")
+REMOTE_TLS_LINK = f"{REMOTE_WORK_DIR}/tls-data"
+REMOTE_TLS_SRC = f"{BASE_DIR}/tls-data"
+
 lastFinished = -1
 deploymentSchedule = []
 numSlaves = defaultdict(int)
@@ -147,27 +153,47 @@ def snapshotConfigNow(expID, slaves):
     output("")
 
 
-def ensureTLSDataLink(expID, slaves):
+def ensureTlsDataLink(expID, slaves):
     """
-    orderingpeer/orderingclient rodam com cwd=/tmp/iss-Bruno e o config.yml costuma referenciar TLS como
-    tls-data/auth.pem, tls-data/client-*.pem etc. Porém o deploy sincroniza TLS em {BASE_DIR}/tls-data.
-    Então criamos um symlink /tmp/iss-Bruno/tls-data -> {BASE_DIR}/tls-data em TODOS os nós
-    (peers + clients) ANTES de iniciar orderingpeer/orderingclient.
+    Corrige o problema que você viu: o framework executava `bash -lc '...'`
+    mas o parser acabava enviando o `-lc '...'` como UM único argumento
+    (exit status 2). Aqui fazemos só comandos simples, sem shell -lc,
+    e criamos o link ABSOLUTO esperado: /tmp/iss-Bruno/tls-data -> /users/Bruno/iss/tls-data
     """
-    output("# ensure tls-data link in /tmp/iss-Bruno (fix TLS relative paths)")
+    output("# ensure tls-data link (ABSOLUTO, sem bash -lc)")
     for s in slaves:
-        # '-' para não criar log.
+        # garante o work dir
+        output("exec-start {0} - mkdir -p {1}".format(s, REMOTE_WORK_DIR))
         output(
-            "exec-start {0} - bash -lc 'cd /tmp/iss-Bruno && "
-            "test -d {1}/tls-data && rm -rf tls-data && ln -s {1}/tls-data tls-data'".format(
-                s, BASE_DIR
-            )
+            "exec-wait {0} 5000 "
+            "exec-start {0} {1}/FAILED echo Could not mkdir work dir; "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
         )
+
+        # remove link/dir antigo (se existir)
+        output("exec-start {0} - rm -rf {1}".format(s, REMOTE_TLS_LINK))
+        output(
+            "exec-wait {0} 5000 "
+            "exec-start {0} {1}/FAILED echo Could not remove old tls-data; "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
+        )
+
+        # cria symlink absoluto
+        output("exec-start {0} - ln -s {1} {2}".format(s, REMOTE_TLS_SRC, REMOTE_TLS_LINK))
         output(
             "exec-wait {0} 5000 "
             "exec-start {0} {1}/FAILED echo Could not create tls-data link; "
             "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
         )
+
+        # valida link
+        output("exec-start {0} - test -e {1}".format(s, REMOTE_TLS_LINK))
+        output(
+            "exec-wait {0} 2000 "
+            "exec-start {0} {1}/FAILED echo tls-data link missing; "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
+        )
+
     for s in slaves:
         output("sync {0}".format(s))
     output("")
@@ -327,8 +353,8 @@ def generateCommands(expID, peers, clients):
     pushConfigFiles(expID, configFiles)
     snapshotConfigNow(expID, slaves)
 
-    # >>> FIX TLS RELATIVE PATHS (NO MANUAL COMMANDS)
-    ensureTLSDataLink(expID, slaves)
+    # ✅ FIX PRINCIPAL: cria/valida o link TLS do jeito que o cluster espera
+    ensureTlsDataLink(expID, slaves)
 
     setBandwidth(expID, bandwidths)
     startPeers(expID, list(peers))
