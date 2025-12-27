@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# start-master.sh
+# - inicia o discoverymaster remotamente
+# - sincroniza master-commands + tls-data
+# - publica experiment-config (a partir de exp_data_dir/config ou exp_data_dir/experiment-config)
+# - FORÇA o discoverymaster no modo "master"
+#
+# Semântica:
+#   * status_file       = estado lógico do experimento (DONE/ANALYZED terminal)
+#   * status_exit_file  = resultado do processo do discoverymaster (EXIT rc=...)
+#
+# Requisitos:
+#   - discoverymaster suporta: discoverymaster master <addr:port> <cmdfile>
 
 set -euo pipefail
 
