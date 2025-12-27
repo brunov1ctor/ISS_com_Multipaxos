@@ -38,9 +38,6 @@ remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 
-# scp não entende algumas flags de ssh (ex.: -T). Mantemos um conjunto compatível.
-scp_options="${scp_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
-
 remote_status_file="${remote_status_file:-${remote_work_dir}/status}"
 DISC_PORT="${master_port:-${MASTER_PORT:-9999}}"
 
@@ -159,7 +156,6 @@ mkdir -p '${remote_work_dir}' \
          '${remote_work_dir}/experiment-config' \
          '${remote_work_dir}/experiment-output' \
          '${remote_work_dir}/raw-results'
-# status pode ser recriado pelo start-master, mas já deixa algo aqui
 echo RUNNING > '${remote_status_file}' 2>/dev/null || true
 EOF_RESET
   sleep 0.1
@@ -189,33 +185,6 @@ log_i "Validando discoverymaster na porta ${DISC_PORT}..."
 rsh "$master_ip" "ss -lntp | grep \":${DISC_PORT} \"" >/dev/null \
   || { log_e "discoverymaster não escutando ${DISC_PORT}."; rsh "$master_ip" "tail -n 200 '${remote_work_dir}/logs/discoverymaster.log' || true" || true; exit 1; }
 log_i "discoverymaster OK."
-
-# =====================================================================
-# 6b) Publicar experiment-config/ no master ANTES de startar slaves
-# =====================================================================
-
-log_i "Publicando experiment-config/ no master antes de iniciar os slaves..."
-rsh "$master_ip" "mkdir -p '${remote_work_dir}/experiment-config'" || true
-
-if [[ ! -d "${exp_data_dir}/experiment-config" ]]; then
-  log_e "Diretório local ausente: ${exp_data_dir}/experiment-config (nada para publicar no master)."
-  exit 1
-fi
-
-(
-  shopt -s nullglob
-  files=("${exp_data_dir}/experiment-config/"*)
-  if (( ${#files[@]} == 0 )); then
-    log_e "Nenhum arquivo em ${exp_data_dir}/experiment-config (nada para publicar no master)."
-    exit 1
-  fi
-
-  scp $scp_options -r "${files[@]}" "${remote_user}@${master_ip}:${remote_work_dir}/experiment-config/" \
-    || { log_e "Falha ao copiar experiment-config/ para o master."; exit 1; }
-)
-
-rsh "$master_ip" "test -s '${remote_work_dir}/experiment-config/config-0000.yml'" \
-  || { log_e "Master não possui config-0000.yml após publish."; rsh "$master_ip" "ls -la '${remote_work_dir}/experiment-config' || true" || true; exit 1; }
 
 # =====================================================================
 # 7) Start slaves
