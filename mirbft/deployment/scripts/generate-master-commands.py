@@ -17,6 +17,14 @@ BASE_DIR = os.environ.get(
     f"/users/{os.environ.get('USER', 'user')}/iss",
 )
 
+# Dir pesado por experimento (experiment-output).
+# Mantém BASE_DIR leve (tls-data, experiment-config, config, scripts, etc.) em /users/<USER>/iss,
+# mas joga experiment-output para /tmp/deployment-data (sem symlink).
+EXPERIMENT_OUTPUT_DIR = os.environ.get(
+    "ISS_EXPERIMENT_OUTPUT_DIR",
+    "/tmp/deployment-data/experiment-output",
+)
+
 MASTER_CONFIG_DIR = f"{BASE_DIR}/experiment-config"
 MASTER_EXP_DIR = BASE_DIR
 
@@ -51,7 +59,7 @@ def waitForSlaves(slaves):
 
 
 def _exp_slave_dir(expID: str) -> str:
-    return f"{BASE_DIR}/experiment-output/{expID}/slave-__id__"
+    return f"{EXPERIMENT_OUTPUT_DIR}/{expID}/slave-__id__"
 
 
 def createLogDir(expID):
