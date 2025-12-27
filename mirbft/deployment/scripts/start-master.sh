@@ -1,181 +1,123 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # start-master.sh
-# - inicia o discoverymaster remotamente
-# - sincroniza master-commands + tls-data
-# - publica experiment-config (a partir de exp_data_dir/config ou exp_data_dir/experiment-config)
-# - FORÇA o discoverymaster no modo "master" (evita cair no LEGACY -> SIGBUS)
 #
-# Semântica:
-#   * status_file       = estado lógico do experimento (DONE/ANALYZED terminal)
-#   * status_exit_file  = resultado do processo do discoverymaster (EXIT rc=...)
+# Starts the master node in remote deployment.
+# The master node is responsible for:
+#  - Starting all other nodes
+#  - Collecting results
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+
+# shellcheck source=global-vars.sh
+source "${script_dir}/global-vars.sh"
+
+# Args:
+#   1: deployment-data root on local machine (e.g., /tmp/deployment-data)
+#   2: remote user (e.g., Bruno)
+#   3: remote master ip (e.g., 172.21.17.1)
+#   4: remote work dir (e.g., /tmp/iss-Bruno)
+#   5: remote output dir (optional) (e.g., /tmp/deployment-data/experiment-output)
+deployment_data_root="${1:?deployment_data_root is required}"
+remote_user="${2:?remote_user is required}"
+remote_master_ip="${3:?remote_master_ip is required}"
+remote_work_dir="${4:?remote_work_dir is required}"
+remote_output_dir="${5:-}"
+
+remote_base_dir="/users/${remote_user}/iss"
+
+# IMPORTANT:
+# - "heavy" data (logs/work/status) can go to remote_work_dir (e.g., /tmp/iss-Bruno)
+# - configs/tls remain on remote_base_dir (e.g., /users/Bruno/iss) to avoid scp path mismatch
 #
-# Requisitos:
-#   - discoverymaster suporta: discoverymaster master <addr:port> <cmdfile>
+# Minimal fix: force remote_config_dir to always be under remote_base_dir
+remote_config_dir="${remote_base_dir}/experiment-config"
 
-set -euo pipefail
-
-ts() { date +"%Y-%m-%d %H:%M:%S%z"; }
-log_i() { echo "[start-master][$(ts)] $*"; }
-log_w() { echo "[start-master][$(ts)] WARN: $*" >&2; }
-log_e() { echo "[start-master][$(ts)] ERRO: $*" >&2; }
-
-if [[ $# -lt 6 ]]; then
-  cat >&2 <<EOF
-Uso:
-  $0 <remote_user> <master_ip> <remote_work_dir> <remote_bin_dir> <exp_data_dir> <local_master_cmd>
-
-Exemplo:
-  $0 Bruno 172.21.17.1 /users/Bruno/iss /users/Bruno/go/bin /tmp/.../remote-0000 /tmp/.../remote-0000/master-commands.cmd
-EOF
-  exit 2
+if [[ -n "${remote_output_dir}" ]]; then
+  remote_output_dir="${remote_output_dir%/}"
+else
+  # default heavy output path
+  remote_output_dir="/tmp/deployment-data/experiment-output"
 fi
 
-remote_user="$1"
-master_ip="$2"
-remote_work_dir="$3"
-remote_bin_dir="$4"
-exp_data_dir="$5"
-local_master_cmd="$6"
+deployment_data_root="${deployment_data_root%/}"
 
-ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
-scp_options="${scp_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
+# local directories
+exp_data_dir="${deployment_data_root}/remote-0000"
+local_exp_output_dir="${deployment_data_root}/experiment-output"
 
-rsh() { ssh $ssh_options "${remote_user}@${1}" "${2}"; }
-scp_to_master() { scp $scp_options "${1}" "${remote_user}@${master_ip}:${2}"; }
+# remote directories
+remote_deployment_data_root="/tmp/deployment-data"
+remote_exp_data_dir="${remote_deployment_data_root}/remote-0000"
 
-status_file="${status_file:-${remote_work_dir}/status}"
-ready_file="${ready_file:-${remote_work_dir}/master-ready}"
-master_port="${master_port:-9999}"
-
-status_exit_file="${status_exit_file:-${status_file}.exit}"
-remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
-remote_tls_dir="${remote_tls_dir:-${remote_base_dir}/tls-data}"
-remote_config_dir="${remote_config_dir:-${remote_base_dir}/experiment-config}"
-remote_cfg_dir="${remote_cfg_dir:-${remote_base_dir}/config}"
-remote_logs_dir="${remote_work_dir}/logs"
-
-debug_log="${exp_data_dir}/_debug/start-master.${master_ip}.log"
-mkdir -p "$(dirname "$debug_log")"
-
-log_i "master_ip=${master_ip} port=${master_port} user=${remote_user}" | tee -a "$debug_log"
-log_i "remote_work_dir=${remote_work_dir} remote_base_dir=${remote_base_dir} remote_bin_dir=${remote_bin_dir}" | tee -a "$debug_log"
-log_i "local_master_cmd=${local_master_cmd}" | tee -a "$debug_log"
-log_i "status_file=${status_file} status_exit_file=${status_exit_file} ready_file=${ready_file}" | tee -a "$debug_log"
-
-if [[ ! -f "$local_master_cmd" ]]; then
-  log_e "master-commands não encontrado: $local_master_cmd" | tee -a "$debug_log"
+# Make sure required local inputs exist
+if [[ ! -d "${exp_data_dir}" ]]; then
+  echo "ERROR: Local exp_data_dir does not exist: ${exp_data_dir}" >&2
   exit 1
 fi
 
-# 1) Layout remoto mínimo
-#    - pesado: remote_work_dir (logs/status/master-commands)
-#    - leve : remote_base_dir (tls-data, experiment-config, config)
-rsh "$master_ip" "mkdir -p '${remote_work_dir}' '${remote_logs_dir}' '${remote_base_dir}' '${remote_tls_dir}' '${remote_config_dir}' '${remote_cfg_dir}'" || {
-  log_e "Falha ao preparar diretórios remotos." | tee -a "$debug_log"
+if [[ ! -d "${exp_data_dir}/config" ]]; then
+  echo "ERROR: Local config dir does not exist: ${exp_data_dir}/config" >&2
   exit 1
-}
-
-# 2) Copia master-commands para o remote_work_dir
-scp_to_master "$local_master_cmd" "${remote_work_dir}/master-commands.cmd"
-
-# 2b) Reforça tls-data (opcional)
-local_tls_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tls-data"
-if [[ -d "$local_tls_dir" ]]; then
-  tar -C "$local_tls_dir" -czf - . | rsh "$master_ip" "tar -C '${remote_tls_dir}' -xzf -" || true
 fi
 
-# 2c) Publica configs para o master em ${remote_config_dir}
-#     - prioridade: exp_data_dir/experiment-config/*
-#     - fallback:   exp_data_dir/config/config-*.yml  (o que o generator cria)
-publish_src=""
-if [[ -d "${exp_data_dir}/experiment-config" ]]; then
-  publish_src="${exp_data_dir}/experiment-config"
-elif [[ -d "${exp_data_dir}/config" ]]; then
-  publish_src="${exp_data_dir}/config"
-fi
+# Ensure remote base dirs exist
+ssh "${remote_user}@${remote_master_ip}" "mkdir -p '${remote_work_dir}'"
+ssh "${remote_user}@${remote_master_ip}" "mkdir -p '${remote_output_dir}'"
+ssh "${remote_user}@${remote_master_ip}" "mkdir -p '${remote_config_dir}'"
+ssh "${remote_user}@${remote_master_ip}" "mkdir -p '${remote_base_dir}/config'"
+ssh "${remote_user}@${remote_master_ip}" "mkdir -p '${remote_base_dir}/tls-data'"
+ssh "${remote_user}@${remote_master_ip}" "mkdir -p '${remote_deployment_data_root}'"
+ssh "${remote_user}@${remote_master_ip}" "mkdir -p '${remote_exp_data_dir}'"
 
-if [[ -n "$publish_src" ]]; then
-  log_i "Publicando configs do experimento no master: ${publish_src} -> ${remote_config_dir}/" | tee -a "$debug_log"
-  shopt -s nullglob
-  files=( "${publish_src}/"*.yml "${publish_src}/"*.yaml )
-  if (( ${#files[@]} > 0 )); then
-    scp $scp_options "${files[@]}" "${remote_user}@${master_ip}:${remote_config_dir}/" \
-      || log_w "Falha ao copiar configs para experiment-config/ (continuando)." | tee -a "$debug_log"
-  else
-    log_w "Nenhum .yml/.yaml em ${publish_src}; não publiquei configs." | tee -a "$debug_log"
-  fi
+# Copy remote-0000 (deployment data) - this can be heavy but is needed on master
+# NOTE: We put remote-0000 under /tmp/deployment-data on the remote host.
+rsync -avz --delete \
+  "${exp_data_dir}/" \
+  "${remote_user}@${remote_master_ip}:${remote_exp_data_dir}/"
 
-  # valida presença do config-0000.yml no master (é o primeiro que o master-commands costuma pedir)
-  rsh "$master_ip" "test -s '${remote_config_dir}/config-0000.yml'" \
-    && log_i "experiment-config OK no master (config-0000.yml presente)." | tee -a "$debug_log" \
-    || log_w "experiment-config sem config-0000.yml (pode falhar fetch do config)." | tee -a "$debug_log"
-else
-  log_w "Sem ${exp_data_dir}/experiment-config e sem ${exp_data_dir}/config; não publiquei configs no master." | tee -a "$debug_log"
-fi
+# Copy experiment-output directory root (heavy results)
+# (optional: may already be created by running experiments)
+ssh "${remote_user}@${remote_master_ip}" "mkdir -p '${remote_output_dir}'"
 
-# 3) Mata instâncias antigas do discoverymaster
-rsh "$master_ip" "killall -9 discoverymaster 2>/dev/null || true"
+# Copy configs to remote_config_dir (LIGHT, and must remain stable under /users/${remote_user}/iss)
+# This is the root cause fix for master-commands.cmd referencing /users/.../experiment-config.
+rsync -avz \
+  "${exp_data_dir}/config/" \
+  "${remote_user}@${remote_master_ip}:${remote_config_dir}/"
 
-# 4) Inicia discoverymaster com wrapper robusto (FORÇANDO master mode e bind no master_ip)
-log_i "starting discoverymaster..." | tee -a "$debug_log"
+# Validate that at least config-0000.yml exists on remote master
+ssh "${remote_user}@${remote_master_ip}" "test -s '${remote_config_dir}/config-0000.yml' || (echo 'WARN: missing config-0000.yml in ${remote_config_dir}' >&2; true)"
 
-rsh "$master_ip" "nohup bash -lc '
-set -euo pipefail
+# Generate master commands on local machine
+# The generated master-commands.cmd will reference BASE_DIR=/users/${remote_user}/iss and thus /users/.../experiment-config
+master_commands_local="${exp_data_dir}/master-commands.cmd"
 
-remote_work_dir=\"${remote_work_dir}\"
-remote_bin_dir=\"${remote_bin_dir}\"
-remote_logs_dir=\"${remote_logs_dir}\"
-status_file=\"${status_file}\"
-status_exit_file=\"${status_exit_file}\"
-ready_file=\"${ready_file}\"
-master_port=\"${master_port}\"
-master_ip=\"${master_ip}\"
+python3 "${script_dir}/generate-master-commands.py" \
+  --deployment-data-root "${deployment_data_root}" \
+  --node-count "$(cat "${exp_data_dir}/instance-info/node-count")" \
+  --work-dir "${remote_work_dir}" \
+  --remote-user "${remote_user}" \
+  --remote-master-ip "${remote_master_ip}" \
+  --remote-output-dir "${remote_output_dir}" \
+  --base-dir "${remote_base_dir}" \
+  > "${master_commands_local}"
 
-cmd_file=\"${remote_work_dir}/master-commands.cmd\"
-log_file=\"${remote_logs_dir}/discoverymaster.log\"
-bin=\"${remote_bin_dir}/discoverymaster\"
+# Copy master-commands.cmd to remote master under remote_work_dir (heavy/work area)
+rsync -avz \
+  "${master_commands_local}" \
+  "${remote_user}@${remote_master_ip}:${remote_work_dir}/master-commands.cmd"
 
-mkdir -p \"\$(dirname \"\$status_file\")\" \"\$(dirname \"\$status_exit_file\")\" \"\$(dirname \"\$ready_file\")\" \"\$(dirname \"\$log_file\")\"
+# Run master commands on remote master
+ssh "${remote_user}@${remote_master_ip}" "bash '${remote_work_dir}/master-commands.cmd'"
 
-cur=\"\$(
-  ( test -f \"\$status_file\" && cat \"\$status_file\" || true ) | tr -d \"\r\" | tail -n 1
-)\"
-if [[ \"\$cur\" != \"DONE\" && \"\$cur\" != \"ANALYZED\" ]]; then
-  echo RUNNING > \"\$status_file\" 2>/dev/null || true
-fi
+# After completion, pull experiment output back (heavy)
+mkdir -p "${local_exp_output_dir}"
+rsync -avz \
+  "${remote_user}@${remote_master_ip}:${remote_output_dir%/}/" \
+  "${local_exp_output_dir}/"
 
-: > \"\$status_exit_file\" 2>/dev/null || true
-echo READY > \"\$ready_file\" 2>/dev/null || true
-
-addr=\"\$master_ip:\$master_port\"
-
-# FORÇA master mode (sem detecção por --help)
-run_cmd=(\"\$bin\" master \"\$addr\" \"\$cmd_file\")
-
-set +e
-\"\${run_cmd[@]}\" >>\"\$log_file\" 2>&1
-rc=\$?
-set -e
-
-echo \"EXIT rc=\$rc\" > \"\$status_exit_file\" 2>/dev/null || true
-
-cur2=\"\$(
-  ( test -f \"\$status_file\" && cat \"\$status_file\" || true ) | tr -d \"\r\" | tail -n 1
-)\"
-if [[ \"\$cur2\" != \"DONE\" && \"\$cur2\" != \"ANALYZED\" ]]; then
-  echo \"EXIT rc=\$rc\" > \"\$status_file\" 2>/dev/null || true
-fi
-
-exit \$rc
-' </dev/null >/dev/null 2>&1 & echo STARTED" | tee -a "$debug_log"
-
-# 5) Validação leve
-sleep 1
-if ! rsh "$master_ip" "ss -lntp 2>/dev/null | grep -q \":${master_port} \""; then
-  log_w "discoverymaster ainda não aparece escutando ${master_port}. Veja: ${remote_logs_dir}/discoverymaster.log" | tee -a "$debug_log"
-else
-  log_i "discoverymaster LISTEN on ${master_ip}:${master_port}" | tee -a "$debug_log"
-fi
-
-exit 0
+echo "Done. Outputs copied to: ${local_exp_output_dir}"
 
