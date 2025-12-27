@@ -147,6 +147,32 @@ def snapshotConfigNow(expID, slaves):
     output("")
 
 
+def ensureTLSDataLink(expID, slaves):
+    """
+    orderingpeer/orderingclient rodam com cwd=/tmp/iss-Bruno e o config.yml costuma referenciar TLS como
+    tls-data/auth.pem, tls-data/client-*.pem etc. Porém o deploy sincroniza TLS em {BASE_DIR}/tls-data.
+    Então criamos um symlink /tmp/iss-Bruno/tls-data -> {BASE_DIR}/tls-data em TODOS os nós
+    (peers + clients) ANTES de iniciar orderingpeer/orderingclient.
+    """
+    output("# ensure tls-data link in /tmp/iss-Bruno (fix TLS relative paths)")
+    for s in slaves:
+        # '-' para não criar log.
+        output(
+            "exec-start {0} - bash -lc 'cd /tmp/iss-Bruno && "
+            "test -d {1}/tls-data && rm -rf tls-data && ln -s {1}/tls-data tls-data'".format(
+                s, BASE_DIR
+            )
+        )
+        output(
+            "exec-wait {0} 5000 "
+            "exec-start {0} {1}/FAILED echo Could not create tls-data link; "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
+        )
+    for s in slaves:
+        output("sync {0}".format(s))
+    output("")
+
+
 def setBandwidth(expID, bandwidths):
     output("# set bandwidth")
     for s, bandwidth in bandwidths.items():
@@ -300,6 +326,9 @@ def generateCommands(expID, peers, clients):
     ensureConfigDir(slaves)
     pushConfigFiles(expID, configFiles)
     snapshotConfigNow(expID, slaves)
+
+    # >>> FIX TLS RELATIVE PATHS (NO MANUAL COMMANDS)
+    ensureTLSDataLink(expID, slaves)
 
     setBandwidth(expID, bandwidths)
     startPeers(expID, list(peers))
