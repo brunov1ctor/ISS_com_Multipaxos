@@ -3,23 +3,14 @@ import os
 import sys
 from collections import defaultdict
 
-CLIENT_TIMEOUT = int(os.environ.get("ISS_CLIENT_TIMEOUT_MS", "480000"))  # ms
-
+CLIENT_TIMEOUT = 480000  # ms
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
-
-# Base dir onde o ISS roda (nos slaves e no master).
-# Default em /users/<USER>/iss (teu ambiente já usa isso).
-# Pode sobrescrever com ISS_BASE_DIR se quiser.
 BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
     f"/users/{os.environ.get('USER', 'user')}/iss",
 )
-
-# Dir pesado por experimento (experiment-output).
-# Mantém BASE_DIR leve (tls-data, experiment-config, config, scripts, etc.) em /users/<USER>/iss,
-# mas joga experiment-output para /tmp/... (sem symlink).
 EXPERIMENT_OUTPUT_DIR = os.environ.get(
     "ISS_EXPERIMENT_OUTPUT_DIR",
     "/tmp/deployment-data/experiment-output",
@@ -30,34 +21,14 @@ MASTER_EXP_DIR = BASE_DIR
 
 # Tudo absoluto nos slaves
 SLAVE_CONFIG_FILE = f"{BASE_DIR}/config/config.yml"
-
 LOCAL_MASTER_STATUS_FILE = "master-status"
 LOCAL_IP_ADDRESS = "127.0.0.1"
 LOCAL_MASTER_PORT = "9999"
-
 FS_SETTLE_DELAY_MS = 2000
-
 BEST_EFFORT_WAIT_MS = 15000
 BEST_EFFORT_TAR_WAIT_MS = 120000
 BEST_EFFORT_SCP_WAIT_MS = 180000
-
-# Link canônico (nos slaves) que o peer/client costuma esperar existir.
-# NÃO usar bash -lc aqui: o parser do framework pode “engolir” o -lc como um único arg e quebrar (exit status 2).
 REMOTE_WORK_DIR = os.environ.get("ISS_REMOTE_WORK_DIR", "/tmp/iss-Bruno")
-
-# -----------------------------------------------------------------------------
-# Where the ordering binaries live on the remote nodes.
-#
-# Why this exists:
-#   The discovery slave runs experiment commands via execve. If we emit only
-#   "orderingpeer" / "orderingclient" (no absolute path), then we depend on the
-#   discoveryslave process having a PATH that includes the bin dir. That can be
-#   fragile across ssh/non-login shells and different bootstrap scripts.
-#
-# Safer approach:
-#   Emit absolute paths to the binaries. The deploy script exports these env
-#   vars before generating the command file.
-# -----------------------------------------------------------------------------
 REMOTE_USER = os.environ.get("ISS_REMOTE_USER", "Bruno")
 REMOTE_BIN_DIR = os.environ.get("ISS_REMOTE_BIN_DIR", f"/users/{REMOTE_USER}/go/bin")
 ORDERINGPEER_BIN = os.path.join(REMOTE_BIN_DIR, "orderingpeer")
