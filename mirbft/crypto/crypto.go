@@ -274,3 +274,20 @@ func GenerateKeyPair() (interface{}, interface{}, error) {
 	return GenerateECDSAKeyPair()
 }
 
+func ParallelDataArrayHash(data [][]byte) []byte {
+	digests := make([][]byte, len(data), len(data))
+	var wg sync.WaitGroup
+	wg.Add(len(data))
+	for i, d := range data {
+		go func(i int, d []byte) {
+			defer wg.Done()
+			digests[i] = Hash(d)
+		}(i, d)
+	}
+	wg.Wait()
+	h := sha256.New()
+	for _, d := range digests {
+		h.Write(d)
+	}
+	return h.Sum(nil)
+}
