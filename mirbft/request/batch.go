@@ -19,11 +19,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	logger "github.com/rs/zerolog/log"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/crypto"
 	"github.com/hyperledger-labs/mirbft/membership"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
+	logger "github.com/rs/zerolog/log"
 )
 
 // Represents a batch of requests.
@@ -232,5 +232,9 @@ func BatchDigest(batch *pb.Batch) []byte {
 		// Digest of the request
 		reqDigests[i] = Digest(req)
 	}
-	return crypto.ParallelDataArrayHash(append(reqDigests, crypto.Hash(metadata)))
+
+	// Removida a chamada a crypto.ParallelDataArrayHash (inexistente)
+	// Mantém a mesma semântica: merkle(reqDigests + hash(metadata))
+	return crypto.MerkleHashDigests(append(reqDigests, crypto.Hash(metadata)))
 }
+
