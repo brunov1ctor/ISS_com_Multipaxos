@@ -100,6 +100,12 @@ deployment_file="$exp_data_dir/deployment.dpl"
 if [[ ! -f "$template_path" ]]; then
   log_i "Gerando master-commands-template.cmd..."
   [[ -f "$deployment_file" ]] || { log_e "Deployment file não encontrado: $deployment_file"; exit 1; }
+
+  # >>> FIX: informa pro gerador o user e o bin_dir remoto
+  # Isso permite ele gerar comandos com caminho absoluto:
+  #   /users/<user>/go/bin/orderingpeer e /users/<user>/go/bin/orderingclient
+  ISS_REMOTE_USER="${remote_user}" \
+  ISS_REMOTE_BIN_DIR="${remote_bin_dir}" \
   python3 scripts/generate-master-commands.py remote "$deployment_file" "$template_path" "$exp_data_dir" \
     || { log_e "Falha ao gerar master-commands-template.cmd"; exit 1; }
 else

@@ -44,6 +44,24 @@ BEST_EFFORT_SCP_WAIT_MS = 180000
 # Link canônico (nos slaves) que o peer/client costuma esperar existir.
 # NÃO usar bash -lc aqui: o parser do framework pode “engolir” o -lc como um único arg e quebrar (exit status 2).
 REMOTE_WORK_DIR = os.environ.get("ISS_REMOTE_WORK_DIR", "/tmp/iss-Bruno")
+
+# -----------------------------------------------------------------------------
+# Where the ordering binaries live on the remote nodes.
+#
+# Why this exists:
+#   The discovery slave runs experiment commands via execve. If we emit only
+#   "orderingpeer" / "orderingclient" (no absolute path), then we depend on the
+#   discoveryslave process having a PATH that includes the bin dir. That can be
+#   fragile across ssh/non-login shells and different bootstrap scripts.
+#
+# Safer approach:
+#   Emit absolute paths to the binaries. The deploy script exports these env
+#   vars before generating the command file.
+# -----------------------------------------------------------------------------
+REMOTE_USER = os.environ.get("ISS_REMOTE_USER", "Bruno")
+REMOTE_BIN_DIR = os.environ.get("ISS_REMOTE_BIN_DIR", f"/users/{REMOTE_USER}/go/bin")
+ORDERINGPEER_BIN = os.path.join(REMOTE_BIN_DIR, "orderingpeer")
+ORDERINGCLIENT_BIN = os.path.join(REMOTE_BIN_DIR, "orderingclient")
 REMOTE_TLS_LINK = f"{REMOTE_WORK_DIR}/tls-data"
 REMOTE_TLS_SRC = f"{BASE_DIR}/tls-data"
 
@@ -242,9 +260,9 @@ def startPeers(expID, peers):
     output("discover-reset {0}".format(numPeers))
     for p in peers:
         output(
-            "exec-start {0} {1}/peer.log orderingpeer "
-            "{2} $own_public_ip:$master_port __public_ip__ __private_ip__ "
-            "{1}/peer.trc {1}/prof".format(p, _exp_slave_dir(expID), SLAVE_CONFIG_FILE)
+            f"exec-start {p} {_exp_slave_dir(expID)}/peer.log {ORDERINGPEER_BIN} "
+            f"{SLAVE_CONFIG_FILE} $own_public_ip:$master_port __public_ip__ __private_ip__ "
+            f"{_exp_slave_dir(expID)}/peer.trc {_exp_slave_dir(expID)}/prof"
         )
     output("discover-wait")
     output("")
@@ -254,10 +272,9 @@ def runClients(expID, clients):
     output("# run clients")
     for c in clients:
         output(
-            "exec-start {0} {1}/clients.log orderingclient "
-            "{2} $own_public_ip:$master_port {1}/client {1}/prof-client".format(
-                c, _exp_slave_dir(expID), SLAVE_CONFIG_FILE
-            )
+            f"exec-start {c} {_exp_slave_dir(expID)}/clients.log {ORDERINGCLIENT_BIN} "
+            f"{SLAVE_CONFIG_FILE} $own_public_ip:$master_port "
+            f"{_exp_slave_dir(expID)}/client {_exp_slave_dir(expID)}/prof-client"
         )
 
     timeout = CLIENT_TIMEOUT
