@@ -37,6 +37,9 @@ ensure_local_binaries() {
     return 0
   fi
 
+  # Raiz do repositório (deployment/ fica dentro do repo)
+  local repo_root="$deploy_dir/.."
+
   if ! command -v go >/dev/null 2>&1; then
     log_err "go não encontrado no PATH."
     return 1
@@ -61,9 +64,17 @@ ensure_local_binaries() {
   local req_bins="discoverymaster discoveryslave orderingpeer orderingclient"
   for b in $req_bins; do
     if [ ! -x "$local_bin_dir/$b" ]; then
-      log_err "Binário faltando: $local_bin_dir/$b"
-      log_err "Rode: go install ./cmd/$b"
-      return 1
+      log_warn "Binário faltando: $local_bin_dir/$b -> tentando compilar automaticamente..."
+      ( cd "$repo_root" && go install "./cmd/$b" ) || {
+        log_err "Falhou compilando ./cmd/$b"
+        log_err "Tente manualmente: (cd $repo_root && go install ./cmd/$b)"
+        return 1
+      }
+      if [ ! -x "$local_bin_dir/$b" ]; then
+        log_err "Compilei, mas o binário ainda não apareceu em $local_bin_dir/$b"
+        log_err "Verifique go env GOBIN/GOPATH e permissões."
+        return 1
+      fi
     fi
   done
 
