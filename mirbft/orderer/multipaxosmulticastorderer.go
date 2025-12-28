@@ -15,7 +15,8 @@ import (
 func majority(n int) int { return n/2 + 1 }
 
 const (
-	defaultGroupSize        = 3
+	// Se você quiser manter "grupo menor", pode, mas aí o fallback TEM que usar quórum do cluster.
+	// A forma mais segura é: grupo >= quórum do cluster. Aqui vamos fazer isso automaticamente.
 	defaultQuorumTimeoutMs  = 250
 	maxGroupIDSpace   int32 = 1024
 )
@@ -74,6 +75,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 			o.broadcast(pm)
 			return
 		}
+
 		switch mpx.Type.(type) {
 		case *pb.MPxMsg_Prepare:
 			// bootstrap / view-change: all
@@ -81,20 +83,28 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 			fmt.Printf("[MC][SEND] kind=Prepare sn=%d gid=0 dst=ALL\n", pm.Sn)
 
 		case *pb.MPxMsg_Accept:
-			// guarda último Accept do sn e líder local do sn
+			// prepara contadores/timer para este SN (novo round de Accept)
 			o.mu.Lock()
 			o.lastAccept[pm.Sn] = deepCopyPM(pm)
 			o.leaderForSN[pm.Sn] = membership.OwnID
+			o.accCount[pm.Sn] = 0
+			// se já tinha timer antigo, mata e remove (novo Accept = novo deadline)
+			if t := o.qTimers[pm.Sn]; t != nil {
+				t.Stop()
+				delete(o.qTimers, pm.Sn)
+			}
 			o.mu.Unlock()
 
 			// Accept por grupo (fallback p/ all)
-			if o.sendToGroupOrAll("Accept", pm) {
-				o.armQuorumTimer(pm.Sn)
-			}
+			o.sendToGroupOrAll("Accept", pm)
+			o.armQuorumTimer(pm.Sn)
 
 		case *pb.MPxMsg_Commit:
 			// Commit por grupo (fallback p/ all)
 			o.sendToGroupOrAll("Commit", pm)
+
+			// limpeza de estado desse SN (evita leak e timers pendurados)
+			o.cleanupSN(pm.Sn)
 
 		default:
 			// Promise / Accepted / outros → broadcast por segurança
@@ -112,13 +122,18 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			// quem enviou Accept para este SN (réplicas registram também)
 			o.onAccept(pm.SenderId, pm.Sn)
 		case *pb.MPxMsg_Accepted:
-			// no líder, contabiliza quorum do grupo
+			// no líder, contabiliza quorum do CLUSTER
 			o.onAccepted(pm.SenderId, pm.Sn)
+		case *pb.MPxMsg_Commit:
+			// commit recebido também pode disparar limpeza local
+			o.cleanupSN(pm.Sn)
 		}
 	}
 	o.MultiPaxosOrderer.HandleMessage(pm)
 }
 
+// define groupSize = quórum do CLUSTER (seguro)
+// e monta grupo com IDs que prometeram (e completa se faltar).
 func (o *MultiPaxosMulticastOrderer) onPromise(from, sn int32) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -128,45 +143,57 @@ func (o *MultiPaxosMulticastOrderer) onPromise(from, sn int32) {
 	}
 	o.snMembers[sn][from] = struct{}{}
 
+	// já existe grupo pro SN
 	if o.snGroup[sn] != 0 {
 		return
 	}
 
-	if len(o.snMembers[sn]) >= majority(len(membership.AllNodeIDs())) {
-		// escolhe até 3 membros dentre quem prometeu; completa se precisar
-		members := make([]int32, 0, defaultGroupSize)
-		for id := range o.snMembers[sn] {
+	all := membership.AllNodeIDs()
+	clusterQ := majority(len(all))
+
+	// só define grupo quando já vimos "promessas suficientes" pra ter estabilidade
+	// (pode ser clusterQ, pode ser menor; manter clusterQ é ok e simples)
+	if len(o.snMembers[sn]) < clusterQ {
+		return
+	}
+
+	// groupSize = quórum do cluster (mínimo necessário para finalizar Paxos com majority(N))
+	groupSize := clusterQ
+
+	// escolhe até groupSize membros dentre quem prometeu; completa se precisar
+	members := make([]int32, 0, groupSize)
+	for id := range o.snMembers[sn] {
+		members = append(members, id)
+		if len(members) == groupSize {
+			break
+		}
+	}
+	if len(members) < groupSize {
+		seenMap := make(map[int32]struct{}, len(members))
+		for _, m := range members {
+			seenMap[m] = struct{}{}
+		}
+		for _, id := range all {
+			if _, seen := seenMap[id]; seen {
+				continue
+			}
 			members = append(members, id)
-			if len(members) == defaultGroupSize {
+			if len(members) == groupSize {
 				break
 			}
 		}
-		if len(members) < defaultGroupSize {
-			for _, id := range membership.AllNodeIDs() {
-				seen := false
-				for _, m := range members {
-					if m == id {
-						seen = true
-						break
-					}
-				}
-				if !seen {
-					members = append(members, id)
-					if len(members) == defaultGroupSize {
-						break
-					}
-				}
-			}
-		}
-		if len(members) == 0 {
-			members = append(members, membership.AllNodeIDs()...)
-		}
-		gid := multicast.GroupID(1 + (sn % maxGroupIDSpace))
-		o.mc.DefineGroup(gid, members...)
-		o.snGroup[sn] = gid
-		o.snGSize[sn] = len(members)
-		fmt.Printf("[MC][GROUP] sn=%d gid=%d members=%v\n", sn, gid, members)
 	}
+	if len(members) == 0 {
+		members = append(members, all...)
+	}
+
+	gid := multicast.GroupID(1 + (sn % maxGroupIDSpace))
+	o.mc.DefineGroup(gid, members...)
+	o.snGroup[sn] = gid
+	o.snGSize[sn] = len(members)
+
+	fmt.Printf("[MC][GROUP] sn=%d gid=%d groupSize=%d clusterQ=%d members=%v\n",
+		sn, gid, len(members), clusterQ, members)
 }
 
 func (o *MultiPaxosMulticastOrderer) onAccept(from, sn int32) {
@@ -182,12 +209,13 @@ func (o *MultiPaxosMulticastOrderer) onAccepted(_from, sn int32) {
 	if !isLeader {
 		return
 	}
+
 	o.mu.Lock()
 	o.accCount[sn]++
 	o.mu.Unlock()
 }
 
-func (o *MultiPaxosMulticastOrderer) sendToGroupOrAll(kind string, pm *pb.ProtocolMessage) bool {
+func (o *MultiPaxosMulticastOrderer) sendToGroupOrAll(kind string, pm *pb.ProtocolMessage) {
 	o.mu.RLock()
 	gid := o.snGroup[pm.Sn]
 	o.mu.RUnlock()
@@ -195,11 +223,11 @@ func (o *MultiPaxosMulticastOrderer) sendToGroupOrAll(kind string, pm *pb.Protoc
 	if gid != 0 {
 		o.sendGroup(gid, pm)
 		fmt.Printf("[MC][SEND] kind=%s sn=%d gid=%d (group)\n", kind, pm.Sn, gid)
-		return true
+		return
 	}
+
 	o.broadcast(pm)
 	fmt.Printf("[MC][SEND] kind=%s sn=%d gid=0 dst=ALL (fallback)\n", kind, pm.Sn)
-	return true
 }
 
 func (o *MultiPaxosMulticastOrderer) broadcast(pm *pb.ProtocolMessage) {
@@ -215,36 +243,61 @@ func (o *MultiPaxosMulticastOrderer) sendGroup(gid multicast.GroupID, pm *pb.Pro
 }
 
 func deepCopyPM(pm *pb.ProtocolMessage) *pb.ProtocolMessage {
+	// OBS: cópia rasa. Se você suspeitar que mensagens internas são mutáveis/reusadas,
+	// troque por proto.Clone(pm).(*pb.ProtocolMessage)
 	cp := *pm
 	return &cp
 }
 
-// Timer: se não fechar maioria do GRUPO em T ms, reenvia Accept para ALL (somente esse sn).
+// Timer: se não fechar maioria do CLUSTER em T ms, reenvia Accept para ALL (somente esse sn).
 func (o *MultiPaxosMulticastOrderer) armQuorumTimer(sn int32) {
 	o.mu.Lock()
+	// se já existe (por alguma corrida), não cria outro
 	if o.qTimers[sn] != nil {
 		o.mu.Unlock()
 		return
 	}
+
 	t := time.AfterFunc(time.Duration(defaultQuorumTimeoutMs)*time.Millisecond, func() {
+		all := membership.AllNodeIDs()
+		clusterQ := majority(len(all))
+
 		o.mu.RLock()
-		gsz := o.snGSize[sn]
 		acc := o.accCount[sn]
 		accept := o.lastAccept[sn]
 		o.mu.RUnlock()
 
-		if gsz == 0 || accept == nil {
+		if accept == nil {
 			return
 		}
-		if acc >= majority(gsz) {
+		// já fechou quórum do CLUSTER → nada a fazer
+		if acc >= clusterQ {
 			return
 		}
 
 		fmt.Printf("[MC][FALLBACK] quorum timeout sn=%d (acc=%d/<%d>) → broadcast Accept\n",
-			sn, acc, majority(gsz))
+			sn, acc, clusterQ)
+
 		o.broadcast(accept)
 	})
+
 	o.qTimers[sn] = t
+	o.mu.Unlock()
+}
+
+func (o *MultiPaxosMulticastOrderer) cleanupSN(sn int32) {
+	o.mu.Lock()
+	if t := o.qTimers[sn]; t != nil {
+		t.Stop()
+		delete(o.qTimers, sn)
+	}
+	delete(o.accCount, sn)
+	delete(o.lastAccept, sn)
+	delete(o.leaderForSN, sn)
+	// opcional: se quiser liberar também info de grupo/aprendizado por sn:
+	// delete(o.snMembers, sn)
+	// delete(o.snGroup, sn)
+	// delete(o.snGSize, sn)
 	o.mu.Unlock()
 }
 
