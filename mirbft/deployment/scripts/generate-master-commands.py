@@ -19,7 +19,7 @@ BASE_DIR = os.environ.get(
 
 # Dir pesado por experimento (experiment-output).
 # Mantém BASE_DIR leve (tls-data, experiment-config, config, scripts, etc.) em /users/<USER>/iss,
-# mas joga experiment-output para /tmp/deployment-data (sem symlink).
+# mas joga experiment-output para /tmp/... (sem symlink).
 EXPERIMENT_OUTPUT_DIR = os.environ.get(
     "ISS_EXPERIMENT_OUTPUT_DIR",
     "/tmp/deployment-data/experiment-output",
