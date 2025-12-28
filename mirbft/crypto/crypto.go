@@ -117,14 +117,9 @@ func PublicKeyToBytes(pk interface{}) (pkBytes []byte, err error) {
 func PrivateKeyToBytes(pk interface{}) (pkBytes []byte, err error) {
 	switch p := pk.(type) {
 	case *ecdsa.PrivateKey:
-		// Avoid x509.MarshalPKCS8PrivateKey.
-		// In some environments, we observed rare SIGBUS crashes during discovery
-		// registration when serializing ECDSA private keys as PKCS#8.
-		// SEC1 (MarshalECPrivateKey) is sufficient here and is widely supported.
-		return x509.MarshalECPrivateKey(p)
+		return x509.MarshalPKCS8PrivateKey(p)
 	case *rsa.PrivateKey:
-		// Use PKCS#1 for RSA.
-		return x509.MarshalPKCS1PrivateKey(p), nil
+		return x509.MarshalPKCS8PrivateKey(p)
 	default:
 		return nil, fmt.Errorf("unsupported private key type: %T", p)
 	}
@@ -176,29 +171,18 @@ func PublicKeyFromFile(file string) (interface{}, error) {
 }
 
 func PrivateKeyFromBytes(raw []byte) (interface{}, error) {
-	// Try PKCS#8 first (legacy).
-	if pk, err := x509.ParsePKCS8PrivateKey(raw); err == nil {
-		switch p := pk.(type) {
-		case *ecdsa.PrivateKey:
-			return p, nil
-		case *rsa.PrivateKey:
-			return p, nil
-		default:
-			return nil, fmt.Errorf("unsupported private key type: %T", p)
-		}
+	pk, err := x509.ParsePKCS8PrivateKey(raw)
+	if err != nil {
+		return nil, err
 	}
-
-	// Then try SEC1 for ECDSA (x509.MarshalECPrivateKey).
-	if pk, err := x509.ParseECPrivateKey(raw); err == nil {
-		return pk, nil
+	switch p := pk.(type) {
+	case *ecdsa.PrivateKey:
+		return p, nil
+	case *rsa.PrivateKey:
+		return p, nil
+	default:
+		return nil, fmt.Errorf("unsupported private key type: %T", p)
 	}
-
-	// Finally try PKCS#1 for RSA.
-	if pk, err := x509.ParsePKCS1PrivateKey(raw); err == nil {
-		return pk, nil
-	}
-
-	return nil, fmt.Errorf("failed to parse private key (expected PKCS#8, SEC1 EC, or PKCS#1 RSA)")
 }
 
 func PrivateKeyFromFile(file string) (interface{}, error) {
@@ -215,44 +199,44 @@ func PrivateKeyFromFile(file string) (interface{}, error) {
 			block, rest = pem.Decode(rest)
 		}
 	}
-	return nil, fmt.Errorf("failed to find private key in the PEM data")
+	return nil, fmt.Errorf("No valid key PEM block found.")
 }
 
 func PrivateKeyFromPEMBlock(block *pem.Block) (interface{}, error) {
-	switch block.Type {
-	case "PRIVATE KEY":
-		// PKCS#8
+	if block == nil {
+		return nil, fmt.Errorf("PEM block is nil.")
+	} else if !strings.Contains(block.Type, "PRIVATE KEY") {
+		return nil, fmt.Errorf("Wrong PEM block type: %s", block.Type)
+	} else {
 		return PrivateKeyFromBytes(block.Bytes)
-	case "EC PRIVATE KEY":
-		// SEC1
-		return x509.ParseECPrivateKey(block.Bytes)
-	case "RSA PRIVATE KEY":
-		// PKCS#1
-		return x509.ParsePKCS1PrivateKey(block.Bytes)
-	default:
-		return nil, fmt.Errorf("unsupported PEM block type: %s", block.Type)
 	}
 }
 
-func BytesToPublicKeyString(pkBytes []byte) string {
-	b64 := base64.StdEncoding.EncodeToString(pkBytes)
-	return strings.TrimSpace(b64)
+func ParseCertPEM(certFile string) ([]byte, error) {
+	certBytes, err := ioutil.ReadFile(certFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var b *pem.Block
+	for {
+		b, certBytes = pem.Decode(certBytes)
+		if b == nil {
+			break
+		}
+		if b.Type == "CERTIFICATE" {
+			break
+		}
+	}
+
+	if b == nil {
+		return nil, fmt.Errorf("no certificate found")
+	}
+
+	return b.Bytes, nil
 }
 
-func PublicKeyStringToBytes(pkString string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(strings.TrimSpace(pkString))
-}
-
-func BytesToPrivateKeyString(pkBytes []byte) string {
-	b64 := base64.StdEncoding.EncodeToString(pkBytes)
-	return strings.TrimSpace(b64)
-}
-
-func PrivateKeyStringToBytes(pkString string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(strings.TrimSpace(pkString))
-}
-
-func HashBytes(data [][]byte) []byte {
+func ParallelDataArrayHash(data [][]byte) []byte {
 	digests := make([][]byte, len(data), len(data))
 	var wg sync.WaitGroup
 	wg.Add(len(data))
@@ -272,22 +256,4 @@ func HashBytes(data [][]byte) []byte {
 
 func GenerateKeyPair() (interface{}, interface{}, error) {
 	return GenerateECDSAKeyPair()
-}
-
-func ParallelDataArrayHash(data [][]byte) []byte {
-	digests := make([][]byte, len(data), len(data))
-	var wg sync.WaitGroup
-	wg.Add(len(data))
-	for i, d := range data {
-		go func(i int, d []byte) {
-			defer wg.Done()
-			digests[i] = Hash(d)
-		}(i, d)
-	}
-	wg.Wait()
-	h := sha256.New()
-	for _, d := range digests {
-		h.Write(d)
-	}
-	return h.Sum(nil)
 }
