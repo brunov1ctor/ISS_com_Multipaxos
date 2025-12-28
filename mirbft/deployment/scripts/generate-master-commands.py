@@ -161,8 +161,9 @@ def snapshotConfigNow(expID, slaves):
                 s, SLAVE_CONFIG_FILE, _exp_slave_dir(expID)
             )
         )
+        # ÚNICA ALTERAÇÃO: de 5000ms -> 60000ms para evitar falsos FAILED em FS lento
         output(
-            "exec-wait {0} 5000 "
+            "exec-wait {0} 60000 "
             "exec-start {0} {1}/FAILED echo Could not snapshot config; "
             "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
         )
