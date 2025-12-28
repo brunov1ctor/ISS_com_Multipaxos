@@ -197,6 +197,10 @@ fi
 
 ensure_local_binaries
 
+export ISS_EXPERIMENT_OUTPUT_DIR="${ISS_EXPERIMENT_OUTPUT_DIR:-/tmp/iss-Bruno/experiment-output}"
+log_info "ISS_EXPERIMENT_OUTPUT_DIR=$ISS_EXPERIMENT_OUTPUT_DIR"
+### =========================================================
+
 log_sep "[INIT] Gerando config/deployment para o novo experimento"
 
 if $new_experiment; then
