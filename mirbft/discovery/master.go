@@ -39,8 +39,12 @@ func ParseCommandStr(cmdStr string, tokenChannel chan string) {
 		return
 	}
 
-	// Split cmdStr into tokens.
-	tokens := strings.Fields(cmdStr)
+	// Split cmdStr into tokens (shell-like, supports quoting).
+	tokens, err := splitCommandLine(cmdStr)
+	if err != nil {
+		logger.Error().Err(err).Msgf("Could not parse command line: %s", cmdStr)
+		return
+	}
 
 	for _, token := range tokens {
 		tokenChannel <- token
@@ -113,7 +117,13 @@ func (ds *DiscoveryServer) processCommand(cmdString string) error {
 		return nil
 	}
 
-	cmdParts := strings.Fields(cmdString)
+	cmdParts, err := splitCommandLine(cmdString)
+	if err != nil {
+		return fmt.Errorf("%s: could not parse: %w", cmdString, err)
+	}
+	if len(cmdParts) == 0 {
+		return nil
+	}
 
 	switch {
 
@@ -167,32 +177,16 @@ func (ds *DiscoveryServer) processCommand(cmdString string) error {
 		ds.CommandChan <- command
 
 	case cmdParts[0] == "exec-start":
-		// Supports both:
-		//   exec-start <tag> <outFile> <cmd...>
-		// and legacy:
-		//   exec-start <tag> <cmd...>
-		// When <outFile> is omitted, output is discarded (outFile="-").
-		if len(cmdParts) < 3 {
-			return fmt.Errorf("%s: too few tokens", cmdString)
+		// Strict format:
+		//   exec-start <tag> <outFile> <cmd> <args...>
+		// outFile may be "-" to discard output.
+		if len(cmdParts) < 4 {
+			return fmt.Errorf("%s: invalid exec-start format; expected: exec-start <tag> <outFile> <cmd> <args...>", cmdString)
 		}
 
 		tag := cmdParts[1]
-		tok := cmdParts[2]
-		hasOutFile := tok == "-" || strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "./") || strings.HasPrefix(tok, "../")
-
-		var outFile string
-		var fields []string
-		if hasOutFile {
-			outFile = tok
-			fields = cmdParts[3:]
-		} else {
-			outFile = "-"
-			fields = cmdParts[2:]
-		}
-
-		if len(fields) < 1 {
-			return fmt.Errorf("%s: missing command", cmdString)
-		}
+		outFile := cmdParts[2]
+		fields := cmdParts[3:]
 
 		command := &pb.Command{
 			Command: &pb.Command_ExecStart{
@@ -279,6 +273,91 @@ func (ds *DiscoveryServer) processCommand(cmdString string) error {
 	}
 
 	return nil
+}
+
+// splitCommandLine splits a command line into tokens similarly to a POSIX shell.
+// It supports:
+//   - whitespace separation
+//   - single quotes: '...'
+//   - double quotes: "..." (supports \\ and \" escapes)
+//   - backslash escaping outside quotes (and inside double quotes)
+// It does not perform variable expansion or globbing.
+func splitCommandLine(s string) ([]string, error) {
+	var out []string
+	var cur strings.Builder
+
+	inSingle := false
+	inDouble := false
+	escaping := false
+
+	flush := func() {
+		if cur.Len() > 0 {
+			out = append(out, cur.String())
+			cur.Reset()
+		}
+	}
+
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+
+		if escaping {
+			cur.WriteByte(b)
+			escaping = false
+			continue
+		}
+
+		if b == '\\' {
+			// Backslash escapes next char unless in single quotes.
+			if inSingle {
+				cur.WriteByte(b)
+			} else {
+				escaping = true
+			}
+			continue
+		}
+
+		if inSingle {
+			if b == '\'' {
+				inSingle = false
+			} else {
+				cur.WriteByte(b)
+			}
+			continue
+		}
+
+		if inDouble {
+			if b == '"' {
+				inDouble = false
+			} else {
+				cur.WriteByte(b)
+			}
+			continue
+		}
+
+		// Outside quotes
+		switch {
+		case b == '\'':
+			inSingle = true
+		case b == '"':
+			inDouble = true
+		case b == ' ' || b == '\t' || b == '\n' || b == '\r':
+			flush()
+		default:
+			cur.WriteByte(b)
+		}
+	}
+
+	if escaping {
+		return nil, fmt.Errorf("dangling escape")
+	}
+	if inSingle || inDouble {
+		return nil, fmt.Errorf("unterminated quote")
+	}
+	flush()
+
+	// Also support the legacy token stream parser (ParseCommandStr) which expects
+	// the original string to already be trimmed and comments removed.
+	return out, nil
 }
 
 func (ds *DiscoveryServer) ProcessCommandFile(filename string) error {

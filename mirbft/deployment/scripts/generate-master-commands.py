@@ -271,9 +271,11 @@ def stopPeers(peers):
 def stopPeerProcesses(expID, peers):
     output("# stop orderingpeer processes (keep discoveryslave alive)")
     for p in peers:
+        # Avoid shell (-lc), quoting, regex escapes, and "|| true".
+        # pkill exits with code 1 when no matching process exists; the discoveryslave
+        # tolerates that (see cmd/discoveryslave/main.go).
         output(
-            "exec-start {0} - sh -lc 'pkill -INT -f "
-            "\"(^|/)(orderingpeer)(\\s|$)\" || true'".format(p)
+            "exec-start {0} - pkill -INT -f (^|/)(orderingpeer)(\\\\s|$)".format(p)
         )
     for p in peers:
         output("exec-wait {0} 6000".format(p))
@@ -342,7 +344,6 @@ def generateCommands(expID, peers, clients):
     pushConfigFiles(expID, configFiles)
     snapshotConfigNow(expID, slaves)
 
-    # ✅ FIX PRINCIPAL: cria/valida o link TLS do jeito que o cluster espera
     ensureTlsDataLink(expID, slaves)
 
     setBandwidth(expID, bandwidths)

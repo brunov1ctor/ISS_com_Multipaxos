@@ -235,9 +235,25 @@ cmdLoop:
 
 				// Wait for started program to terminate.
 				if err := execCmd.Wait(); err != nil {
-					logger.Error().Err(err).Msg("Error waiting for process.")
-					exitMessage = "Error waiting for program: " + err.Error()
-					exitStatus = 2
+					// Some commands intentionally use non-zero exit codes for benign outcomes.
+					// Example: pkill returns 1 when no matching process exists.
+					if exitErr, ok := err.(*exec.ExitError); ok {
+						code := exitErr.ProcessState.ExitCode()
+						cmdBase := filepath.Base(execCmd.Path)
+						if isAcceptableExitCode(cmdBase, code) {
+							logger.Info().Int("exitCode", code).Str("cmd", cmdBase).Msg("Process exited with acceptable non-zero exit code")
+							exitMessage = fmt.Sprintf("OK (exit=%d)", code)
+							exitStatus = 0
+						} else {
+							logger.Error().Err(err).Int("exitCode", code).Str("cmd", cmdBase).Msg("Error waiting for process")
+							exitMessage = fmt.Sprintf("Error waiting for program (exit=%d): %s", code, err.Error())
+							exitStatus = 2
+						}
+					} else {
+						logger.Error().Err(err).Msg("Error waiting for process.")
+						exitMessage = "Error waiting for program: " + err.Error()
+						exitStatus = 2
+					}
 				} else {
 					exitMessage = "Program exited normally."
 					exitStatus = 0
@@ -313,6 +329,17 @@ cmdLoop:
 	logger.Info().
 		Int32("ownID", ownID).
 		Msg("Slave loop terminated, exiting.")
+}
+
+// isAcceptableExitCode defines which non-zero exit codes are considered "OK"
+// for certain executables. This prevents benign best-effort commands (like pkill)
+// from poisoning the whole experiment run.
+func isAcceptableExitCode(cmdBase string, code int) bool {
+	// pkill returns 1 when no process matches the pattern.
+	if cmdBase == "pkill" && code == 1 {
+		return true
+	}
+	return false
 }
 
 func replaceWildcards(data string, mapping map[string]string) string {
