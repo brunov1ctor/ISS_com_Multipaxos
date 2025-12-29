@@ -125,6 +125,42 @@ envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
 echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
 log_i "master-commands.cmd pronto: $exp_data_dir/$local_master_command_file"
 
+log_i "Validando estrutura de master-commands.cmd (linhas exec-start)..."
+python3 - "$exp_data_dir/$local_master_command_file" <<'PY'
+import shlex
+import sys
+
+path = sys.argv[1]
+bad = False
+
+with open(path, 'r', encoding='utf-8', errors='replace') as f:
+    for ln, line in enumerate(f, 1):
+        s = line.strip()
+        if not s or s.startswith('#'):
+            continue
+        try:
+            toks = shlex.split(s, posix=True)
+        except Exception as e:
+            print(f"[ERRO  ] Linha {ln}: não consegui parsear (shlex): {e}\n  {s}", file=sys.stderr)
+            bad = True
+            continue
+        if not toks:
+            continue
+        if toks[0] == 'exec-start':
+            if len(toks) < 5:
+                print(f"[ERRO  ] Linha {ln}: exec-start com poucos campos. Esperado: exec-start <tag> <outFile> <cmd> <args...>\n  {s}", file=sys.stderr)
+                bad = True
+            else:
+                if toks[2] == '':
+                    print(f"[ERRO  ] Linha {ln}: outFile vazio em exec-start\n  {s}", file=sys.stderr)
+                    bad = True
+
+if bad:
+    print("[ERRO  ] master-commands.cmd inválido; abortando deploy.", file=sys.stderr)
+    sys.exit(2)
+print("[INFO  ] master-commands.cmd OK.")
+PY
+
 log_i "Reset remoto: limpando ${remote_work_dir} e recriando layout canônico."
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET || true
