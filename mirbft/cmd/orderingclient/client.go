@@ -161,8 +161,8 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:   randomRequestPayload,
-		Signature: nil,
+		Payload:    randomRequestPayload,
+		Signature:  nil,
 	}
 
 	if config.Config.SignRequests {
@@ -216,7 +216,6 @@ func (c *client) Run(wg *sync.WaitGroup) {
 
 			// Close request channels (stops send goroutines)
 			for _, ch := range c.reqSinks {
-				// reqSinks might not be initialized yet; guard below
 				if ch != nil {
 					close(ch)
 				}
@@ -238,6 +237,7 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		})
 	}
 	defer closeAll("defer-exit")
+
 	go func() {
 		<-ctx.Done()
 		atomic.StoreInt32(&c.stop, 1)
@@ -315,23 +315,29 @@ func (c *client) Run(wg *sync.WaitGroup) {
 	c.log.Info().Int32("nReq", i).Msg("Finished submitting requests.")
 	atomic.StoreInt32(&c.stop, 1)
 
-	// Wait for in-flight to finish, but stop on ctx.Done()
+	// --------------------------------------------------------------------
+	// ALTERAÇÃO MÍNIMA AQUI:
+	// antes: break dentro do select (não saía do for) -> loop infinito de logs
+	// agora: label + break LABEL
+	// --------------------------------------------------------------------
+WAIT_DRAIN:
 	for {
 		c.Lock()
 		pending := len(c.submittedTo)
 		c.Unlock()
 
 		if pending == 0 {
-			break
+			break WAIT_DRAIN
 		}
 
 		select {
 		case <-ctx.Done():
 			c.log.Warn().Int("pending", pending).Msg("Exiting with pending in-flight requests (ctx done).")
-			break
+			break WAIT_DRAIN
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+	// --------------------------------------------------------------------
 
 	// Stop response handlers by closing conns (already in closeAll on ctx.Done or defer)
 	closeAll("normal-finish")
