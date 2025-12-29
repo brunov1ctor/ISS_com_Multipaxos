@@ -281,16 +281,17 @@ def stopPeers(peers):
 
 
 def stopPeerProcesses(expID, peers):
-    output("# stop orderingpeer processes (keep discoveryslave alive)")
+    output("# stop orderingpeer processes (keep discoveryslave alive) [BEST-EFFORT]")
     for p in peers:
-        # Avoid shell (-lc), quoting, regex escapes, and "|| true".
-        # pkill exits with code 1 when no matching process exists; the discoveryslave
-        # tolerates that (see cmd/discoveryslave/main.go).
-        output(
-            "exec-start {0} - pkill -INT -f (^|/)(orderingpeer)(\\\\s|$)".format(p)
-        )
+        # (ALTERAÇÃO MÍNIMA)
+        # NÃO fazemos exec-wait do pkill, porque pkill pode sair com status 1 (nenhum processo),
+        # e isso vira falha no pipeline. Como o objetivo é best-effort, só disparamos e seguimos.
+        output("exec-start {0} - pkill -INT -f (^|/)(orderingpeer)(\\\\s|$)".format(p))
+
+    # Dá um tempinho para o signal ser entregue, sem checar exit code.
+    output("wait for {0}".format(STOP_SLAVES_DELAY))
+
     for p in peers:
-        output("exec-wait {0} 6000".format(p))
         output("sync {0}".format(p))
     output("")
 
