@@ -618,7 +618,7 @@ fi
   echo "# auths:            $auths"
   echo "# clients1:         $clients1"
   echo "# clients16:        $clients16"
-  echo "# duration:         $duration"
+  echo "# duration:         $durations"
   echo "# peerTag:          $peerTag"
   echo ""
 
