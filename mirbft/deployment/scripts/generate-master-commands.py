@@ -29,6 +29,11 @@ FS_SETTLE_DELAY_MS = 2000
 BEST_EFFORT_WAIT_MS = 15000
 BEST_EFFORT_TAR_WAIT_MS = 120000
 BEST_EFFORT_SCP_WAIT_MS = 180000
+
+# (ALTERAÇÃO MÍNIMA) timeouts mais realistas p/ remote scp + FS lento
+FETCH_CONFIG_WAIT_MS = 180000   # era 60000
+VERIFY_CONFIG_WAIT_MS = 60000   # era 2000
+
 REMOTE_WORK_DIR = os.environ.get("ISS_REMOTE_WORK_DIR", "/tmp/iss-Bruno")
 REMOTE_USER = os.environ.get("ISS_REMOTE_USER", "Bruno")
 REMOTE_BIN_DIR = os.environ.get("ISS_REMOTE_BIN_DIR", f"/users/{REMOTE_USER}/go/bin")
@@ -105,19 +110,25 @@ def pushConfigFiles(expID, slaves):
                 SCP_RETRY_COUNT,
             )
         )
+        # (ALTERAÇÃO MÍNIMA) era 60000
         output(
-            "exec-wait {0} 60000 "
+            "exec-wait {0} {3} "
             "exec-start {0} {1}/FAILED echo Could not fetch config; "
-            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
+            "exec-wait {0} {2}".format(
+                s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS, FETCH_CONFIG_WAIT_MS
+            )
         )
 
     output("# verify config arrived")
     for s in slaves:
         output("exec-start {0} - test -s {1}".format(s, SLAVE_CONFIG_FILE))
+        # (ALTERAÇÃO MÍNIMA) era 2000
         output(
-            "exec-wait {0} 2000 "
+            "exec-wait {0} {3} "
             "exec-start {0} {1}/FAILED echo Config missing after fetch; "
-            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
+            "exec-wait {0} {2}".format(
+                s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS, VERIFY_CONFIG_WAIT_MS
+            )
         )
 
     for s in slaves:
