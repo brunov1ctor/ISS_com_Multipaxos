@@ -144,13 +144,18 @@ with open(path, 'r', encoding='utf-8', errors='replace') as f:
             print(f"[ERRO  ] Linha {ln}: não consegui parsear (shlex): {e}\n  {s}", file=sys.stderr)
             bad = True
             continue
+
         if not toks:
             continue
+
         if toks[0] == 'exec-start':
-            if len(toks) < 5:
-                print(f"[ERRO  ] Linha {ln}: exec-start com poucos campos. Esperado: exec-start <tag> <outFile> <cmd> <args...>\n  {s}", file=sys.stderr)
+            # Formato mínimo válido:
+            # exec-start <tag> <outFile> <cmd> [args...]
+            if len(toks) < 4:
+                print(f"[ERRO  ] Linha {ln}: exec-start com poucos campos. Esperado: exec-start <tag> <outFile> <cmd> [args...]\n  {s}", file=sys.stderr)
                 bad = True
             else:
+                # outFile não pode ser vazio (pode ser "-" para descartar)
                 if toks[2] == '':
                     print(f"[ERRO  ] Linha {ln}: outFile vazio em exec-start\n  {s}", file=sys.stderr)
                     bad = True
