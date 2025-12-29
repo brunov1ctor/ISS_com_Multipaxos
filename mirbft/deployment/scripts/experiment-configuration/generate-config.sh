@@ -616,7 +616,7 @@ fi
   echo "# bucketsPerLeader: $bucketsPerLeader"
   echo "# batchsizes:       $batchsizes"
   echo "# auths:            $auths"
-  echo "# clients8:         $clients8"
+  echo "# clients1:         $clients1"
   echo "# clients16:        $clients16"
   echo "# duration:         $duration"
   echo "# peerTag:          $peerTag"
