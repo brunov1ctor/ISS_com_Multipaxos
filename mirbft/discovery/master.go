@@ -15,16 +15,17 @@
 package discovery
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	logger "github.com/rs/zerolog/log"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
+	logger "github.com/rs/zerolog/log"
 )
 
 func ParseCommandStr(cmdStr string, tokenChannel chan string) {
@@ -38,337 +39,362 @@ func ParseCommandStr(cmdStr string, tokenChannel chan string) {
 		return
 	}
 
-	// Handle "exec-start" and "exec-wait" as special cases.
-	// Only split it in 3 tokens:
-	// 1) command name ("exec-start" or "exec-wait")
-	// 2) slave tag
-	// 3) output file for redirecting stdout and stderr or timeout
-	// 4) all the rest of the string  (the actual command to execute or more master commands to
-	//                                 execute if a timeout occurs - probably contains spaces)
-	if strings.HasPrefix(cmdStr, "exec-start") || strings.HasPrefix(cmdStr, "exec-wait") {
-		fields := strings.Fields(cmdStr)
-		tokenChannel <- fields[0] // "exec-start"             "exec-wait"
-		tokenChannel <- fields[1] // slave tag          or    slave tag
-		tokenChannel <- fields[2] // output file name         timeout value
-		commandData := strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(cmdStr, fields[0])), fields[1])), fields[2])
-		tokenChannel <- commandData // the command to execute
+	// Split cmdStr into tokens.
+	tokens := strings.Fields(cmdStr)
 
-		// For all other inputs, just split them into tokens and feed the tokens into the token channel for processing.
-	} else {
-		for _, t := range strings.Fields(cmdStr) {
-			tokenChannel <- t
-		}
+	for _, token := range tokens {
+		tokenChannel <- token
 	}
 }
 
-// Starts a user command processing goroutine.
-// Returns a channel to which user commands can be written in form of string tokens: command name followed parameters.
-// Processing finishes when the channel is closed.
-// Calls Done() on the provided WaitGroup when tha last command has been processed.
-// ATTENTION: Must not be called a second time before the returned channel is closed and empty!
-//            That might result in undefined behavior, as both instances would be operating on the same slave state.
-func (ds *DiscoveryServer) ProcessCommands(wg *sync.WaitGroup) chan string {
-	tokens := make(chan string)
+type SlaveStatus struct {
+	ID        uint64
+	AddrPort  string
+	PublicIP  string
+	PrivateIP string
+	Status    int64
+	LastCmdID uint64
+	Tag       string
+}
+
+type DiscoveryServer struct {
+	pb.UnimplementedDiscoveryServer
+
+	Listener    net.Listener
+	CommandChan chan *pb.Command
+
+	slavesLock      sync.Mutex
+	slaves          map[string]*SlaveStatus
+	slaveDisconnect chan string
+}
+
+func NewDiscoveryServer() *DiscoveryServer {
+	return &DiscoveryServer{
+		CommandChan:      make(chan *pb.Command, 128),
+		slaves:           make(map[string]*SlaveStatus),
+		slaveDisconnect:  make(chan string, 128),
+		slavesLock:       sync.Mutex{},
+		UnimplementedDiscoveryServer: pb.UnimplementedDiscoveryServer{},
+	}
+}
+
+func (ds *DiscoveryServer) Start(ctx context.Context, port uint64) error {
+
+	var err error
+	ds.Listener, err = net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return err
+	}
+
+	logger.Info().Msgf("Starting server. port=%d", port)
 
 	go func() {
-		for cmd, ok := <-tokens; ok; cmd, ok = <-tokens {
-			ds.processCommand(cmd, tokens)
+		for {
+			select {
+			case <-ctx.Done():
+				_ = ds.Listener.Close()
+				return
+
+			case addrPort := <-ds.slaveDisconnect:
+				ds.slavesLock.Lock()
+				delete(ds.slaves, addrPort)
+				ds.slavesLock.Unlock()
+			}
 		}
-		wg.Done()
 	}()
 
-	return tokens
+	return nil
 }
 
-// Processes a user command.
-// cmdName is the name of the command.
-// Parameters (their number depends on the command) are read from the params channel.
-func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
+func (ds *DiscoveryServer) processCommand(cmdString string) error {
 
-	logger.Debug().Str("cmdName", cmdName).Msg("Entering function.")
+	cmdString = strings.TrimSpace(cmdString)
+	if len(cmdString) == 0 || cmdString[0] == '#' {
+		return nil
+	}
 
-	// Master command that will potentially be sent to slaves
-	// Every master command (even if not sent) gets a unique ID that will be referenced in slaves' status message.
-	mc := &pb.MasterCommand{CmdId: <-ds.cmdIDs}
+	cmdParts := strings.Fields(cmdString)
 
-	// Master command will be only enqueued at the end of this function if the code below sets the Cmd field.
-	mc.Cmd = nil
+	switch {
 
-	// Only peers with this tag will receive the command.
-	// Usually obtained through the params channel.
-	tag := ""
+	case cmdParts[0] == "write-file":
+		if len(cmdParts) < 3 {
+			return fmt.Errorf("%s: too few tokens", cmdString)
+		}
+		filename := cmdParts[1]
+		content := strings.Join(cmdParts[2:], " ")
 
-	// The "exec-wait" command is able to process supplementary commands if a timeout occurs.
-	// In such a case the command string is stored here and executed at the tail of this function.
-	timeoutCommands := ""
-
-	// Based on the first token, decide which command to send to the slaves.
-	switch cmdName {
-
-	// Stop and shut down the slave process.
-	case "stop":
-		mc.Cmd = &pb.MasterCommand_Stop{Stop: &pb.Stop{}}
-		tag = <-params
-		logger.Info().
-			Str("cmdName", "stop").
-			Str("tag", tag).
-			Msg("Processing command.")
-
-	// Launch a program on the slave's machine (but do not wait until it finishes).
-	// The program is represented as a single command string, e.g. "echo 'Foobar'"
-	// The program is started by the slave process from within the go process using exec,
-	// so no fancy shell constructs like pipes or output redirection work.
-	// ATTENTION: The arguments also don't support spaces (in which case they are split in two separate arguments).
-	// The format of this command is exec-start <output_file_name> <command_to_execute>.
-	// The output of <command_to_execute> (both stderr and stdout)
-	// will be stored in <output_file_name> on the slave machine.
-	case "exec-start":
-		tag = <-params
-		outFileName := <-params
-		cmdString := <-params
-		fields := strings.Fields(cmdString)
-		mc.Cmd = &pb.MasterCommand_ExecStart{ExecStart: &pb.ExecStart{
-			Name:           fields[0],
-			OutputFileName: outFileName,
-			Args:           fields[1:],
-		}}
-		logger.Info().
-			Str("cmdName", "exec-start").
-			Str("tag", tag).
-			Str("cmd", cmdString).
-			Msg("Processing command.")
-
-	// Wait until the last executed program (started using exec-start) finishes.
-	case "exec-wait":
-		tag = <-params
-		timeoutStr := <-params
-		timeoutCommands = strings.TrimSpace(<-params)
-
-		var timeout int
-		var err error
-
-		if timeout, err = strconv.Atoi(timeoutStr); err != nil {
-			logger.Error().Str("timeout", timeoutStr).Msg("Cannot parse timeout (must be a number).")
+		command := &pb.Command{
+			Command: &pb.Command_WriteFile{
+				WriteFile: &pb.WriteFile{
+					FileName: filename,
+					Content:  content,
+				},
+			},
 		}
 
-		mc.Cmd = &pb.MasterCommand_ExecWait{ExecWait: &pb.ExecWait{Timeout: int32(timeout)}}
-		logger.Info().
-			Str("cmdName", "exec-wait").
-			Str("tag", tag).
-			Str("timeoutCommands", timeoutCommands).
-			Msg("Processing command.")
+		ds.CommandChan <- command
 
-		// Wait until this command returns and potentially react by executing timeoutCommands
-		atomic.StoreInt32(&ds.waitingForCmd, mc.CmdId)
-		atomic.StoreInt32(&ds.maxCommandExitStatus, 0)
-		ds.responseWG = &sync.WaitGroup{}
-		ds.responseWG.Add(ds.countSlaves(tag))
-
-	// Send a signal to the process executing the program (started using exec-start)
-	// See pb.ExecSignal_Signum_value for possible parameter values.
-	case "exec-signal":
-		tag = <-params
-		sigVal := <-params
-		mc.Cmd = &pb.MasterCommand_ExecSignal{
-			ExecSignal: &pb.ExecSignal{Signum: pb.ExecSignal_Signum(pb.ExecSignal_Signum_value[sigVal])},
+	case cmdParts[0] == "wait-for-slaves":
+		if len(cmdParts) < 4 {
+			return fmt.Errorf("%s: too few tokens", cmdString)
 		}
-		logger.Info().
-			Str("cmdName", "exec-signal").
-			Str("tag", tag).
-			Str("sigVal", sigVal).
-			Msg("Processing command.")
+		tag := cmdParts[1]
+		n := cmdParts[2]
+		timeout := cmdParts[3]
 
-	// Wait for a certain number of slaves to connect or for a time period
-	// Format :
-	// - wait for slaves tag 100    (100 can be replaced by any number of slaves to wait for)
-	// - wait for 30s           (30s can be replaced by anything parsable by time.ParseDuration, like 2h45m, 300ms, ...)
-	case "wait":
-		<-params // Consume the word "for" (just for aesthetic reasons)
-		param := <-params
-		switch param {
-		case "slaves":
-			slaveTag := <-params
-			numSlavesStr := <-params
-
-			logger.Info().
-				Str("cmdName", "wait for slaves").
-				Str("tag", slaveTag).
-				Str("n", numSlavesStr).
-				Msg("Processing command.")
-
-			if n, err := strconv.Atoi(numSlavesStr); err == nil {
-				ds.waitForSlaves(slaveTag, n)
-				logger.Info().Str("tag", slaveTag).Int("numSlaves", n).Msg("Finished waiting for slaves.")
-			} else {
-				logger.Error().Str("numSlaves", numSlavesStr).Msg("Cannot parse number of slaves.")
-			}
-		default:
-			logger.Info().
-				Str("cmdName", "wait for some time").
-				Str("t", param).
-				Msg("Processing command.")
-
-			d, err := time.ParseDuration(param)
-			if err == nil {
-				time.Sleep(d)
-				logger.Info().Str("t", param).Msg("Finished waiting for time duration.")
-			} else {
-				logger.Error().Str("duration", param).Msg("Cannot parse time duration.")
-			}
+		nSlaves := uint64(0)
+		if _, err := fmt.Sscanf(n, "%d", &nSlaves); err != nil {
+			return fmt.Errorf("%s: cannot parse n as uint64", cmdString)
 		}
 
-	// Takes one argument - the number of peers to discover next - and resets all relevant state
-	// (including peer and client ID counters).
-	// After this command, the server is ready to be used as for discovery.
-	case "discover-reset":
-		numPeersStr := <-params
+		timeoutDuration := time.Duration(0)
+		if _, err := fmt.Sscanf(timeout, "%d", &timeoutDuration); err != nil {
+			return fmt.Errorf("%s: cannot parse timeout as int64", cmdString)
+		}
+		timeoutDuration = timeoutDuration * time.Millisecond
 
-		logger.Info().
-			Str("cmdName", "discover-reset").
-			Str("nPeers", numPeersStr).
-			Msg("Processing command.")
+		command := &pb.Command{
+			Command: &pb.Command_WaitForSlaves{
+				WaitForSlaves: &pb.WaitForSlaves{
+					N:       nSlaves,
+					Timeout: timeoutDuration.Milliseconds(),
+				},
+			},
+			Tag: tag,
+		}
 
-		if n, err := strconv.Atoi(numPeersStr); err == nil {
-			ds.resetPC(n)
+		ds.CommandChan <- command
+
+	case cmdParts[0] == "exec-start":
+		// Supports both:
+		//   exec-start <tag> <outFile> <cmd...>
+		// and legacy:
+		//   exec-start <tag> <cmd...>
+		// When <outFile> is omitted, output is discarded (outFile="-").
+		if len(cmdParts) < 3 {
+			return fmt.Errorf("%s: too few tokens", cmdString)
+		}
+
+		tag := cmdParts[1]
+		tok := cmdParts[2]
+		hasOutFile := tok == "-" || strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "./") || strings.HasPrefix(tok, "../")
+
+		var outFile string
+		var fields []string
+		if hasOutFile {
+			outFile = tok
+			fields = cmdParts[3:]
 		} else {
-			logger.Error().Str("numSlaves", numPeersStr).Msg("Cannot parse number of slaves.")
+			outFile = "-"
+			fields = cmdParts[2:]
 		}
 
-	// Waits until all peers (their number must have been specified by a previous discover-reset command) connect.
-	case "discover-wait":
-		logger.Info().
-			Str("cmdName", "discover-wait").
-			Msg("Processing command.")
-
-		ds.peerWg.Wait()
-		logger.Info().Msg("All peer processes started. Waiting until they connect to each other (discover-wait).")
-		ds.syncWg.Wait()
-		logger.Info().Msg("Peers connected to each other. Done waiting (discover-wait).")
-
-	// Sends a NOOP command to the slaves and waits until they respond.
-	case "sync":
-		tag = <-params
-
-		logger.Info().
-			Str("cmdName", "sync").
-			Str("tag", tag).
-			Msg("Processing command.")
-
-		mc.Cmd = &pb.MasterCommand_Noop{Noop: &pb.Noop{}}
-		atomic.StoreInt32(&ds.waitingForCmd, mc.CmdId)
-		ds.responseWG = &sync.WaitGroup{}
-		ds.responseWG.Add(ds.countSlaves(tag))
-
-	case "write-file":
-		filename := <-params
-		content := <-params
-
-		logger.Info().
-			Str("cmdName", "write-file").
-			Str("fileName", filename).
-			Str("content", content).
-			Msg("Processing command.")
-
-		if f, err := os.Create(filename); err != nil {
-			logger.Error().Err(err).Str("filename", filename).Msg("Could not open file for writing.")
-		} else {
-			if _, err := f.WriteString(content); err != nil {
-				logger.Error().
-					Err(err).
-					Str("filename", filename).
-					Str("content", content).
-					Msg("Could not write content to file.")
-			}
-			f.Close()
+		if len(fields) < 1 {
+			return fmt.Errorf("%s: missing command", cmdString)
 		}
 
-	// Unknown command
+		command := &pb.Command{
+			Command: &pb.Command_ExecStart{
+				ExecStart: &pb.ExecStart{
+					Name:    fields[0],
+					Args:    fields[1:],
+					OutFile: outFile,
+				},
+			},
+			Tag: tag,
+		}
+
+		ds.CommandChan <- command
+
+	case cmdParts[0] == "exec-wait":
+		if len(cmdParts) < 3 {
+			return fmt.Errorf("%s: too few tokens", cmdString)
+		}
+		tag := cmdParts[1]
+		timeout := cmdParts[2]
+
+		timeoutDuration := time.Duration(0)
+		if _, err := fmt.Sscanf(timeout, "%d", &timeoutDuration); err != nil {
+			return fmt.Errorf("%s: cannot parse timeout as int64", cmdString)
+		}
+		timeoutDuration = timeoutDuration * time.Millisecond
+
+		command := &pb.Command{
+			Command: &pb.Command_ExecWait{
+				ExecWait: &pb.ExecWait{
+					Timeout: timeoutDuration.Milliseconds(),
+				},
+			},
+			Tag: tag,
+		}
+
+		ds.CommandChan <- command
+
+	case cmdParts[0] == "sync":
+		if len(cmdParts) < 2 {
+			return fmt.Errorf("%s: too few tokens", cmdString)
+		}
+		tag := cmdParts[1]
+
+		command := &pb.Command{
+			Command: &pb.Command_Sync{
+				Sync: &pb.Sync{},
+			},
+			Tag: tag,
+		}
+
+		ds.CommandChan <- command
+
+	case cmdParts[0] == "discover-reset":
+		if len(cmdParts) < 2 {
+			return fmt.Errorf("%s: too few tokens", cmdString)
+		}
+		nPeers := uint64(0)
+		if _, err := fmt.Sscanf(cmdParts[1], "%d", &nPeers); err != nil {
+			return fmt.Errorf("%s: cannot parse nPeers as uint64", cmdString)
+		}
+
+		command := &pb.Command{
+			Command: &pb.Command_DiscoverReset{
+				DiscoverReset: &pb.DiscoverReset{
+					NPeers: nPeers,
+				},
+			},
+		}
+
+		ds.CommandChan <- command
+
+	case cmdParts[0] == "discover-wait":
+		command := &pb.Command{
+			Command: &pb.Command_DiscoverWait{
+				DiscoverWait: &pb.DiscoverWait{},
+			},
+		}
+
+		ds.CommandChan <- command
+
 	default:
-		logger.Error().Str("cmd", cmdName).Msg("Unknown command.")
+		return fmt.Errorf("%s: unrecognized command name", cmdString)
 	}
 
-	// If the command results in sending a MasterCommand, enqueue the obtained MasterCommand for sending to all slaves.
-	if mc.Cmd != nil {
+	return nil
+}
 
-		// Enqueue command.
-		ds.enqueueMasterCommand(tag, mc)
+func (ds *DiscoveryServer) ProcessCommandFile(filename string) error {
 
-		// Wait for response if necessary.
-		if ds.responseWG != nil {
-			logger.Debug().Msg("Waiting for response.")
-			ds.responseWG.Wait()
-			logger.Debug().Msg("response received.")
-			ds.responseWG = nil
-			atomic.StoreInt32(&ds.waitingForCmd, -1)
+	file, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	logger.Info().Msgf("Processing command file. file=%s", filename)
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+
+		cmdString := scanner.Text()
+
+		if err := ds.processCommand(cmdString); err != nil {
+			logger.Error().Err(err).Msgf("Error processing command. cmdString=%s", cmdString)
+			return err
 		}
 	}
 
-	logger.Debug().Str("timeoutCommands", fmt.Sprintf("'%s'", timeoutCommands)).Msg("Processed command.")
+	if err := scanner.Err(); err != nil {
+		return err
+	}
 
-	// If the command set the timeoutCommands variable and a timeout occurred,
-	// execute the supplementary timeout command
-	if timeoutCommands != "" && atomic.LoadInt32(&ds.maxCommandExitStatus) > 0 {
-		wg := sync.WaitGroup{}
-		wg.Add(1)
-		newTempCommandProcessor := ds.ProcessCommands(&wg)
-		for _, c := range strings.Split(timeoutCommands, ";") {
-			ParseCommandStr(c, newTempCommandProcessor)
-		}
-		close(newTempCommandProcessor)
-		wg.Wait()
+	return nil
+}
+
+func (ds *DiscoveryServer) RegisterSlave(ctx context.Context, status *pb.SlaveStatus) (*pb.RegisterSlaveResponse, error) {
+
+	peer, ok := peerFromContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("could not retrieve peer from context")
+	}
+
+	addrPort := peer.AddrPort
+
+	ds.slavesLock.Lock()
+	defer ds.slavesLock.Unlock()
+
+	ds.slaves[addrPort] = &SlaveStatus{
+		ID:        status.ID,
+		AddrPort:  addrPort,
+		PublicIP:  status.PublicIP,
+		PrivateIP: status.PrivateIP,
+		Status:    status.Status,
+		LastCmdID: status.LastCmdID,
+		Tag:       status.Tag,
+	}
+
+	logger.Info().Msgf("New slave. addrPort=%s slaveID=%d tag=%s", addrPort, status.ID, status.Tag)
+
+	return &pb.RegisterSlaveResponse{}, nil
+}
+
+func (ds *DiscoveryServer) GetNextCommand(ctx context.Context, req *pb.GetNextCommandRequest) (*pb.GetNextCommandResponse, error) {
+
+	peer, ok := peerFromContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("could not retrieve peer from context")
+	}
+
+	addrPort := peer.AddrPort
+
+	ds.slavesLock.Lock()
+	slave, ok := ds.slaves[addrPort]
+	if ok {
+		slave.Status = req.Status
+		slave.LastCmdID = req.LastCmdID
+	}
+	ds.slavesLock.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context canceled")
+
+	case cmd := <-ds.CommandChan:
+		return &pb.GetNextCommandResponse{
+			Command: cmd,
+		}, nil
 	}
 }
 
-// Enqueues a command for sending to each slave with a specific
-// tag when that slave asks for it (by invoking NextCommand).
-// The command is also sent to the slaves already waiting for the next command.
-func (ds *DiscoveryServer) enqueueMasterCommand(tag string, mc *pb.MasterCommand) {
+func (ds *DiscoveryServer) WaitForSlaves(tag string, n uint64, timeout time.Duration) error {
 
-	// Enqueue the command to every peer with the correct tag
-	i := 0
-	j := 0
-	ds.slaves.Range(func(key interface{}, value interface{}) bool {
-		i++
-		if tag == WildcardAllTags || value.(*slave).Tag == tag {
-			j++
-			logger.Debug().Int32("slaveID", value.(*slave).SlaveID).Str("cmd", mc.String()).Str("tag", tag).Msg("Pushing command to slave.")
-			value.(*slave).CommandQueue <- mc
-		}
-		return true
-	})
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
-	logger.Debug().Str("cmd", mc.String()).Int("numSlaves", i).Int("numPushes", j).Msg("Finished pushing command to slaves.")
-}
-
-// Waits until n slaves are connected.
-// Every second, counts the slaves and returns if at least n has been reached.
-func (ds *DiscoveryServer) waitForSlaves(tag string, n int) {
 	for {
-		i := 0
-		// The function used in Range increments i for each slave whose tag matches the tag given in the parameter.
-		ds.slaves.Range(func(k interface{}, v interface{}) bool {
-			if tag == WildcardAllTags || v.(*slave).Tag == tag {
-				i++
+		select {
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for slaves")
+
+		default:
+			ds.slavesLock.Lock()
+			count := uint64(0)
+			for _, slave := range ds.slaves {
+				if slave.Tag == tag {
+					count++
+				}
 			}
-			return true
-		})
-		if i >= n {
-			return
+			ds.slavesLock.Unlock()
+
+			if count >= n {
+				logger.Info().Msgf("Finished waiting for slaves. numSlaves=%d tag=%s", count, tag)
+				return nil
+			}
+
+			time.Sleep(200 * time.Millisecond)
 		}
-		time.Sleep(time.Second)
 	}
 }
 
-// Returns the number of slaves with the given tag.
-func (ds *DiscoveryServer) countSlaves(tag string) int {
-	counter := 0
-
-	ds.slaves.Range(func(key interface{}, value interface{}) bool {
-		if tag == WildcardAllTags || value.(*slave).Tag == tag {
-			counter++
-		}
-		return true
-	})
-
-	return counter
+func (ds *DiscoveryServer) DisconnectSlave(addrPort string) {
+	ds.slaveDisconnect <- addrPort
 }
+
