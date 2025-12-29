@@ -21,8 +21,6 @@ MASTER_EXP_DIR = BASE_DIR
 
 # Tudo absoluto nos slaves
 SLAVE_CONFIG_FILE = f"{BASE_DIR}/config/config.yml"
-# (ALTERAÇÃO) também garantir no master (node-0) um "canonical" no mesmo path
-MASTER_CANONICAL_CONFIG_FILE = SLAVE_CONFIG_FILE
 
 LOCAL_MASTER_STATUS_FILE = "master-status"
 LOCAL_IP_ADDRESS = "127.0.0.1"
@@ -65,38 +63,6 @@ def createLogDir(expID):
     # Use '-' as output sink: the slave will discard stdout/stderr without creating any file.
     output("exec-start __all__ - mkdir -p {0}".format(_exp_slave_dir(expID)))
     output("exec-wait __all__ {0}".format(FS_SETTLE_DELAY_MS))
-    output("")
-
-
-# (ALTERAÇÃO) garante no MASTER (node-0) um arquivo canonical no mesmo path dos slaves
-# Isso ajuda a depurar (e garante que o path existe localmente também).
-def ensureMasterCanonicalConfig(expID: str, configFiles: dict):
-    """
-    Para alinhar tudo em /users/Bruno/iss/config/config.yml:
-    - cria o diretório no master
-    - copia (no master) um dos configs do run (o primeiro encontrado) para o canonical
-    Observação: se peers/clients usam configs diferentes, isso só garante um "canonical" local
-    para inspeção. Cada slave ainda recebe o seu config.yml correto via pushConfigFiles().
-    """
-    output("# ensure master canonical config.yml (best-effort)")
-    output(f"exec-start __all__ - mkdir -p {BASE_DIR}/config")
-    output(f"exec-wait __all__ {FS_SETTLE_DELAY_MS}")
-
-    # escolhe um configFile "representativo" para o canonical do master (melhor do que não ter nenhum)
-    any_cfg = None
-    for _, cfg in configFiles.items():
-        any_cfg = cfg
-        break
-
-    if any_cfg:
-        src = f"{MASTER_CONFIG_DIR}/{any_cfg}"
-        dst = MASTER_CANONICAL_CONFIG_FILE
-        output(f"exec-start __all__ - cp {src} {dst}")
-        output(
-            "exec-wait __all__ 60000 "
-            f"exec-start __all__ {_exp_slave_dir(expID)}/FAILED echo Could not create master canonical config.yml; "
-            f"exec-wait __all__ {FS_SETTLE_DELAY_MS}"
-        )
     output("")
 
 
@@ -374,9 +340,6 @@ def generateCommands(expID, peers, clients):
 
     waitForSlaves(slaves)
     createLogDir(expID)
-
-    # (ALTERAÇÃO) garante que no master também exista /users/Bruno/iss/config/config.yml
-    ensureMasterCanonicalConfig(expID, configFiles)
 
     ensureConfigDir(slaves)
     pushConfigFiles(expID, configFiles)
