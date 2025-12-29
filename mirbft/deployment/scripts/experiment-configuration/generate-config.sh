@@ -30,16 +30,6 @@
 # tor05 dal13
 #
 
-# --------------------------------------------------------------------
-# Defaults to avoid 'unbound variable' when running with 'set -u'
-: "${dpl_filename:=deployment.dpl}"
-: "${csv_filename:=deployment.csv}"
-: "${exp_id_digits:=4}"
-# Some header-only variables that might be referenced later
-: "${clients8:=}"
-: "${duration:=60}"
-# --------------------------------------------------------------------
-
 # Deployment setup
 # NOTE: this section is not meaningful for the local deployment, but the scripts try to read those parameters so it has to be here.
 machineType="cloud-machine-templates/small-machine"
@@ -72,7 +62,7 @@ throughputCap=131072000     # The system will always be proposing requests at a 
                             # Used to prevent view changes when too many batches accumulate in a bucket.
 
 # System composition
-orderers="MultiPaxosMulticast"       # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
+orderers="MultiPaxosMulticast"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
 checkpointers="Signing"
 
 # Parameters chosen for experiments
@@ -260,6 +250,8 @@ throughputsNoAuthSingleMultiPaxos[128]=""
 # 65566 + 8192 = 73728
 # 81920 + 8192 = 90112
 
+source scripts/global-vars.sh
+
 batchTimeout() {
     if [ $leaderPolicy = "Single" ]; then
         value=$((1000 / batchrate)) # Don't multiply by numPeers, as only one peer proposes.
@@ -362,9 +354,9 @@ generate() {
       fi
     fi
 
-    dplLines
-    config
-    csvLine
+    $(dplLines)
+    $(config)
+    $(csvLine)
 }
 
 function deployMachines() {
@@ -507,7 +499,7 @@ function generateCombinations() {
                                                   fi
                                                   for thr in $throughputs; do
                                                     if ! skip; then
-                                                      generate
+                                                      $(generate)
                                                       (( exp_id += 1 ))
                                                     fi
                                                   done
@@ -548,7 +540,7 @@ function generateCombinations() {
                                                 fi
                                                 for thr in $throughputs; do
                                                   if ! skip; then
-                                                    generate
+                                                    $(generate)
                                                     (( exp_id += 1 ))
                                                   fi
                                                 done
