@@ -86,6 +86,41 @@ detect_master_ip() {
   return 0
 }
 
+scp_with_retry() {
+  local retries="$1"
+  local src="$2"
+  local dst="$3"
+
+  local attempt=1
+
+  while (( attempt <= retries )); do
+    set +e
+    scp -q \
+      -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null \
+      -o BatchMode=yes \
+      -o ConnectTimeout=8 \
+      -o ConnectionAttempts=1 \
+      -o LogLevel=ERROR \
+      "${src}" "${dst}" </dev/null
+    local status=$?
+    set -e
+
+    if (( status == 0 )); then
+      return 0
+    fi
+
+    warn "[scp] Retry ${attempt}/${retries} (status ${status}): ${src} -> ${dst}"
+    attempt=$((attempt + 1))
+    sleep 0.3
+  done
+
+  err "[scp] FALHA: não foi possível copiar '${src}' -> '${dst}' após ${retries} tentativas."
+  return 1
+}
+
+# ------------------------------------------------------
+
 info "==== [start-remote-slaves] Contexto ====="
 info "  exp_data_dir       = ${exp_data_dir}"
 info "  instance_info_file = ${instance_info_file}"
@@ -145,7 +180,7 @@ copy_bin_atomic() {
   ssh ${ssh_options} "${remote_user}@${ip}" "rm -f '${remote_tmp}'" </dev/null || true
 
   info "[copy] ${ip}: enviando binário ${bin} (atomic)"
-  bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
+  scp_with_retry "${scp_retries}" \
     "${local_path}" \
     "${remote_user}@${ip}:${remote_tmp}"
 
@@ -172,7 +207,7 @@ copy_tls_assets() {
     local base
     base="$(basename "${f}")"
 
-    bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
+    scp_with_retry "${scp_retries}" \
       "${f}" \
       "${remote_user}@${ip}:${remote_base_dir}/tls-data/${base}"
 
@@ -201,7 +236,7 @@ copy_experiment_configs() {
     local base
     base="$(basename "${f}")"
 
-    bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
+    scp_with_retry "${scp_retries}" \
       "${f}" \
       "${remote_user}@${ip}:${remote_exp_config_dir}/${base}"
 
@@ -238,21 +273,16 @@ copy_required_assets() {
 
   remote_mkdirs "${ip}"
 
-  bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
+  scp_with_retry "${scp_retries}" \
     "${this_dir}/start-slave.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/start-slave.sh"
 
-  bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
+  scp_with_retry "${scp_retries}" \
     "${this_dir}/global-vars.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/global-vars.sh"
 
-  bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
-    "${this_dir}/stubborn-scp.sh" \
-    "${remote_user}@${ip}:${remote_work_dir}/scripts/stubborn-scp.sh"
-
   ssh ${ssh_options} "${remote_user}@${ip}" "\
     chmod +x '${remote_work_dir}/scripts/start-slave.sh' \
-             '${remote_work_dir}/scripts/stubborn-scp.sh' \
     2>/dev/null || true
   " </dev/null || true
 
@@ -264,7 +294,6 @@ copy_required_assets() {
   copy_bin_atomic "${ip}" orderingclient
   copy_tls_assets "${ip}"
   copy_experiment_configs "${ip}"
-
 
   remote_check_assets "${ip}" || {
     err "[remote-check] ${ip}: faltam assets (scripts/bin/tls)."
