@@ -86,24 +86,18 @@ def pushConfigFiles(expID, slaves):
     output("# push config")
     for s, configFile in slaves.items():
         dest = SLAVE_CONFIG_FILE
-
-        # ALTERAÇÃO MÍNIMA:
-        # antes: stubborn-scp.sh ...
-        # agora: scp direto (binário padrão), mantendo output sink '-' (não cria logs)
-        #
-        # Observação: o master expõe $own_public_ip e $ssh_key_file.
-        # O scp precisa do -i $ssh_key_file para autenticar no master.
         scp_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
 
         scp_cmd = (
-            "exec-start {0} - scp {1} -i $ssh_key_file "
-            "$own_public_ip:{2}/{3} {4}"
+            "exec-start {0} - scp {1} "
+            "{2}@$own_public_ip:{3}/{4} {5}"
         )
 
         output(
             scp_cmd.format(
                 s,
                 scp_opts,
+                REMOTE_USER,
                 MASTER_CONFIG_DIR,
                 configFile,
                 dest,
@@ -157,7 +151,7 @@ def snapshotConfigNow(expID, slaves):
 
 def ensureTlsDataLink(expID, slaves):
     """
-    Corrige o problema que você viu: o framework executava `bash -lc '...'`
+    Corrige o problema o framework executava `bash -lc '...'`
     mas o parser acabava enviando o `-lc '...'` como UM único argumento
     (exit status 2). Aqui fazemos só comandos simples, sem shell -lc,
     e criamos o link ABSOLUTO esperado: /tmp/iss-Bruno/tls-data -> /users/Bruno/iss/tls-data
