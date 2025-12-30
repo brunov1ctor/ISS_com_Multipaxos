@@ -273,6 +273,7 @@ def runClients(expID, clients):
 
 
 def stopPeers(peers):
+    # VOLTA À LÓGICA ANTIGA: parar peers via framework (sem pkill)
     output("# stop peers (framework stop)")
     for p in peers:
         output("stop {0}".format(p))
@@ -281,16 +282,11 @@ def stopPeers(peers):
 
 
 def stopPeerProcesses(expID, peers):
+    # Mantida por compatibilidade, mas NÃO usada no pipeline (voltamos ao stopPeers()).
     output("# stop orderingpeer processes (keep discoveryslave alive) [BEST-EFFORT]")
     for p in peers:
-        # (ALTERAÇÃO MÍNIMA)
-        # NÃO fazemos exec-wait do pkill, porque pkill pode sair com status 1 (nenhum processo),
-        # e isso vira falha no pipeline. Como o objetivo é best-effort, só disparamos e seguimos.
         output("exec-start {0} - pkill -INT -f (^|/)(orderingpeer)(\\\\s|$)".format(p))
-
-    # Dá um tempinho para o signal ser entregue, sem checar exit code.
     output("wait for {0}".format(STOP_SLAVES_DELAY))
-
     for p in peers:
         output("sync {0}".format(p))
     output("")
@@ -363,13 +359,15 @@ def generateCommands(expID, peers, clients):
     startPeers(expID, list(peers))
     runClients(expID, list(clients))
 
-    stopPeerProcesses(expID, list(peers))
+    # ===== ALTERAÇÃO MÍNIMA AQUI =====
+    # Voltamos ao stop via framework (como no commit antigo).
+    # Isso evita pkill exit status 1 e não depende de quoting/shell.
+    stopPeers(list(peers))
+
     unsetBandwidth(expID, bandwidths)
 
     saveConfig(expID, slaves)
     submitLogs(expID, slaves)
-
-    stopPeers(list(peers))
 
     updateStatus(expID)
     output("")
