@@ -126,8 +126,8 @@ func newClient(dServAddr string, numRequests int) *client {
 	cl := &client{
 		ownClientID:            -1,
 		numRequests:            numRequests,
-		stop:                  0,
-		done:                  make(chan struct{}), // MINIMAL FIX
+		stop:                   0,
+		done:                   make(chan struct{}), // MINIMAL FIX
 		requests:               make(map[int32]*pb.ClientRequest),
 		responses:              make(map[int32]map[int32]bool, numRequests),
 		submittedTo:            make(map[int32]map[int32]bool, numRequests),
@@ -217,8 +217,8 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:   randomRequestPayload,
-		Signature: nil,
+		Payload:    randomRequestPayload,
+		Signature:  nil,
 	}
 
 	// Sign request message.
@@ -310,7 +310,7 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		}
 		c.log.Info().Int32("nReq", i).Msg("Finished submitting requests.")
 		atomic.StoreInt32(&c.stop, 1)
-		c.shutdown() // MINIMAL FIX: stop resubmits before closing channels
+		c.shutdown() // MINIMAL FIX: stop resubmits before closing connections
 
 		// Wait for enough responses for all requests
 		c.Lock()
@@ -330,10 +330,15 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		responseHandlerWG.Wait()
 	}
 
-	// Close request connections (senders exit on close(ch))
-	for _, ch := range c.reqSinks {
-		close(ch)
-	}
+	// =======================
+	// OPÇÃO A (antigo-like):
+	// NÃO fechar c.reqSinks (channels).
+	// Isso evita "send on closed channel" e replica o comportamento antigo.
+	// A parada fica por:
+	//   - c.shutdown() (bloqueia novos submits/resubmits via select)
+	//   - conn.Close() acima (derruba stream)
+	//   - CloseSend do bucket stream abaixo
+	// =======================
 
 	// Close bucket assignment connections
 	for peerID, cl := range c.bucketClients {
@@ -371,6 +376,8 @@ func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestCl
 					Int32("ordererId", ordererID).
 					Int32("clSeqNr", req.RequestId.ClientSn).
 					Msg("Failed sending request to ordering peer.")
+				// OBS: "antigo-like": não damos break nem fechamos channel.
+				// O conn.Close() no Run() vai encerrar o stream e o Recv/Send vai falhar.
 			}
 		}
 
