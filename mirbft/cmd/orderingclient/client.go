@@ -44,10 +44,10 @@ type client struct {
 	// but we use int32, as bool is not supported by the atomic package used to read and update the value.
 	stop int32
 
-	// --- MINIMAL FIX: shutdown signal to prevent "send on closed channel" ---
+	// --- MINIMAL FIX: shutdown signal to prevent sending while stopping ---
 	done     chan struct{}
 	doneOnce sync.Once
-	// ----------------------------------------------------------------------
+	// --------------------------------------------------------------------
 
 	// All requests the client will submit (indexed by client sequence number).
 	// All clients running on the same machine first create (ans sigh) all requests
@@ -217,8 +217,8 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:    randomRequestPayload,
-		Signature:  nil,
+		Payload:   randomRequestPayload,
+		Signature: nil,
 	}
 
 	// Sign request message.
@@ -238,7 +238,7 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 // - submits requests according to the configuration read from the config file.
 func (c *client) Run(wg *sync.WaitGroup) {
 	defer wg.Done()
-	defer c.shutdown() // MINIMAL FIX: ensures background goroutines stop sending
+	defer c.shutdown() // MINIMAL FIX: stop background goroutines cleanly no matter what
 
 	// Only consider non-crashed orderers when simulating failures.
 	var ordererIDs []int32
@@ -272,7 +272,7 @@ func (c *client) Run(wg *sync.WaitGroup) {
 			c.log.Info().Int("clientRunTime", config.Config.ClientRunTime).Msg("Setting up client timeout.")
 			time.AfterFunc(time.Duration(config.Config.ClientRunTime)*time.Millisecond, func() {
 				atomic.StoreInt32(&c.stop, 1)
-				c.shutdown() // MINIMAL FIX: stop background senders/resubmits promptly
+				c.shutdown() // MINIMAL FIX
 				c.log.Info().Int("clientRunTime", config.Config.ClientRunTime).Msg("Stopping client on timeout.")
 			})
 		}
@@ -305,12 +305,12 @@ func (c *client) Run(wg *sync.WaitGroup) {
 				}
 			}
 
-			// blocks while watermark window is full
+			// blocks while watermark window is full (but will stop promptly on done)
 			c.submitRequest(i)
 		}
 		c.log.Info().Int32("nReq", i).Msg("Finished submitting requests.")
 		atomic.StoreInt32(&c.stop, 1)
-		c.shutdown() // MINIMAL FIX: stop resubmits before closing connections
+		c.shutdown() // MINIMAL FIX
 
 		// Wait for enough responses for all requests
 		c.Lock()
@@ -321,7 +321,7 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		}
 		c.Unlock()
 
-		// Stop response handlers and wait for them.
+		// Close connections; this will cause response handlers to exit.
 		for peerID, conn := range reqConns {
 			if err := conn.Close(); err != nil {
 				c.log.Error().Err(err).Int32("ordererID", peerID).Msg("Failed to close client request connection.")
@@ -329,16 +329,6 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		}
 		responseHandlerWG.Wait()
 	}
-
-	// =======================
-	// OPÇÃO A (antigo-like):
-	// NÃO fechar c.reqSinks (channels).
-	// Isso evita "send on closed channel" e replica o comportamento antigo.
-	// A parada fica por:
-	//   - c.shutdown() (bloqueia novos submits/resubmits via select)
-	//   - conn.Close() acima (derruba stream)
-	//   - CloseSend do bucket stream abaixo
-	// =======================
 
 	// Close bucket assignment connections
 	for peerID, cl := range c.bucketClients {
@@ -360,32 +350,42 @@ func (c *client) startRequestSenders() {
 	}
 }
 
-// Returns a channel to be used to send requests to the peer represented by by clientStub.
+// Returns a channel to be used to send requests to the peer represented by clientStub.
 func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestClient) chan *pb.ClientRequest {
 	ch := make(chan *pb.ClientRequest, c.sendBufferSize)
 
 	go func() {
-
-		// Send requests as long as there are any.
-		for req := range ch {
-			c.Lock()
-			c.sentTimestamps[req.RequestId.ClientSn] = time.Now().UnixNano() / 1000 // In us
-			c.Unlock()
-			if err := clientStub.Send(req); err != nil {
+		defer func() {
+			// Close connection when sender goroutine ends.
+			if err := clientStub.CloseSend(); err != nil {
 				c.log.Error().Err(err).
 					Int32("ordererId", ordererID).
-					Int32("clSeqNr", req.RequestId.ClientSn).
-					Msg("Failed sending request to ordering peer.")
-				// OBS: "antigo-like": não damos break nem fechamos channel.
-				// O conn.Close() no Run() vai encerrar o stream e o Recv/Send vai falhar.
+					Msg("Failed to close connection to ordering peer.")
 			}
-		}
+		}()
 
-		// Close connection when channel is closed.
-		if err := clientStub.CloseSend(); err != nil {
-			c.log.Error().Err(err).
-				Int32("ordererId", ordererID).
-				Msg("Failed to close connection to ordering peer.")
+		for {
+			select {
+			case <-c.done:
+				return
+			case req := <-ch:
+				if req == nil {
+					// Shouldn't happen (we never send nil), but don't crash.
+					continue
+				}
+
+				c.Lock()
+				c.sentTimestamps[req.RequestId.ClientSn] = time.Now().UnixNano() / 1000 // In us
+				c.Unlock()
+
+				if err := clientStub.Send(req); err != nil {
+					c.log.Error().Err(err).
+						Int32("ordererId", ordererID).
+						Int32("clSeqNr", req.RequestId.ClientSn).
+						Msg("Failed sending request to ordering peer.")
+					// "antigo-like": não fechamos ch; o conn.Close() no Run derruba tudo.
+				}
+			}
 		}
 	}()
 
@@ -690,7 +690,7 @@ func bucketAssignmentToString(assignment *pb.BucketAssignment) string {
 		sort.Slice(buckets, func(i int, j int) bool { return buckets[i] < buckets[j] })
 
 		for _, b := range buckets {
-			result = fmt.Sprintf("%s %d", b)
+			result = fmt.Sprintf("%s %d", result, b) // FIX: include result
 		}
 	}
 
