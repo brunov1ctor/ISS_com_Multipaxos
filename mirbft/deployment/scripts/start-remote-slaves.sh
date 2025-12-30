@@ -56,6 +56,11 @@ scp_retries="${scp_retries:-10}"
 # Aqui usamos tls-data que fica em deployment/, não o da raiz do repo.
 local_tls_dir="$(cd "${this_dir}/.." && pwd)/tls-data"
 
+# >>> MINIMAL ADDITION: configs do experimento (locais) -> remote experiment-config
+local_exp_config_dir="${exp_data_dir}/config"
+remote_exp_config_dir="${remote_base_dir}/experiment-config"
+# <<<
+
 master_ip="${master_ip:-}"
 
 detect_master_ip() {
@@ -106,6 +111,7 @@ remote_mkdirs() {
              '${remote_base_dir}' \
              '${remote_base_dir}/config' \
              '${remote_base_dir}/tls-data' \
+             '${remote_exp_config_dir}' \
              '${remote_exp_dir}' \
              '${remote_bin_dir}' \
     2>/dev/null || true
@@ -176,6 +182,36 @@ copy_tls_assets() {
   info "[copy] ${ip}: TLS sincronizado (${count} arquivos)."
 }
 
+# >>> copia configs do experimento para o slave (inclusive 1client)
+copy_experiment_configs() {
+  local ip="$1"
+
+  if [[ ! -d "${local_exp_config_dir}" ]]; then
+    warn "[copy] Diretório de configs do experimento não encontrado: ${local_exp_config_dir}"
+    return 0
+  fi
+
+  ssh ${ssh_options} "${remote_user}@${ip}" "\
+    mkdir -p '${remote_exp_config_dir}' 2>/dev/null || true
+  " </dev/null || true
+
+  local count=0
+  for f in "${local_exp_config_dir}"/*; do
+    [[ -f "${f}" ]] || continue
+    local base
+    base="$(basename "${f}")"
+
+    bash "${this_dir}/stubborn-scp.sh" "${scp_retries}" \
+      "${f}" \
+      "${remote_user}@${ip}:${remote_exp_config_dir}/${base}"
+
+    ((count++)) || true
+  done
+
+  info "[copy] ${ip}: experiment-config sincronizado (${count} arquivos)."
+}
+# <<<
+
 remote_check_assets() {
   local ip="$1"
   ssh ${ssh_options} "${remote_user}@${ip}" "\
@@ -185,6 +221,8 @@ remote_check_assets() {
       ls -1 '${remote_bin_dir}' 2>/dev/null | wc -l; \
     echo -n '[remote-check] tls-data: '; \
       ls -1 '${remote_base_dir}/tls-data' 2>/dev/null | wc -l; \
+    echo -n '[remote-check] experiment-config: '; \
+      ls -1 '${remote_exp_config_dir}' 2>/dev/null | wc -l; \
     test -x '${remote_bin_dir}/discoverymaster' && \
     test -x '${remote_bin_dir}/discoveryslave' && \
     test -x '${remote_bin_dir}/orderingpeer' && \
@@ -224,8 +262,9 @@ copy_required_assets() {
   copy_bin_atomic "${ip}" discoveryslave
   copy_bin_atomic "${ip}" orderingpeer
   copy_bin_atomic "${ip}" orderingclient
-
   copy_tls_assets "${ip}"
+  copy_experiment_configs "${ip}"
+
 
   remote_check_assets "${ip}" || {
     err "[remote-check] ${ip}: faltam assets (scripts/bin/tls)."
