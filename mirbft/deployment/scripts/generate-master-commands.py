@@ -86,18 +86,22 @@ def pushConfigFiles(expID, slaves):
     output("# push config")
     for s, configFile in slaves.items():
         dest = SLAVE_CONFIG_FILE
+
+        # ALTERAÇÃO MÍNIMA:
+        # O erro estava em usar "-i $ssh_key_file" (no slave esse env não existe -> vira vazio,
+        # e o scp trata o SOURCE como arquivo de chave).
+        # Então: scp direto, SEM -i.
         scp_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
 
         scp_cmd = (
             "exec-start {0} - scp {1} "
-            "{2}@$own_public_ip:{3}/{4} {5}"
+            "$own_public_ip:{2}/{3} {4}"
         )
 
         output(
             scp_cmd.format(
                 s,
                 scp_opts,
-                REMOTE_USER,
                 MASTER_CONFIG_DIR,
                 configFile,
                 dest,
@@ -151,7 +155,7 @@ def snapshotConfigNow(expID, slaves):
 
 def ensureTlsDataLink(expID, slaves):
     """
-    Corrige o problema o framework executava `bash -lc '...'`
+    Corrige o problema que você viu: o framework executava `bash -lc '...'`
     mas o parser acabava enviando o `-lc '...'` como UM único argumento
     (exit status 2). Aqui fazemos só comandos simples, sem shell -lc,
     e criamos o link ABSOLUTO esperado: /tmp/iss-Bruno/tls-data -> /users/Bruno/iss/tls-data
@@ -353,9 +357,7 @@ def generateCommands(expID, peers, clients):
     startPeers(expID, list(peers))
     runClients(expID, list(clients))
 
-    # ===== ALTERAÇÃO MÍNIMA AQUI =====
-    # Voltamos ao stop via framework (como no commit antigo).
-    # Isso evita pkill exit status 1 e não depende de quoting/shell.
+    # Voltamos ao stop via framework.
     stopPeers(list(peers))
 
     unsetBandwidth(expID, bandwidths)
