@@ -12,9 +12,9 @@ ssh $ssh_options -q -o "ConnectTimeout=10" "$1" '
     if echo "$s" | grep -Eq "^[0-9]+$"; then
       echo "$s"
     else
-      # Preserva DONE / ANALYZED para o fetch-results.sh
+      # Apenas ANALYZED é preservado (comportamento original)
       case "$s" in
-        DONE|ANALYZED)
+        ANALYZED)
           echo "$s"
           ;;
         *)

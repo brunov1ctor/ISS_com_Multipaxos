@@ -28,7 +28,6 @@ remote_config_dir="${remote_base_dir}/experiment-config"
 master_port="${master_port:-9999}"
 
 status_file="${remote_work_dir}/status"
-status_exit_file="${remote_work_dir}/status.exit"
 ready_file="${remote_work_dir}/master-ready"
 log_dir="${remote_work_dir}/logs"
 log_file="${log_dir}/discoverymaster.log"
@@ -59,7 +58,7 @@ log_i "master_ip=${master_ip} port=${master_port} user=${remote_user}"
 log_i "remote_work_dir=${remote_work_dir} remote_bin_dir=${remote_bin_dir}"
 log_i "remote_base_dir=${remote_base_dir} remote_config_dir=${remote_config_dir}"
 log_i "local_master_cmd=${local_master_cmd}"
-log_i "status_file=${status_file} status_exit_file=${status_exit_file} ready_file=${ready_file}"
+log_i "status_file=${status_file} ready_file=${ready_file}"
 
 # -----------------------------------------------------------------------------
 # Preparar diretórios remotos (work + base)
@@ -92,14 +91,13 @@ set -euo pipefail
 bin=\"${remote_bin_dir}/discoverymaster\"
 test -x \"\$bin\" || { echo \"bin not found: \$bin\" >&2; exit 1; }
 
-mkdir -p \"$(dirname "${status_file}")\" \"$(dirname "${status_exit_file}")\" \"$(dirname "${ready_file}")\" \"$(dirname "${log_file}")\"
+mkdir -p \"$(dirname "${status_file}")\" \"$(dirname "${ready_file}")\" \"$(dirname "${log_file}")\"
 
 cur=\"$( ( test -f "${status_file}" && cat "${status_file}" || true ) | tr -d \"\r\" | tail -n 1 )\"
-if [[ \"\$cur\" != \"DONE\" && \"\$cur\" != \"ANALYZED\" ]]; then
+if [[ \"\$cur\" != \"ANALYZED\" ]]; then
   echo RUNNING > \"${status_file}\" 2>/dev/null || true
 fi
 
-: > \"${status_exit_file}\" 2>/dev/null || true
 echo READY > \"${ready_file}\" 2>/dev/null || true
 
 addr=\"${master_ip}:${master_port}\"

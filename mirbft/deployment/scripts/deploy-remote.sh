@@ -122,7 +122,7 @@ log_i "Gerando master-commands.cmd a partir do template..."
 envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
   < "$template_path" > "$exp_data_dir/$local_master_command_file"
 
-echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
+# (REMOVIDO) write-file $status_file DONE
 log_i "master-commands.cmd pronto: $exp_data_dir/$local_master_command_file"
 
 log_i "Validando estrutura de master-commands.cmd (linhas exec-start)..."
@@ -170,7 +170,7 @@ log_i "Reset remoto: limpando ${remote_work_dir} e recriando layout canônico."
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET || true
 tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
-killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
+kill killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
 rm -rf '${remote_work_dir}'
 
 # pesado: /tmp (logs, status, experiment-output)
@@ -214,22 +214,37 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 
 log_i "Todos os slaves disparados."
 
-master_done_timeout_secs="${MASTER_DONE_TIMEOUT_SECS:-7200}"
-log_i "Aguardando DONE no status do master: ${remote_status_file} (timeout=${master_done_timeout_secs}s)..."
+# -----------------------------------------------------------------------------
+# MINIMA ALTERAÇÃO: aguardar status avançar antes do fetch
+# -----------------------------------------------------------------------------
+master_wait_secs="${MASTER_WAIT_SECS:-7200}"
+log_i "Aguardando status avançar em ${remote_status_file} (timeout=${master_wait_secs}s)..."
 
-done_ok=false
-for ((i=0; i<master_done_timeout_secs; i++)); do
-  if rsh "$master_ip" "test -f '${remote_status_file}' && grep -q '^DONE' '${remote_status_file}'"; then
-    done_ok=true
-    break
-  fi
+status_ok=false
+for ((i=0; i<master_wait_secs; i++)); do
+  s="$(rsh "$master_ip" "test -f '${remote_status_file}' && tail -n 1 '${remote_status_file}' | tr -d '\r' || true" 2>/dev/null || true)"
+  case "$s" in
+    ANALYZED)
+      status_ok=true
+      break
+      ;;
+    ''|RUNNING|READY|0)
+      ;;
+    *)
+      # Original: expID/progresso numérico
+      if echo "$s" | grep -Eq '^[0-9]+$'; then
+        status_ok=true
+        break
+      fi
+      ;;
+  esac
   sleep 1
 done
 
-if $done_ok; then
-  log_i "Master sinalizou DONE."
+if $status_ok; then
+  log_i "Status avançou: $(rsh "$master_ip" "tail -n 1 '${remote_status_file}' | tr -d '\r' || true" 2>/dev/null || echo "?")"
 else
-  log_w "Timeout esperando DONE. Vou tentar fetch mesmo assim."
+  log_w "Timeout esperando status avançar. Vou tentar fetch mesmo assim."
 fi
 
 log_i "Coletando resultados para exp_data_dir=${exp_data_dir} ..."
