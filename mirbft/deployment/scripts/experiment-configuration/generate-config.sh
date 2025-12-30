@@ -66,7 +66,7 @@ orderers="MultiPaxosMulticast"         # Possible values: MultiPaxosMulticast Mu
 checkpointers="Signing"
 
 # Parameters chosen for experiments
-durations="0"             # 0 - sem timeout, [s]   !!! Don't forget to change the timeout in generate-master-commands.py if increasing this value !!!
+durations="30"             #!!! Don't forget to change the timeout in generate-master-commands.py if increasing this value !!!
 bandwidths="unlimited" #"1gbit"         # any value accepted by the tc command or "unlimited" !!! ATTENTION: Adapt MaxProposeDataRate in config accordingly !!!
 payloadSizes="500"         # [Bytes]
 fixedEpochLength=false
