@@ -87,29 +87,29 @@ def pushConfigFiles(expID, slaves):
     for s, configFile in slaves.items():
         dest = SLAVE_CONFIG_FILE
 
-        # Não queremos gerar arquivos de log "scp-output-*.log" no filesystem do nó.
-        # Para isso, usamos '-' como output sink (o discoveryslave descarta stdout/stderr).
-        if deplType == "remote":
-            scp_cmd = (
-                "exec-start {0} - stubborn-scp.sh {5} "
-                "$own_public_ip:{2}/{3} {4}"
-            )
-        else:
-            scp_cmd = (
-                "exec-start {0} - stubborn-scp.sh {5} "
-                "-i $ssh_key_file $own_public_ip:{2}/{3} {4}"
-            )
+        # ALTERAÇÃO MÍNIMA:
+        # antes: stubborn-scp.sh ...
+        # agora: scp direto (binário padrão), mantendo output sink '-' (não cria logs)
+        #
+        # Observação: o master expõe $own_public_ip e $ssh_key_file.
+        # O scp precisa do -i $ssh_key_file para autenticar no master.
+        scp_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+
+        scp_cmd = (
+            "exec-start {0} - scp {1} -i $ssh_key_file "
+            "$own_public_ip:{2}/{3} {4}"
+        )
 
         output(
             scp_cmd.format(
                 s,
-                expID,
+                scp_opts,
                 MASTER_CONFIG_DIR,
                 configFile,
                 dest,
-                SCP_RETRY_COUNT,
             )
         )
+
         # (ALTERAÇÃO MÍNIMA) era 60000
         output(
             "exec-wait {0} {3} "

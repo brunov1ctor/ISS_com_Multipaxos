@@ -154,8 +154,6 @@ cmdLoop:
 			} else { // No command running yet
 
 				// Replace wildcards in output file name and arguments by local values.
-				// E.g., discovery.WildcardSlaveID (__id__ at the time of writing this comment)
-				// is replaced by own slave ID.
 				cmd.ExecStart.OutputFileName = replaceWildcards(cmd.ExecStart.OutputFileName, wildcards)
 				for i, arg := range cmd.ExecStart.Args {
 					cmd.ExecStart.Args[i] = replaceWildcards(arg, wildcards)
@@ -177,7 +175,7 @@ cmdLoop:
 					execCmd.Stderr = io.Discard
 					execOutFile = nil
 				} else {
-					// Ensure output directory exists (robust in case experiment-output/<id>/slave-__id__ was not created yet)
+					// Ensure output directory exists
 					outDir := filepath.Dir(cmd.ExecStart.OutputFileName)
 					if err := os.MkdirAll(outDir, 0755); err != nil {
 						logger.Error().
@@ -197,6 +195,10 @@ cmdLoop:
 							Err(err).
 							Str("outFileName", cmd.ExecStart.OutputFileName).
 							Msg("Could not open file for writing")
+						// Fallback: discard output (não aborta o comando só por falha de log)
+						execCmd.Stdout = io.Discard
+						execCmd.Stderr = io.Discard
+						execOutFile = nil
 					} else {
 						execCmd.Stdout = execOutFile
 						execCmd.Stderr = execOutFile
@@ -205,8 +207,16 @@ cmdLoop:
 
 				// Launch Command
 				if err = execCmd.Start(); err != nil {
+					// ===== ALTERAÇÃO MÍNIMA AQUI =====
+					// Se Start falhar, não pode deixar execCmd "armado", senão ExecWait vira "exec: not started".
+					if execOutFile != nil {
+						_ = execOutFile.Close()
+						execOutFile = nil
+					}
+					execCmd = nil
+
 					exitMessage = "Failed to start command: " + err.Error()
-					exitStatus = 2
+					exitStatus = 127
 				} else {
 					exitMessage = "OK"
 					exitStatus = 0
@@ -224,7 +234,6 @@ cmdLoop:
 			} else {
 
 				// Send a INT signal to the process after the timeout.
-				// If that doesn not stop the process, we send the KILL signal after another another timeout.
 				timerInt := time.AfterFunc(time.Millisecond*time.Duration(cmd.ExecWait.Timeout), func() {
 					_ = execCmd.Process.Signal(syscall.SIGINT)
 				})
@@ -344,7 +353,6 @@ func isAcceptableExitCode(cmdBase string, code int) bool {
 
 func replaceWildcards(data string, mapping map[string]string) string {
 	for orig, repl := range mapping {
-		// Could have used ReplaceAll, but reverted to this for compatibility with old Go versions.
 		data = strings.Replace(data, orig, repl, -1)
 	}
 	return data
