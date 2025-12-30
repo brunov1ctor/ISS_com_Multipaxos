@@ -3,7 +3,7 @@ import os
 import sys
 from collections import defaultdict
 
-CLIENT_TIMEOUT = 480000  # ms
+CLIENT_TIMEOUT = 120000  # ms
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
