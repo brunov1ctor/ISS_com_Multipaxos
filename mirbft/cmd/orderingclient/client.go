@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,63 +31,88 @@ type client struct {
 	sync.Mutex
 
 	ownClientID int32
-	privKey     interface{}
+
+	// Private key for signing requests.
+	privKey interface{}
 
 	// Number of requests the client tries to submit before stopping.
 	// Set to 0 for no limit (and define a running time to make the client stop after a certain time).
 	numRequests int
 
 	// Set to a non-zero value to stop submitting requests.
+	// A boolean type of this variable would better reflect its semantics,
+	// but we use int32, as bool is not supported by the atomic package used to read and update the value.
 	stop int32
 
+	// All requests the client will submit (indexed by client sequence number).
+	// All clients running on the same machine first create (ans sigh) all requests
+	// and only then start submitting them.
+	// This is to remove the CPU bottleneck of running many clients on the same machine.
+	// Filled with data on initialization.
 	requests map[int32]*pb.ClientRequest
 
+	// The gRPC client stub data structures used to send and receive requests/responses to and from replicas.
 	reqClients map[int32]pb.Messenger_RequestClient
-	reqSinks   map[int32]chan *pb.ClientRequest
 
+	// Channels used to send requests to orderers.
+	reqSinks map[int32]chan *pb.ClientRequest
+
+	// The gRPC client stub data structures used to receive bucket assignments from replicas.
 	bucketClients map[int32]pb.Messenger_BucketsClient
 
-	responses    map[int32]map[int32]bool
-	submittedTo  map[int32]map[int32]bool
+	// Stores which peer responded to which request. responses[43][27] means that peer 27 responded to request 43.
+	// In reality, we'd need an index for response (digest), if the contents of the response was important.
+	// In case of "ACK"s, this is not necessary.
+	responses map[int32]map[int32]bool
+
+	// Stores which request has been submitted to which orderers. submittedTo[43][27] means that
+	// request 43 has been submitted to orderer 27.
+	submittedTo map[int32]map[int32]bool
+
+	// For each request, stores the timestamp of request submission (in microseconds), for calculating latency.
 	sentTimestamps   map[int32]int64
 	submitTimestamps map[int32]int64
-	finished     map[int32]bool
 
+	// For each request, stores a flag indicating whether the request is finished.
+	// Initialized to false on request submission, set to true when enoughResponses() returns true.
+	finished map[int32]bool
+
+	// The sequence number of the oldest in-flight request (i.e. submitted request to which not enough responses have been
+	// received yet).
 	oldestClientSN int32
-	watermarkWindow chan *pb.ClientRequest
-	sendBufferSize  int
 
+	// Channel containing in-flight requests. Its capacity corresponds to the watermark window size.
+	// Used to implement the client watermark window. Before submitting a request, it needs to be written
+	// to this channel. Once enough responses have been received for the first request in the channel, it is removed,
+	// making space for the next one.
+	watermarkWindow chan *pb.ClientRequest
+
+	// Size of the channel buffer for the requests that should be sent on the network.
+	// Since no more than the watermark window of requests will ever be pending at a time, the watermark window
+	// size is a good value for the buffer size too.
+	// Sending to an orderer might block on this channel only if the orderer is slow and the watermarks advance
+	// before the requests are even sent to this orderer.
+	sendBufferSize int
+
+	// Data structures to keep track of received bucket assignments.
 	epoch                   int32
 	maxBucketID             int
-	currentBucketAssignment map[int]int32
+	currentBucketAssignment map[int]int32 // map from bucket IDs to peer IDs holding the buckets
 	bucketAssignments       map[string]*pb.BucketAssignment
-	bucketAssignmentCounts  map[int32]map[string]int
+	// For each epoch, for each received assignment, save number of peers it was received from
+	bucketAssignmentCounts map[int32]map[string]int
 
+	// Logger used by this client.
+	// Each client's log goes in a separate file, even if multiple clients are running from within the same process.
 	log     zerolog.Logger
-	logFile *os.File
+	logFile *os.File // Kept around only for closing.
 
+	// Same as with logging, each client has a separate trace that is output in a separate file,
+	// even if multiple clients are running in the same process.
 	trace tracing.Trace
 }
 
-// ===== DRAIN FIX (MINIMAL) =====
-// Reads CLIENT_DRAIN_TIME_MS from env. Default 5000ms.
-// 0 disables the timed drain (falls back to old "wait until submittedTo empty").
-func clientDrainTime() time.Duration {
-	const defMS = 5000
-	v := os.Getenv("CLIENT_DRAIN_TIME_MS")
-	if v == "" {
-		return time.Duration(defMS) * time.Millisecond
-	}
-	ms, err := strconv.Atoi(v)
-	if err != nil {
-		return time.Duration(defMS) * time.Millisecond
-	}
-	if ms <= 0 {
-		return 0
-	}
-	return time.Duration(ms) * time.Millisecond
-}
-
+// Allocates and returns a pointer to a new client.
 func newClient(dServAddr string, numRequests int) *client {
 	cl := &client{
 		ownClientID:            -1,
@@ -105,16 +129,23 @@ func newClient(dServAddr string, numRequests int) *client {
 		epoch:                  -1,
 		bucketAssignments:      make(map[string]*pb.BucketAssignment),
 		bucketAssignmentCounts: make(map[int32]map[string]int),
+		// currentBucketAssignment will be initialized later (needs to be checked for nil when accessing)
 		trace: &tracing.BufferedTrace{
 			Sampling:              config.Config.ClientTraceSampling,
 			BufferCapacity:        config.Config.EventBufferSize,
 			ProtocolEventCapacity: config.Config.EventBufferSize,
 			RequestEventCapacity:  config.Config.EventBufferSize,
 		},
+		// The reqClients field is not initialized, as it is directly assigned a map
+		// that the messenger allocates when connecting to the orderers.
+		// reqSinks is initialized at the same time.
 	}
 
+	// Obtain identities of all peers.
+	// Must happen first, as it sets cl.ownClientID
 	cl.discoverPeers(dServAddr)
 
+	// Open log file specific to this client and create a new logger.
 	logFileName := fmt.Sprintf("%s-%03d.log", outFilePrefix, cl.ownClientID)
 	logFile, err := os.Create(logFileName)
 	if err != nil {
@@ -125,12 +156,14 @@ func newClient(dServAddr string, numRequests int) *client {
 			Msg("Could not create log file.")
 	}
 	cl.log = logger.Output(zerolog.ConsoleWriter{Out: logFile, NoColor: true, TimeFormat: "15:04:05.000"})
-	cl.logFile = logFile
+	cl.logFile = logFile // Kept around only for closing.
 
+	// Load signing key
 	if config.Config.SignRequests {
 		cl.loadPrivKey(config.Config.ClientPrivKeyFile)
 	}
 
+	// Generate all request messages if configured to do so
 	if config.Config.PrecomputeRequests {
 		cl.log.Info().Int("numRequests", numRequests).Msg("Precomputing requests.")
 		for seqNr := int32(0); seqNr < int32(cl.numRequests); seqNr++ {
@@ -141,6 +174,7 @@ func newClient(dServAddr string, numRequests int) *client {
 	return cl
 }
 
+// Loads private key for signing requests
 func (c *client) loadPrivKey(privKeyFile string) {
 	var err error
 	c.privKey, err = crypto.PrivateKeyFromFile(privKeyFile)
@@ -153,6 +187,7 @@ func (c *client) loadPrivKey(privKeyFile string) {
 }
 
 func (c *client) discoverPeers(dServAddr string) {
+	// Get orderer identities from discovery server.
 	var ordererIdentities []*pb.NodeIdentity
 	c.ownClientID, ordererIdentities = discovery.RegisterClient(dServAddr)
 	logger.Info().
@@ -160,12 +195,15 @@ func (c *client) discoverPeers(dServAddr string) {
 		Int("numOrderers", len(ordererIdentities)).
 		Msg("Registared with discovery server.")
 
+	// Initialize membership only once.
 	membershipInitializer.Do(func() {
 		membership.InitNodeIdentities(ordererIdentities)
 	})
 }
 
 func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
+
+	// Create request message.
 	req := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
 			ClientId: c.ownClientID,
@@ -175,8 +213,9 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		Signature: nil,
 	}
 
+	// Sign request message.
+	var err error
 	if config.Config.SignRequests {
-		var err error
 		req.Signature, err = crypto.Sign(request.Digest(req), c.privKey)
 		if err != nil {
 			c.log.Error().Err(err).Int32("clSn", seqNr).Msg("Failed signing request.")
@@ -186,9 +225,13 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	return req
 }
 
+// Runs the main client logic that
+// - connects to the orderers and
+// - submits requests according to the configuration read from the config file.
 func (c *client) Run(wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	// Only consider non-crashed orderers when simulating failures.
 	var ordererIDs []int32
 	if config.Config.LeaderPolicy == "SimulatedRandomFailures" {
 		ordererIDs = manager.NewLeaderPolicy(config.Config.LeaderPolicy).GetLeaders(0)
@@ -196,6 +239,7 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		ordererIDs = membership.AllNodeIDs()
 	}
 
+	// Create connections to ordering servers.
 	var reqConns map[int32]*grpc.ClientConn
 	c.reqClients, c.bucketClients, reqConns = messenger.ConnectToOrderers(c.ownClientID, c.log, ordererIDs)
 	c.startRequestSenders()
@@ -203,18 +247,25 @@ func (c *client) Run(wg *sync.WaitGroup) {
 
 	c.log.Info().Msg("Connected to orderers.")
 
+	// Initialize tracing
+	// Client IDs are negative to distinguish them from peer IDs.
 	c.trace.Start(fmt.Sprintf("%s-%03d.trc", outFilePrefix, c.ownClientID), -1*c.ownClientID)
 	defer c.trace.Stop()
+
+	var responseHandlerWG *sync.WaitGroup
 
 	if config.Config.RequestRate == 0 {
 		time.Sleep(time.Duration(config.Config.ClientRunTime) * time.Millisecond)
 	} else {
-		responseHandlerWG := c.startResponseHandlers()
+		// Create response handler threads.
+		// Returns a wait group waiting for all the handlers to finish.
+		responseHandlerWG = c.startResponseHandlers()
 
+		// Make client stop after a predefined time, if configured
 		if config.Config.ClientRunTime != 0 {
 			c.log.Info().Int("clientRunTime", config.Config.ClientRunTime).Msg("Setting up client timeout.")
 			time.AfterFunc(time.Duration(config.Config.ClientRunTime)*time.Millisecond, func() {
-				atomic.StoreInt32(&c.stop, 1)
+				atomic.StoreInt32(&c.stop, 1) // A non-zero value of the stop variable halts the request submissions.
 				c.log.Info().Int("clientRunTime", config.Config.ClientRunTime).Msg("Stopping client on timeout.")
 			})
 		}
@@ -222,15 +273,19 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		c.log.Info().Int("numRequests", c.numRequests).Msg("Starting to submit requests.")
 
 		timeBetweenRequests := int64(1000000 / config.Config.RequestRate)
-		nextSubmitTime := time.Now().UnixNano() / 1000
+		nextSubmitTime := time.Now().UnixNano() / 1000 // Submit first request immediately
 
+		// Submit requests
 		var i int32
 		for i = int32(0); i < int32(c.numRequests) && atomic.LoadInt32(&c.stop) == 0; i++ {
+
 			if config.Config.RequestRate != -1 {
 				now := time.Now().UnixNano() / 1000
 
+				// Log client slack. Watch out, units are microseconds!
 				c.trace.Event(tracing.CLIENT_SLACK, int64(i), (nextSubmitTime - now))
 
+				// Wait for next submit time if necessary.
 				if now < nextSubmitTime {
 					time.Sleep(time.Duration(nextSubmitTime-now) * time.Microsecond)
 					nextSubmitTime += timeBetweenRequests
@@ -243,69 +298,75 @@ func (c *client) Run(wg *sync.WaitGroup) {
 				}
 			}
 
+			// ===== MINIMAL SAFETY FIX =====
+			// Important: re-check stop after sleeping / rate-limit logic.
+			// This prevents one more submit after ctx/timeouts flip stop=1.
 			if atomic.LoadInt32(&c.stop) != 0 {
 				break
 			}
 
+			// blocks while watermark window is full
 			c.submitRequest(i)
 		}
 		c.log.Info().Int32("nReq", i).Msg("Finished submitting requests.")
-		atomic.StoreInt32(&c.stop, 1)
+		atomic.StoreInt32(&c.stop, 1) // A non-zero value of the stop variable halts the request submissions.
 
-		// ===== DRAIN FIX (MINIMAL) =====
-		// Instead of waiting forever for submittedTo to become empty, wait up to drain time.
-		// This keeps gRPC Recv handlers alive so late replies can arrive, preventing "transport is closing".
-		drain := clientDrainTime()
-		if drain > 0 {
-			deadline := time.Now().Add(drain)
-			c.log.Info().Dur("drain", drain).Msg("Draining responses before closing connections.")
-			for {
-				c.Lock()
-				pending := len(c.submittedTo)
-				c.Unlock()
+		// ===== PAPER-LIKE DRAIN =====
+		// Keep connections open for a bounded time after stopping submissions to drain responses.
+		// This reduces "transport is closing" errors during teardown under load.
+		drainMs := config.Config.ClientDrainTime
+		if drainMs < 0 {
+			drainMs = 0
+		}
+		if drainMs > 0 {
+			c.log.Info().Int("clientDrainTimeMs", drainMs).Msg("Draining client responses before shutdown.")
+		}
+		deadline := time.Now().Add(time.Duration(drainMs) * time.Millisecond)
 
-				if pending == 0 {
-					break
-				}
-				if time.Now().After(deadline) {
-					c.log.Warn().Int("pending", pending).Msg("Drain timeout reached; closing connections with pending requests.")
-					break
-				}
-				time.Sleep(200 * time.Millisecond)
-			}
-		} else {
-			// Old behavior: wait until everything is done (can hang forever if peers stop early).
+		for {
 			c.Lock()
-			for len(c.submittedTo) > 0 {
-				c.Unlock()
-				time.Sleep(time.Second)
-				c.Lock()
-			}
+			pending := len(c.submittedTo)
 			c.Unlock()
-		}
 
-		// Close request connections (triggers Recv() to end; handlers will exit and WG will complete).
-		for peerID, conn := range reqConns {
-			if err := conn.Close(); err != nil {
-				c.log.Error().Err(err).Int32("ordererID", peerID).Msg("Failed to close client request connection.")
+			if pending == 0 {
+				break
 			}
+			if drainMs == 0 || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
-		responseHandlerWG.Wait()
 	}
 
+	// Close request connections (ONLY here, after submit loop/drain is done)
 	for _, ch := range c.reqSinks {
 		close(ch)
 	}
 
+	// Close bucket assignment connections
 	for peerID, cl := range c.bucketClients {
 		if err := cl.CloseSend(); err != nil {
 			logger.Error().Err(err).Int32("peerId", peerID).Msg("Falied to close bucket assignment connection.")
 		}
 	}
 
+	// Close gRPC connections (after draining and after senders closed their streams)
+	for peerID, conn := range reqConns {
+		if err := conn.Close(); err != nil {
+			c.log.Error().Err(err).Int32("ordererID", peerID).Msg("Failed to close client request connection.")
+		}
+	}
+
+	// Stop response handlers and wait for them (if any were started).
+	if responseHandlerWG != nil {
+		responseHandlerWG.Wait()
+	}
+
+	// Close log file.
 	c.logFile.Close()
 }
 
+// Starts all request-sending threads and saves their corresponding input channels in c.reqSinks.
 func (c *client) startRequestSenders() {
 	c.reqSinks = make(map[int32]chan *pb.ClientRequest, len(c.reqClients))
 	for peerID, reqClient := range c.reqClients {
@@ -313,13 +374,18 @@ func (c *client) startRequestSenders() {
 	}
 }
 
+// Returns a channel to be used to send requests to the peer represented by by clientStub.
+// Starts a separate thread that reads requests from the channel and sends them over the network.
+// This is mostly for synchronizing access to the clientStub's Send() function.
+// Closing the channel will stop the sender and close the send part of the connection.
 func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestClient) chan *pb.ClientRequest {
 	ch := make(chan *pb.ClientRequest, c.sendBufferSize)
 
 	go func() {
+		// Send requests as long as there are any.
 		for req := range ch {
 			c.Lock()
-			c.sentTimestamps[req.RequestId.ClientSn] = time.Now().UnixNano() / 1000
+			c.sentTimestamps[req.RequestId.ClientSn] = time.Now().UnixNano() / 1000 // In us
 			c.Unlock()
 			if err := clientStub.Send(req); err != nil {
 				c.log.Error().Err(err).
@@ -329,6 +395,7 @@ func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestCl
 			}
 		}
 
+		// Close connection when channel is closed.
 		if err := clientStub.CloseSend(); err != nil {
 			c.log.Error().Err(err).
 				Int32("ordererId", ordererID).
@@ -339,7 +406,11 @@ func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestCl
 	return ch
 }
 
+// Submits a single client request with sequence number seqNr.
+// Blocks until the request fits in the client watermark window.
 func (c *client) submitRequest(seqNr int32) {
+	// ===== MINIMAL SAFETY FIX =====
+	// If stopping, do not enqueue / send anything anymore.
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
 	}
@@ -351,22 +422,30 @@ func (c *client) submitRequest(seqNr int32) {
 		req = c.createRequest(seqNr)
 	}
 
+	// For request creation, the client need not be locked.
 	c.Lock()
-	c.submitTimestamps[seqNr] = time.Now().UnixNano() / 1000
+
+	c.submitTimestamps[seqNr] = time.Now().UnixNano() / 1000 // In us
+
+	// Write request to the watermark window channel.
 	c.Unlock()
 
+	// If stop flips while we were unlocked, abort before blocking/enqueueing.
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
 	}
 
 	c.watermarkWindow <- req
 
+	// If stop flips right after enqueue, we still keep correctness (watermark will drain on responses),
+	// but we avoid sending to reqSinks below.
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
 	}
 
 	c.Lock()
 
+	// Find out to which orderers to send the request.
 	var destIDs []int32
 	if c.currentBucketAssignment != nil {
 		destIDs = c.guessTargetOrderers(req)
@@ -374,6 +453,7 @@ func (c *client) submitRequest(seqNr int32) {
 		destIDs = membership.AllNodeIDs()
 	}
 
+	// Initialize request-related data structures.
 	c.requests[seqNr] = req
 	c.responses[seqNr] = make(map[int32]bool)
 	c.finished[seqNr] = false
@@ -385,7 +465,9 @@ func (c *client) submitRequest(seqNr int32) {
 
 	c.trace.Event(tracing.REQ_SEND, int64(seqNr), 0)
 
+	// Send message to all orderers.
 	for _, ordererID := range destIDs {
+		// Respect stop mid-loop (prevents send on closed channel during shutdown).
 		if atomic.LoadInt32(&c.stop) != 0 {
 			return
 		}
@@ -399,6 +481,9 @@ func (c *client) submitRequest(seqNr int32) {
 	c.log.Debug().Int32("clSeqNr", req.RequestId.ClientSn).Msg("Submitted request.")
 }
 
+// Starts response handler threads, one per orderer.
+// Each response handler thread receives and processes response messages from the corresponding orderer.
+// Returns a wait group waiting for all the handlers to fihish.
 func (c *client) startResponseHandlers() *sync.WaitGroup {
 	wg := sync.WaitGroup{}
 	wg.Add(len(c.reqClients))
@@ -410,6 +495,7 @@ func (c *client) startResponseHandlers() *sync.WaitGroup {
 	return &wg
 }
 
+// Handles all responses coming from one orderer.
 func (c *client) handleResponses(clientStub pb.Messenger_RequestClient, peerID int32, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -425,6 +511,7 @@ func (c *client) handleResponses(clientStub pb.Messenger_RequestClient, peerID i
 	c.log.Info().Err(err).Int32("peerId", peerID).Msg("Response handler done.")
 }
 
+// Registers response to request with clientSN from replica peerID.
 func (c *client) registerResponse(clientSN int32, peerID int32) {
 	c.Lock()
 	defer c.Unlock()
@@ -486,10 +573,12 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 	c.Lock()
 	defer c.Unlock()
 
+	// Ignore old late messages
 	if assignment.Epoch <= c.epoch {
 		return
 	}
 
+	// Register received assignment message
 	strKey := bucketAssignmentToString(assignment)
 	c.bucketAssignments[strKey] = assignment
 	if msgCounts, ok := c.bucketAssignmentCounts[assignment.Epoch]; ok {
@@ -499,6 +588,7 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 		c.bucketAssignmentCounts[assignment.Epoch][strKey] = 1
 	}
 
+	// Update bucket assignment if enough messages have been received.
 	if newAssignment := c.newBucketsReady(assignment.Epoch); newAssignment != nil {
 		c.log.Info().Int32("epoch", assignment.Epoch).Msg("Updating bucket assignment.")
 		c.currentBucketAssignment = make(map[int]int32)
@@ -514,6 +604,8 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 		}
 		c.epoch = newAssignment.Epoch
 
+		// ===== MINIMAL SAFETY FIX =====
+		// Do not spawn resubmission while client is stopping/tearing down.
 		if atomic.LoadInt32(&c.stop) != 0 {
 			return
 		}
@@ -522,6 +614,8 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 }
 
 func (c *client) resubmitPendingRequests() {
+	// ===== MINIMAL SAFETY FIX =====
+	// If the client is stopping, do not attempt to send on reqSinks (may be closed during teardown).
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
 	}
@@ -529,6 +623,7 @@ func (c *client) resubmitPendingRequests() {
 	c.Lock()
 	defer c.Unlock()
 
+	// Re-check under lock to reduce the shutdown race window.
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
 	}
@@ -561,6 +656,8 @@ func (c *client) resubmitPendingRequests() {
 		Msg("Resubmitted Requests.")
 }
 
+// Returns a bucket assignment for an epoch if it is ready, nil otherwise.
+// The client must be locked when calling this function.
 func (c *client) newBucketsReady(epoch int32) *pb.BucketAssignment {
 	assignments := c.bucketAssignmentCounts[epoch]
 	if assignments == nil {
@@ -575,6 +672,7 @@ func (c *client) newBucketsReady(epoch int32) *pb.BucketAssignment {
 	return nil
 }
 
+// Client must be locked when calling this function.
 func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 	guess := make([]int32, reqFanout, reqFanout)
 	b := request.GetBucketNr(req.RequestId.ClientId, req.RequestId.ClientSn)
@@ -590,6 +688,7 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 	return guess
 }
 
+// Creates a string representation of a bucket assignment for the purpose of using it as a map key.
 func bucketAssignmentToString(assignment *pb.BucketAssignment) string {
 	leaderIDs := make([]int, 0)
 	for leaderID := range assignment.Buckets {

@@ -92,12 +92,13 @@ type configuration struct {
 	// Tracing
 	EventBufferSize     int `yaml:"EventBufferSize"`     // Capacity of the tracing event buffer, in number of events.
 	TraceSampling       int `yaml:"TraceSampling"`       // Only trace one out of TraceSampling events.
-	ClientTraceSampling int `yaml:"ClientTraceSampling"` // Only trace one out of TraceSampling events.
+	ClientTraceSampling int `yaml:"ClientTraceSampling"` // Only trace one out of ClientTraceSampling events.
 
 	// Client configuration
 	ClientsPerProcess    int    `yaml:"ClientsPerProcess"`    // Number of concurrent clients in the orderingclient process (running as separate threads).
 	RequestsPerClient    int    `yaml:"RequestsPerClient"`    // Number of requests each client submits.
 	ClientRunTime        int    `yaml:"ClientRunTime"`        // Timeout for client to submit all its requests, in milliseconds. Set to 0 for no timeout.
+	ClientDrainTime     int    `yaml:"ClientDrainTime"`     // Time (ms) to keep connections open after stopping submissions, to drain responses.
 	RequestRate          int    `yaml:"RequestRate"`          // Max request rate per client, in requests per second.
 	HardRequestRateLimit bool   `yaml:"HardRequestRateLimit"` // Never exceed rate limit or temporarily increase rate to catch up.
 	RequestPayloadSize   int    `yaml:"RequestPayloadSize"`   // Size of the (randomly generated) request payload in bytes.
@@ -165,6 +166,7 @@ func LoadFile(configFileName string) {
 	logger.Debug().Int("ClientsPerProcess", Config.ClientsPerProcess).Msg("Config")
 	logger.Debug().Int("RequestsPerClient", Config.RequestsPerClient).Msg("Config")
 	logger.Debug().Int("ClientRunTime", Config.ClientRunTime).Msg("Config")
+	logger.Debug().Int("ClientDrainTime", Config.ClientDrainTime).Msg("Config")
 	logger.Debug().Int("RequestRate", Config.RequestRate).Msg("Config")
 	logger.Debug().Bool("HardRequestRateLimit", Config.HardRequestRateLimit).Msg("Config")
 	logger.Debug().Int("RequestPayloadSize", Config.RequestPayloadSize).Msg("Config")
