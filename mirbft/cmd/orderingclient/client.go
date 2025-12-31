@@ -175,11 +175,7 @@ func newClient(dServAddr string, numRequests int) *client {
 			Str("fileName", logFileName).
 			Msg("Could not create log file.")
 	}
-
-	// ===== MINIMAL FIX (CPU) =====
-	// Avoid zerolog.ConsoleWriter (it decodes JSON + formats console and can dominate CPU under log spam).
-	// Keep logs as JSON lines in the file (still readable + much cheaper).
-	cl.log = zerolog.New(logFile).With().Timestamp().Logger()
+	cl.log = logger.Output(zerolog.ConsoleWriter{Out: logFile, NoColor: true, TimeFormat: "15:04:05.000"})
 	cl.logFile = logFile // Kept around only for closing.
 
 	// Load signing key
@@ -322,7 +318,6 @@ func (c *client) Run(wg *sync.WaitGroup) {
 				}
 			}
 
-			// ===== MINIMAL SAFETY FIX =====
 			// Important: re-check stop after sleeping / rate-limit logic.
 			// This prevents one more submit after ctx/timeouts flip stop=1.
 			if atomic.LoadInt32(&c.stop) != 0 {
@@ -347,10 +342,6 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		}
 		deadline := time.Now().Add(time.Duration(drainMs) * time.Millisecond)
 
-		// ===== MINIMAL FIX (NO SPIN/NO LOG SPAM) =====
-		// If we exit the drain with pending requests, log it ONCE.
-		loggedPendingExit := false
-
 		for {
 			c.Lock()
 			pending := len(c.submittedTo)
@@ -360,10 +351,6 @@ func (c *client) Run(wg *sync.WaitGroup) {
 				break
 			}
 			if drainMs == 0 || time.Now().After(deadline) {
-				if !loggedPendingExit {
-					c.log.Warn().Int("pending", pending).Msg("Exiting with pending in-flight requests (drain deadline reached).")
-					loggedPendingExit = true
-				}
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -441,7 +428,6 @@ func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestCl
 // Submits a single client request with sequence number seqNr.
 // Blocks until the request fits in the client watermark window.
 func (c *client) submitRequest(seqNr int32) {
-	// ===== MINIMAL SAFETY FIX =====
 	// If stopping, do not enqueue / send anything anymore.
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
@@ -636,7 +622,6 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 		}
 		c.epoch = newAssignment.Epoch
 
-		// ===== MINIMAL SAFETY FIX =====
 		// Do not spawn resubmission while client is stopping/tearing down.
 		if atomic.LoadInt32(&c.stop) != 0 {
 			return
@@ -646,7 +631,6 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 }
 
 func (c *client) resubmitPendingRequests() {
-	// ===== MINIMAL SAFETY FIX =====
 	// If the client is stopping, do not attempt to send on reqSinks (may be closed during teardown).
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
