@@ -582,7 +582,6 @@ fi
 deployment_file="$exp_data_dir/$dpl_filename"
 csv_file="$exp_data_dir/$csv_filename"
 
-
 # Obtain the ID of the first experiment to generate, if any was given.
 # Otherwise, start at zero.
 if [ $# -gt 0 ]; then
@@ -594,7 +593,6 @@ else
   exp_id=0
 fi
 
-
 # Check if some configuration already exists in the target directory.
 # Fail if it does, to avoid accidental overwriting.
 if [ -d "$exp_data_dir/config" ]; then
@@ -603,7 +601,6 @@ if [ -d "$exp_data_dir/config" ]; then
 else
   mkdir "$exp_data_dir/config"
 fi
-
 
 # Generate header of the deployment file.
 {
@@ -641,7 +638,6 @@ fi
 
   echo ""
 } > $deployment_file
-
 
 # Generate CSV file header.
 echo "exp,peers,nlr,failures,crash-timing,vctimeout,datacenters,bandwidth,num-connections,orderer,clients,instances,client-threads,segment,leader-policy,epoch,batchsize,batchtimeout,batchrate,msgbatchperiod,buckets,leader-buckets,authentication,verify-early,throughput-cap,target-throughput,rate-per-client,hard-rate-limit,requests,cl-watermarks,batch-verifier,request-handlers,req-buffer-size" > $csv_file
