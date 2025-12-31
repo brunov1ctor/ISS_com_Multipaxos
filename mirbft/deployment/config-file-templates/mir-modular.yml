@@ -87,6 +87,7 @@ ClientTraceSampling: 10 # Only trace one out of ClientTraceSampling events at th
 ClientsPerProcess:    CLIENTS       # Number of concurrent clients on each client machine (running as threads in a single process).
 RequestsPerClient:    REQUESTS      # Number of requests each client submits.
 ClientRunTime:        DURATION      # Timeout for client to submit all its requests, in milliseconds. Set to 0 for no timeout.
+ClientDrainTime:     DRAINTIME     # Time (ms) to keep connections open after stopping submissions, to drain responses.
 RequestRate:          REQUESTRATE   # Max request rate per client, in requests per second. Set to -1 for no limit.
 HardRequestRateLimit: HARDRATELIMIT # If true, the client always waits for at least 1/RequestRateLimit between any two requests.
                                     # If false, the client treats RequestRateLimit as a limit on the average request rate,
@@ -120,3 +121,4 @@ BatchVerifier: BATCHVERIFIER # Determines how the requests in a batch are verifi
                              #                  external:
                              #                  A separate set of verifier threads (RequestHandlerThreads of them)
                              #                  verifies the requests. Communication is through buffered channels.
+
