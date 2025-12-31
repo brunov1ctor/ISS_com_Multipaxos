@@ -236,8 +236,8 @@ func (c *client) Run(wg *sync.WaitGroup) {
 	var ordererIDs []int32
 	if config.Config.LeaderPolicy == "SimulatedRandomFailures" {
 		ordererIDs = manager.NewLeaderPolicy(config.Config.LeaderPolicy).GetLeaders(0)
-	//} else if config.Config.Failures > 0 && (config.Config.CrashTiming == "EpochStart" || config.Config.CrashTiming == "EpochEnd") {
-	//	ordererIDs = membership.CorrectPeers()
+		//} else if config.Config.Failures > 0 && (config.Config.CrashTiming == "EpochStart" || config.Config.CrashTiming == "EpochEnd") {
+		//	ordererIDs = membership.CorrectPeers()
 	} else {
 		ordererIDs = membership.AllNodeIDs()
 	}
@@ -588,13 +588,30 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 			}
 		}
 		c.epoch = newAssignment.Epoch
+
+		// ===== MINIMAL SAFETY FIX =====
+		// Do not spawn resubmission while client is stopping/tearing down.
+		if atomic.LoadInt32(&c.stop) != 0 {
+			return
+		}
 		go c.resubmitPendingRequests()
 	}
 }
 
 func (c *client) resubmitPendingRequests() {
+	// ===== MINIMAL SAFETY FIX =====
+	// If the client is stopping, do not attempt to send on reqSinks (may be closed during teardown).
+	if atomic.LoadInt32(&c.stop) != 0 {
+		return
+	}
+
 	c.Lock()
 	defer c.Unlock()
+
+	// Re-check under lock to reduce the shutdown race window (still "minimal" and harmless).
+	if atomic.LoadInt32(&c.stop) != 0 {
+		return
+	}
 
 	resubmitted := 0
 	for seqNr, submitted := range c.submittedTo {
@@ -612,10 +629,14 @@ func (c *client) resubmitPendingRequests() {
 			for _, destID := range destIDs {
 				if !submitted[destID] {
 
+					// Optional: still respect stop mid-loop (keeps it safe during shutdown).
+					if atomic.LoadInt32(&c.stop) != 0 {
+						return
+					}
+
 					resubmitted++
 					c.reqSinks[destID] <- req
 					submitted[destID] = true
-
 				}
 			}
 		}
@@ -624,7 +645,6 @@ func (c *client) resubmitPendingRequests() {
 		Int("n", resubmitted).
 		Int32("epoch", c.epoch).
 		Msg("Resubmitted Requests.")
-
 }
 
 // Returns a bucket assignment for an epoch if it is ready, nil otherwise.
@@ -668,7 +688,7 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 func bucketAssignmentToString(assignment *pb.BucketAssignment) string {
 	// Get leader IDs (map keys) and sort them (for a deterministic representation)
 	leaderIDs := make([]int, 0)
-	for leaderID, _ := range assignment.Buckets {
+	for leaderID := range assignment.Buckets {
 		leaderIDs = append(leaderIDs, int(leaderID))
 	}
 	sort.Ints(leaderIDs)
@@ -685,9 +705,10 @@ func bucketAssignmentToString(assignment *pb.BucketAssignment) string {
 
 		// Append all bucket IDs to the string
 		for _, b := range buckets {
-			result = fmt.Sprintf("%s %d", b)
+			result = fmt.Sprintf("%s %d", result, b)
 		}
 	}
 
 	return result
 }
+
