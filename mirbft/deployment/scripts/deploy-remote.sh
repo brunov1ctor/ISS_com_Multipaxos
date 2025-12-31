@@ -170,7 +170,7 @@ log_i "Reset remoto: limpando ${remote_work_dir} e recriando layout canônico."
 for ip in $(awk '{print $2}' "$instance_info_file"); do
   ssh $ssh_options "${remote_user}@${ip}" "bash -s" >/dev/null 2>&1 <<EOF_RESET || true
 tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/null || true
-kill killall -9 discoverymaster discoveryslave orderingpeer orderingclient scp rsync 2>/dev/null || true
+killall -9 discoverymaster discoveryslave orderingpeer orderingclient 2>/dev/null || true
 rm -rf '${remote_work_dir}'
 
 # pesado: /tmp (logs, status, experiment-output)
