@@ -27,6 +27,26 @@ const (
 	reqFanout = 3
 )
 
+// ===== MINIMAL SAFETY FIX =====
+// safeSendReq sends to a request channel and prevents panics if the channel is closed during teardown.
+// Returns false if the send failed due to a closed channel (or other panic).
+func safeSendReq(ch chan *pb.ClientRequest, req *pb.ClientRequest) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			ok = false
+		}
+	}()
+	ch <- req
+	return true
+}
+
+// ===== MINIMAL SAFETY FIX =====
+// safeCloseReqChan closes a request channel and prevents panics on double close.
+func safeCloseReqChan(ch chan *pb.ClientRequest) {
+	defer func() { _ = recover() }()
+	close(ch)
+}
+
 type client struct {
 	sync.Mutex
 
@@ -340,7 +360,7 @@ func (c *client) Run(wg *sync.WaitGroup) {
 
 	// Close request connections (ONLY here, after submit loop/drain is done)
 	for _, ch := range c.reqSinks {
-		close(ch)
+		safeCloseReqChan(ch)
 	}
 
 	// Close bucket assignment connections
@@ -472,7 +492,7 @@ func (c *client) submitRequest(seqNr int32) {
 			return
 		}
 		if c.reqSinks[ordererID] != nil {
-			c.reqSinks[ordererID] <- req
+			_ = safeSendReq(c.reqSinks[ordererID], req)
 		} else {
 			c.log.Warn().Int32("ordererId", ordererID).Msg("Not sending request to orderer. No connection established.")
 		}
@@ -644,7 +664,9 @@ func (c *client) resubmitPendingRequests() {
 						return
 					}
 					resubmitted++
-					c.reqSinks[destID] <- req
+					if c.reqSinks[destID] != nil {
+						_ = safeSendReq(c.reqSinks[destID], req)
+					}
 					submitted[destID] = true
 				}
 			}
