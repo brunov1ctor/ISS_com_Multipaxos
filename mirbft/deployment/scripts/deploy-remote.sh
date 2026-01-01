@@ -268,9 +268,23 @@ log_i "fetch-results.sh OK. Log: $exp_data_dir/$local_result_fetching_log"
 
 log_i "Publicando (cópia) resultados em: ${published_root}"
 mkdir -p "${published_root}"
+
+# -----------------------------------------------------------------------------
+# MÍNIMA CORREÇÃO: garantir que .trc + prof* sejam publicados (para auto-análise)
+# - Mantém rsync rápido e preserva estrutura.
+# - Copia logs/configs + traces + profiles.
+# -----------------------------------------------------------------------------
 rsync -rtz --delete \
+  --include '*/' \
+  --include '*.log' \
+  --include '*.yml' \
+  --include '*.yaml' \
+  --include '*.trc' \
+  --include 'prof*' \
+  --exclude '*' \
   "${exp_data_dir}/experiment-output/" \
   "${published_root}/"
+
 log_i "Publicação OK: ${published_root}"
 
 # -----------------------------------------------------------------------------
