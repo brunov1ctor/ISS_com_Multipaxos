@@ -122,7 +122,9 @@ log_i "Gerando master-commands.cmd a partir do template..."
 envsubst '$ssh_key_file $own_public_ip $master_port $status_file $ready_file' \
   < "$template_path" > "$exp_data_dir/$local_master_command_file"
 
-# (REMOVIDO) write-file $status_file DONE
+# RESTAURADO (igual ao original): marca finalização do master-commands
+echo -e "\nwrite-file $status_file DONE" >> "$exp_data_dir/$local_master_command_file"
+
 log_i "master-commands.cmd pronto: $exp_data_dir/$local_master_command_file"
 
 log_i "Validando estrutura de master-commands.cmd (linhas exec-start)..."
@@ -224,7 +226,7 @@ status_ok=false
 for ((i=0; i<master_wait_secs; i++)); do
   s="$(rsh "$master_ip" "test -f '${remote_status_file}' && tail -n 1 '${remote_status_file}' | tr -d '\r' || true" 2>/dev/null || true)"
   case "$s" in
-    ANALYZED)
+    ANALYZED|DONE)
       status_ok=true
       break
       ;;
