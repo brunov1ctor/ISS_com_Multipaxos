@@ -40,8 +40,17 @@ ensure_local_binaries() {
   # Raiz do repositório (deployment/ fica dentro do repo)
   local repo_root="$deploy_dir/.."
 
+  # tenta achar Go no caminho padrão do Emulab
+  if ! command -v go >/dev/null 2>&1; then
+    if [ -x /usr/local/go/bin/go ]; then
+      export GOROOT=/usr/local/go
+      export PATH="$PATH:$GOROOT/bin"
+    fi
+  fi
+
   if ! command -v go >/dev/null 2>&1; then
     log_err "go não encontrado no PATH."
+    log_err "Dica: instale Go ou exporte PATH/GOROOT antes de rodar."
     return 1
   fi
 
