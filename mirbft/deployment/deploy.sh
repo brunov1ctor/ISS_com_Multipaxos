@@ -61,24 +61,49 @@ ensure_local_binaries() {
     local_bin_dir="$HOME/go/bin"
   fi
 
+  # =========================================================
+  # sempre compila os binários a partir do repo.
+  # (compila cada cmd separadamente; pronto para build tags)
+  # =========================================================
+  mkdir -p "$local_bin_dir"
+
+  log_info "Build forçado: recompilando binários em $repo_root"
+  log_info "Destino dos binários: $local_bin_dir"
+
+  # Descoberta (se você aplicar build tags no Go, ajuste aqui também)
+  # Ex.: go install -tags discoverymaster ./cmd/discoverymaster
+  ( cd "$repo_root" && GOBIN="$local_bin_dir" go install -v -tags discoverymaster ./cmd/discoverymaster ) || {
+    log_err "Falhou compilando ./cmd/discoverymaster"
+    return 1
+  }
+
+  ( cd "$repo_root" && GOBIN="$local_bin_dir" go install -v -tags discoveryslave ./cmd/discoveryslave ) || {
+    log_err "Falhou compilando ./cmd/discoveryslave"
+    return 1
+  }
+
+  # Orderer peer/client (normalmente sem tags)
+  ( cd "$repo_root" && GOBIN="$local_bin_dir" go install -v ./cmd/orderingpeer ) || {
+    log_err "Falhou compilando ./cmd/orderingpeer"
+    return 1
+  }
+
+  ( cd "$repo_root" && GOBIN="$local_bin_dir" go install -v ./cmd/orderingclient ) || {
+    log_err "Falhou compilando ./cmd/orderingclient"
+    return 1
+  }
+
+  # Valida que todos existem e são executáveis
   local req_bins="discoverymaster discoveryslave orderingpeer orderingclient"
   for b in $req_bins; do
     if [ ! -x "$local_bin_dir/$b" ]; then
-      log_warn "Binário faltando: $local_bin_dir/$b -> tentando compilar automaticamente..."
-      ( cd "$repo_root" && go install "./cmd/$b" ) || {
-        log_err "Falhou compilando ./cmd/$b"
-        log_err "Tente manualmente: (cd $repo_root && go install ./cmd/$b)"
-        return 1
-      }
-      if [ ! -x "$local_bin_dir/$b" ]; then
-        log_err "Compilei, mas o binário ainda não apareceu em $local_bin_dir/$b"
-        log_err "Verifique go env GOBIN/GOPATH e permissões."
-        return 1
-      fi
+      log_err "Binário não encontrado/executável após build: $local_bin_dir/$b"
+      log_err "Verifique go env GOBIN/GOPATH e permissões."
+      return 1
     fi
   done
 
-  log_info "Todos os binários necessários já existem em $local_bin_dir."
+  log_info "OK: binários compilados com sucesso em $local_bin_dir."
   return 0
 }
 
@@ -220,7 +245,6 @@ if $new_experiment; then
   log_info "Config generator: $config_generator_script"
   log_info "exp_data_dir    : $exp_data_dir"
 
-  # MÍNIMA ALTERAÇÃO (a correção):
   # evita que o "set -u" (nounset) deste deploy.sh vaze pro generate-config.sh via SHELLOPTS
   env -u SHELLOPTS bash "$config_generator_script" "$exp_data_dir" | tee "$exp_data_dir/logs/config-generator.log"
 
