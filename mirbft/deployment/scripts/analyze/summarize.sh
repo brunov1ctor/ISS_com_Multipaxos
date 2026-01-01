@@ -32,6 +32,9 @@ header=true
 # For each line in the parameters file.
 while read -r line; do
 
+  # (mínimo) pula linha vazia
+  [ -n "$line" ] || continue
+
   # Parse out the ID of the experiment.
   exp_id=$(echo $line | awk -F ',' '{print $1}')
 
@@ -41,9 +44,17 @@ while read -r line; do
     # First line is special, don't append a value, but the field name.
     if $header; then
       line="$line,$field"
-    # For all other lines, append the field value value.
+    # For all other lines, append the field value (se não existir, vazio).
     else
-      line="$line,$(cat $root_dir/$exp_id/$field.val)"
+      vfile="$root_dir/$exp_id/$field.val"
+      if [ -f "$vfile" ]; then
+        # remove \r e \n para não quebrar CSV
+        val="$(tr -d '\r\n' < "$vfile")"
+        line="$line,$val"
+      else
+        # arquivo faltando => campo vazio (ou troque por NA se preferir)
+        line="$line,"
+      fi
     fi
   done
 
@@ -58,3 +69,4 @@ while read -r line; do
   header=false
 
 done < "$params_file"
+
