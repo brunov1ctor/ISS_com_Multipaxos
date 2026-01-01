@@ -217,14 +217,19 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 log_i "Todos os slaves disparados."
 
 # -----------------------------------------------------------------------------
-# MINIMA ALTERAÇÃO: aguardar status avançar antes do fetch
+# MÍNIMA CORREÇÃO: aguardar o ÚLTIMO experimento (0003 por padrão), não só "0000".
+# - Antes: qualquer número (ex: "0000") liberava o fetch cedo demais.
+# - Agora: só libera quando status >= expected_last (ou DONE/ANALYZED).
 # -----------------------------------------------------------------------------
 master_wait_secs="${MASTER_WAIT_SECS:-7200}"
-log_i "Aguardando status avançar em ${remote_status_file} (timeout=${master_wait_secs}s)..."
+expected_last="${EXPECTED_LAST_EXPERIMENT:-0003}"
+
+log_i "Aguardando status avançar em ${remote_status_file} até >= ${expected_last} (timeout=${master_wait_secs}s)..."
 
 status_ok=false
 for ((i=0; i<master_wait_secs; i++)); do
   s="$(rsh "$master_ip" "test -f '${remote_status_file}' && tail -n 1 '${remote_status_file}' | tr -d '\r' || true" 2>/dev/null || true)"
+
   case "$s" in
     ANALYZED|DONE)
       status_ok=true
@@ -233,20 +238,25 @@ for ((i=0; i<master_wait_secs; i++)); do
     ''|RUNNING|READY|0)
       ;;
     *)
-      # Original: expID/progresso numérico
+      # Progresso numérico (ex: 0000, 0001, 0002, 0003)
       if echo "$s" | grep -Eq '^[0-9]+$'; then
-        status_ok=true
-        break
+        cur=$((10#$s))
+        last=$((10#$expected_last))
+        if (( cur >= last )); then
+          status_ok=true
+          break
+        fi
       fi
       ;;
   esac
+
   sleep 1
 done
 
 if $status_ok; then
   log_i "Status avançou: $(rsh "$master_ip" "tail -n 1 '${remote_status_file}' | tr -d '\r' || true" 2>/dev/null || echo "?")"
 else
-  log_w "Timeout esperando status avançar. Vou tentar fetch mesmo assim."
+  log_w "Timeout esperando status >= ${expected_last}. Vou tentar fetch mesmo assim."
 fi
 
 log_i "Coletando resultados para exp_data_dir=${exp_data_dir} ..."
@@ -268,23 +278,9 @@ log_i "fetch-results.sh OK. Log: $exp_data_dir/$local_result_fetching_log"
 
 log_i "Publicando (cópia) resultados em: ${published_root}"
 mkdir -p "${published_root}"
-
-# -----------------------------------------------------------------------------
-# MÍNIMA CORREÇÃO: garantir que .trc + prof* sejam publicados (para auto-análise)
-# - Mantém rsync rápido e preserva estrutura.
-# - Copia logs/configs + traces + profiles.
-# -----------------------------------------------------------------------------
 rsync -rtz --delete \
-  --include '*/' \
-  --include '*.log' \
-  --include '*.yml' \
-  --include '*.yaml' \
-  --include '*.trc' \
-  --include 'prof*' \
-  --exclude '*' \
   "${exp_data_dir}/experiment-output/" \
   "${published_root}/"
-
 log_i "Publicação OK: ${published_root}"
 
 # -----------------------------------------------------------------------------
