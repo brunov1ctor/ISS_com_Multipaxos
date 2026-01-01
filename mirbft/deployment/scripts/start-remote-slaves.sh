@@ -15,6 +15,12 @@
 #   - NÃO copiar discoverymaster para os slaves (evita overwrite no NFS /users/$USER/go/bin)
 #   - NÃO exigir discoverymaster no remote_check_assets
 #
+# FIX (mínima alteração - 2026-01-01):
+#   - Evitar sobrescrita concorrente de binários quando remote_bin_dir for
+#     /users/<user>/go/bin (potencialmente NFS compartilhado).
+#     Isso elimina SIGBUS do discoveryslave causado por binário sendo sobrescrito
+#     enquanto é executado.
+#   - Para forçar cópia mesmo em /users/<user>/go/bin, use: FORCE_COPY_BINS=true
 
 set -euo pipefail
 
@@ -291,10 +297,33 @@ copy_required_assets() {
 
   remote_kill_bins "${ip}"
 
-  # ALTERAÇÃO MÍNIMA: NÃO copiar discoverymaster para os slaves
-  copy_bin_atomic "${ip}" discoveryslave
-  copy_bin_atomic "${ip}" orderingpeer
-  copy_bin_atomic "${ip}" orderingclient
+  # -------------------------------------------------------------------------
+  # FIX (mínima alteração): evitar sobrescrita concorrente em FS compartilhado
+  # -------------------------------------------------------------------------
+  # Em alguns testbeds (ex.: Emulab), /users/<user>/go/bin pode ser NFS
+  # compartilhado entre todos os nodes. Copiar binários "por node" para esse
+  # path sobrescreve o mesmo arquivo enquanto outros processos o executam,
+  # podendo causar SIGBUS (mmap de binário truncado/alterado em runtime).
+  #
+  # Solução: se remote_bin_dir apontar para o caminho padrão em /users/.../go/bin,
+  # assumimos que os binários já estão instalados ali e NÃO recopiamos.
+  # Para forçar cópia mesmo assim, defina FORCE_COPY_BINS=true.
+
+  force_copy_bins="${FORCE_COPY_BINS:-false}"
+  shared_go_bin=false
+  if [[ "${remote_bin_dir}" == "/users/${remote_user}/go/bin" ]]; then
+    shared_go_bin=true
+  fi
+
+  if [[ "${force_copy_bins}" == "true" || "${shared_go_bin}" == "false" ]]; then
+    # ALTERAÇÃO MÍNIMA: NÃO copiar discoverymaster para os slaves
+    copy_bin_atomic "${ip}" discoveryslave
+    copy_bin_atomic "${ip}" orderingpeer
+    copy_bin_atomic "${ip}" orderingclient
+  else
+    info "[copy] ${ip}: pulando cópia de binários em ${remote_bin_dir} (possível FS compartilhado)."
+  fi
+
   copy_tls_assets "${ip}"
   copy_experiment_configs "${ip}"
 
