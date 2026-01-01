@@ -62,7 +62,12 @@ type client struct {
 	// Set to a non-zero value to stop submitting requests.
 	// A boolean type of this variable would better reflect its semantics,
 	// but we use int32, as bool is not supported by the atomic package used to read and update the value.
-	stop int32
+	stop int32 // stop submitting NEW requests
+
+	// ===== MINIMAL FIX =====
+	// closing gates teardown actions (closing channels, preventing resubmits/sends during shutdown).
+	// IMPORTANT: draining happens with stop=1 but closing=0, so resubmissions can still happen.
+	closing int32
 
 	// All requests the client will submit (indexed by client sequence number).
 	// All clients running on the same machine first create (ans sigh) all requests
@@ -285,8 +290,8 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		if config.Config.ClientRunTime != 0 {
 			c.log.Info().Int("clientRunTime", config.Config.ClientRunTime).Msg("Setting up client timeout.")
 			time.AfterFunc(time.Duration(config.Config.ClientRunTime)*time.Millisecond, func() {
-				atomic.StoreInt32(&c.stop, 1) // A non-zero value of the stop variable halts the request submissions.
-				c.log.Info().Int("clientRunTime", config.Config.ClientRunTime).Msg("Stopping client on timeout.")
+				atomic.StoreInt32(&c.stop, 1) // halt NEW submissions
+				c.log.Info().Int("clientRunTime", config.Config.ClientRunTime).Msg("Stopping client submissions on timeout.")
 			})
 		}
 
@@ -319,7 +324,6 @@ func (c *client) Run(wg *sync.WaitGroup) {
 			}
 
 			// Important: re-check stop after sleeping / rate-limit logic.
-			// This prevents one more submit after ctx/timeouts flip stop=1.
 			if atomic.LoadInt32(&c.stop) != 0 {
 				break
 			}
@@ -328,11 +332,11 @@ func (c *client) Run(wg *sync.WaitGroup) {
 			c.submitRequest(i)
 		}
 		c.log.Info().Int32("nReq", i).Msg("Finished submitting requests.")
-		atomic.StoreInt32(&c.stop, 1) // A non-zero value of the stop variable halts the request submissions.
+		atomic.StoreInt32(&c.stop, 1) // halt NEW submissions
 
-		// ===== PAPER-LIKE DRAIN =====
-		// Keep connections open for a bounded time after stopping submissions to drain responses.
-		// This reduces "transport is closing" errors during teardown under load.
+		// ===== MINIMAL DRAIN FIX =====
+		// During drain we keep the client "alive" and ALLOW resubmissions (closing=0),
+		// so pending requests can still complete.
 		drainMs := config.Config.ClientDrainTime
 		if drainMs < 0 {
 			drainMs = 0
@@ -340,22 +344,27 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		if drainMs > 0 {
 			c.log.Info().Int("clientDrainTimeMs", drainMs).Msg("Draining client responses before shutdown.")
 		}
-		deadline := time.Now().Add(time.Duration(drainMs) * time.Millisecond)
 
+		deadline := time.Now().Add(time.Duration(drainMs) * time.Millisecond)
 		for {
 			c.Lock()
-			pending := len(c.submittedTo)
+			pending := len(c.submittedTo) // unfinished requests
 			c.Unlock()
 
 			if pending == 0 {
+				c.log.Info().Msg("Drain complete (pending=0).")
 				break
 			}
 			if drainMs == 0 || time.Now().After(deadline) {
+				c.log.Warn().Int("pending", pending).Msg("Drain window ended with pending requests.")
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+
+	// ===== BEGIN TEARDOWN =====
+	atomic.StoreInt32(&c.closing, 1)
 
 	// Close request connections (ONLY here, after submit loop/drain is done)
 	for _, ch := range c.reqSinks {
@@ -382,7 +391,7 @@ func (c *client) Run(wg *sync.WaitGroup) {
 	}
 
 	// Close log file.
-	c.logFile.Close()
+	_ = c.logFile.Close()
 }
 
 // Starts all request-sending threads and saves their corresponding input channels in c.reqSinks.
@@ -428,7 +437,7 @@ func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestCl
 // Submits a single client request with sequence number seqNr.
 // Blocks until the request fits in the client watermark window.
 func (c *client) submitRequest(seqNr int32) {
-	// If stopping, do not enqueue / send anything anymore.
+	// If stopping submissions, do not enqueue / send anything anymore.
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
 	}
@@ -442,21 +451,17 @@ func (c *client) submitRequest(seqNr int32) {
 
 	// For request creation, the client need not be locked.
 	c.Lock()
-
 	c.submitTimestamps[seqNr] = time.Now().UnixNano() / 1000 // In us
-
-	// Write request to the watermark window channel.
 	c.Unlock()
 
-	// If stop flips while we were unlocked, abort before blocking/enqueueing.
+	// If stop flips, abort before blocking/enqueueing.
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
 	}
 
 	c.watermarkWindow <- req
 
-	// If stop flips right after enqueue, we still keep correctness (watermark will drain on responses),
-	// but we avoid sending to reqSinks below.
+	// If stop flips right after enqueue, avoid sending further (drain will handle in-flight).
 	if atomic.LoadInt32(&c.stop) != 0 {
 		return
 	}
@@ -485,7 +490,6 @@ func (c *client) submitRequest(seqNr int32) {
 
 	// Send message to all orderers.
 	for _, ordererID := range destIDs {
-		// Respect stop mid-loop (prevents send on closed channel during shutdown).
 		if atomic.LoadInt32(&c.stop) != 0 {
 			return
 		}
@@ -622,8 +626,9 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 		}
 		c.epoch = newAssignment.Epoch
 
-		// Do not spawn resubmission while client is stopping/tearing down.
-		if atomic.LoadInt32(&c.stop) != 0 {
+		// ===== MINIMAL FIX =====
+		// Allow resubmissions during drain (stop=1), only block them during teardown (closing=1).
+		if atomic.LoadInt32(&c.closing) != 0 {
 			return
 		}
 		go c.resubmitPendingRequests()
@@ -631,16 +636,16 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 }
 
 func (c *client) resubmitPendingRequests() {
-	// If the client is stopping, do not attempt to send on reqSinks (may be closed during teardown).
-	if atomic.LoadInt32(&c.stop) != 0 {
+	// ===== MINIMAL FIX =====
+	// Only block resubmissions during teardown (closing), not during drain.
+	if atomic.LoadInt32(&c.closing) != 0 {
 		return
 	}
 
 	c.Lock()
 	defer c.Unlock()
 
-	// Re-check under lock to reduce the shutdown race window.
-	if atomic.LoadInt32(&c.stop) != 0 {
+	if atomic.LoadInt32(&c.closing) != 0 {
 		return
 	}
 
@@ -656,7 +661,7 @@ func (c *client) resubmitPendingRequests() {
 
 			for _, destID := range destIDs {
 				if !submitted[destID] {
-					if atomic.LoadInt32(&c.stop) != 0 {
+					if atomic.LoadInt32(&c.closing) != 0 {
 						return
 					}
 					resubmitted++
