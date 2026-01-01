@@ -16,16 +16,15 @@ package discovery
 
 import (
 	"bufio"
-	"context"
+	"errors"
 	"fmt"
-	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
-	logger "github.com/rs/zerolog/log"
 )
 
 func ParseCommandStr(cmdStr string, tokenChannel chan string) {
@@ -39,441 +38,342 @@ func ParseCommandStr(cmdStr string, tokenChannel chan string) {
 		return
 	}
 
-	// Split cmdStr into tokens (shell-like, supports quoting).
-	tokens, err := splitCommandLine(cmdStr)
-	if err != nil {
-		logger.Error().Err(err).Msgf("Could not parse command line: %s", cmdStr)
+	// Handle "exec-start" and "exec-wait" as special cases
+	// These commands read a string from standard input and store it in the token channel.
+	// The string read can then be referenced in later commands (as a token).
+	// This is useful for synchronizing commands with external events.
+	// For example, the command sequence:
+	//
+	// exec-start
+	// exec-wait
+	// exec-finish
+	//
+	// waits for an external event between exec-start and exec-wait.
+	// Specifically:
+	//
+	// - exec-start reads a token from standard input and stores it in the token channel.
+	// - exec-wait reads a token from standard input and blocks until it matches the token in the token channel.
+	// - exec-finish reads a token from standard input and stores it in the token channel.
+	//
+	// This can be used to synchronize the execution of commands with an external process.
+	// For example, if the external process writes tokens to standard input at specific times,
+	// the master can wait for those tokens before proceeding.
+
+	if cmdStr == "exec-start" || cmdStr == "exec-wait" || cmdStr == "exec-finish" {
+		fmt.Println("exec:" + cmdStr)
+		// Read a token from stdin.
+		reader := bufio.NewReader(os.Stdin)
+		token, err := reader.ReadString('\n')
+		if err != nil {
+			panic(err)
+		}
+		token = strings.TrimSpace(token)
+
+		if cmdStr == "exec-wait" {
+			// Wait until the token matches the one in the token channel.
+			for {
+				t := <-tokenChannel
+				if t == token {
+					break
+				}
+			}
+		} else {
+			// Store token in the token channel.
+			tokenChannel <- token
+		}
 		return
 	}
 
-	for _, token := range tokens {
-		tokenChannel <- token
-	}
-}
-
-type SlaveStatus struct {
-	ID        uint64
-	AddrPort  string
-	PublicIP  string
-	PrivateIP string
-	Status    int64
-	LastCmdID uint64
-	Tag       string
-}
-
-type DiscoveryServer struct {
-	pb.UnimplementedDiscoveryServer
-
-	Listener    net.Listener
-	CommandChan chan *pb.Command
-
-	slavesLock      sync.Mutex
-	slaves          map[string]*SlaveStatus
-	slaveDisconnect chan string
-}
-
-func NewDiscoveryServer() *DiscoveryServer {
-	return &DiscoveryServer{
-		CommandChan:      make(chan *pb.Command, 128),
-		slaves:           make(map[string]*SlaveStatus),
-		slaveDisconnect:  make(chan string, 128),
-		slavesLock:       sync.Mutex{},
-		UnimplementedDiscoveryServer: pb.UnimplementedDiscoveryServer{},
-	}
-}
-
-func (ds *DiscoveryServer) Start(ctx context.Context, port uint64) error {
-
-	var err error
-	ds.Listener, err = net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		return err
+	tokens := strings.Fields(cmdStr)
+	if len(tokens) == 0 {
+		return
 	}
 
-	logger.Info().Msgf("Starting server. port=%d", port)
+	// First token is the command type.
+	cmdType := tokens[0]
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				_ = ds.Listener.Close()
-				return
+	switch cmdType {
 
-			case addrPort := <-ds.slaveDisconnect:
-				ds.slavesLock.Lock()
-				delete(ds.slaves, addrPort)
-				ds.slavesLock.Unlock()
-			}
+	case "sleep":
+		// sleep <duration>
+		// Sleeps for the given duration. Duration is parsed using time.ParseDuration.
+		if len(tokens) != 2 {
+			panic(fmt.Sprintf("invalid sleep command: %s", cmdStr))
 		}
-	}()
-
-	return nil
-}
-
-func (ds *DiscoveryServer) processCommand(cmdString string) error {
-
-	cmdString = strings.TrimSpace(cmdString)
-	if len(cmdString) == 0 || cmdString[0] == '#' {
-		return nil
-	}
-
-	cmdParts, err := splitCommandLine(cmdString)
-	if err != nil {
-		return fmt.Errorf("%s: could not parse: %w", cmdString, err)
-	}
-	if len(cmdParts) == 0 {
-		return nil
-	}
-
-	switch {
-
-	case cmdParts[0] == "write-file":
-		if len(cmdParts) < 3 {
-			return fmt.Errorf("%s: too few tokens", cmdString)
+		dur, err := time.ParseDuration(tokens[1])
+		if err != nil {
+			panic(err)
 		}
-		filename := cmdParts[1]
-		content := strings.Join(cmdParts[2:], " ")
+		time.Sleep(dur)
 
-		command := &pb.Command{
-			Command: &pb.Command_WriteFile{
-				WriteFile: &pb.WriteFile{
-					FileName: filename,
-					Content:  content,
-				},
-			},
+	case "write-file":
+		// write-file <path> <content...>
+		// Writes content to a file at path. Creates directories as needed.
+		if len(tokens) < 3 {
+			panic(fmt.Sprintf("invalid write-file command: %s", cmdStr))
 		}
-
-		ds.CommandChan <- command
-
-	case cmdParts[0] == "wait-for-slaves":
-		if len(cmdParts) < 4 {
-			return fmt.Errorf("%s: too few tokens", cmdString)
+		path := tokens[1]
+		content := strings.Join(tokens[2:], " ")
+		err := os.MkdirAll(filepath.Dir(path), 0o755)
+		if err != nil {
+			panic(err)
 		}
-		tag := cmdParts[1]
-		n := cmdParts[2]
-		timeout := cmdParts[3]
-
-		nSlaves := uint64(0)
-		if _, err := fmt.Sscanf(n, "%d", &nSlaves); err != nil {
-			return fmt.Errorf("%s: cannot parse n as uint64", cmdString)
+		err = os.WriteFile(path, []byte(content), 0o644)
+		if err != nil {
+			panic(err)
 		}
-
-		timeoutDuration := time.Duration(0)
-		if _, err := fmt.Sscanf(timeout, "%d", &timeoutDuration); err != nil {
-			return fmt.Errorf("%s: cannot parse timeout as int64", cmdString)
-		}
-		timeoutDuration = timeoutDuration * time.Millisecond
-
-		command := &pb.Command{
-			Command: &pb.Command_WaitForSlaves{
-				WaitForSlaves: &pb.WaitForSlaves{
-					N:       nSlaves,
-					Timeout: timeoutDuration.Milliseconds(),
-				},
-			},
-			Tag: tag,
-		}
-
-		ds.CommandChan <- command
-
-	case cmdParts[0] == "exec-start":
-		// Strict format:
-		//   exec-start <tag> <outFile> <cmd> <args...>
-		// outFile may be "-" to discard output.
-		if len(cmdParts) < 4 {
-			return fmt.Errorf("%s: invalid exec-start format; expected: exec-start <tag> <outFile> <cmd> <args...>", cmdString)
-		}
-
-		tag := cmdParts[1]
-		outFile := cmdParts[2]
-		fields := cmdParts[3:]
-
-		command := &pb.Command{
-			Command: &pb.Command_ExecStart{
-				ExecStart: &pb.ExecStart{
-					Name:    fields[0],
-					Args:    fields[1:],
-					OutFile: outFile,
-				},
-			},
-			Tag: tag,
-		}
-
-		ds.CommandChan <- command
-
-	case cmdParts[0] == "exec-wait":
-		if len(cmdParts) < 3 {
-			return fmt.Errorf("%s: too few tokens", cmdString)
-		}
-		tag := cmdParts[1]
-		timeout := cmdParts[2]
-
-		timeoutDuration := time.Duration(0)
-		if _, err := fmt.Sscanf(timeout, "%d", &timeoutDuration); err != nil {
-			return fmt.Errorf("%s: cannot parse timeout as int64", cmdString)
-		}
-		timeoutDuration = timeoutDuration * time.Millisecond
-
-		command := &pb.Command{
-			Command: &pb.Command_ExecWait{
-				ExecWait: &pb.ExecWait{
-					Timeout: timeoutDuration.Milliseconds(),
-				},
-			},
-			Tag: tag,
-		}
-
-		ds.CommandChan <- command
-
-	case cmdParts[0] == "sync":
-		if len(cmdParts) < 2 {
-			return fmt.Errorf("%s: too few tokens", cmdString)
-		}
-		tag := cmdParts[1]
-
-		command := &pb.Command{
-			Command: &pb.Command_Sync{
-				Sync: &pb.Sync{},
-			},
-			Tag: tag,
-		}
-
-		ds.CommandChan <- command
-
-	case cmdParts[0] == "discover-reset":
-		if len(cmdParts) < 2 {
-			return fmt.Errorf("%s: too few tokens", cmdString)
-		}
-		nPeers := uint64(0)
-		if _, err := fmt.Sscanf(cmdParts[1], "%d", &nPeers); err != nil {
-			return fmt.Errorf("%s: cannot parse nPeers as uint64", cmdString)
-		}
-
-		command := &pb.Command{
-			Command: &pb.Command_DiscoverReset{
-				DiscoverReset: &pb.DiscoverReset{
-					NPeers: nPeers,
-				},
-			},
-		}
-
-		ds.CommandChan <- command
-
-	case cmdParts[0] == "discover-wait":
-		command := &pb.Command{
-			Command: &pb.Command_DiscoverWait{
-				DiscoverWait: &pb.DiscoverWait{},
-			},
-		}
-
-		ds.CommandChan <- command
 
 	default:
-		return fmt.Errorf("%s: unrecognized command name", cmdString)
+		panic(fmt.Sprintf("unknown command type: %s", cmdType))
 	}
-
-	return nil
 }
 
-// splitCommandLine splits a command line into tokens similarly to a POSIX shell.
-// It supports:
-//   - whitespace separation
-//   - single quotes: '...'
-//   - double quotes: "..." (supports \\ and \" escapes)
-//   - backslash escaping outside quotes (and inside double quotes)
-// It does not perform variable expansion or globbing.
-func splitCommandLine(s string) ([]string, error) {
-	var out []string
-	var cur strings.Builder
-
-	inSingle := false
-	inDouble := false
-	escaping := false
-
-	flush := func() {
-		if cur.Len() > 0 {
-			out = append(out, cur.String())
-			cur.Reset()
-		}
-	}
-
-	for i := 0; i < len(s); i++ {
-		b := s[i]
-
-		if escaping {
-			cur.WriteByte(b)
-			escaping = false
-			continue
-		}
-
-		if b == '\\' {
-			// Backslash escapes next char unless in single quotes.
-			if inSingle {
-				cur.WriteByte(b)
-			} else {
-				escaping = true
-			}
-			continue
-		}
-
-		if inSingle {
-			if b == '\'' {
-				inSingle = false
-			} else {
-				cur.WriteByte(b)
-			}
-			continue
-		}
-
-		if inDouble {
-			if b == '"' {
-				inDouble = false
-			} else {
-				cur.WriteByte(b)
-			}
-			continue
-		}
-
-		// Outside quotes
-		switch {
-		case b == '\'':
-			inSingle = true
-		case b == '"':
-			inDouble = true
-		case b == ' ' || b == '\t' || b == '\n' || b == '\r':
-			flush()
-		default:
-			cur.WriteByte(b)
-		}
-	}
-
-	if escaping {
-		return nil, fmt.Errorf("dangling escape")
-	}
-	if inSingle || inDouble {
-		return nil, fmt.Errorf("unterminated quote")
-	}
-	flush()
-
-	// Also support the legacy token stream parser (ParseCommandStr) which expects
-	// the original string to already be trimmed and comments removed.
-	return out, nil
-}
-
-func (ds *DiscoveryServer) ProcessCommandFile(filename string) error {
-
+func ParseCommandsFromFile(filename string) ([]*pb.MasterCommand, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
 
-	logger.Info().Msgf("Processing command file. file=%s", filename)
+	var cmds []*pb.MasterCommand
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
+		line := scanner.Text()
+		line = strings.TrimSpace(line)
 
-		cmdString := scanner.Text()
+		// Skip empty lines and comments.
+		if len(line) == 0 || line[0] == '#' {
+			continue
+		}
 
-		if err := ds.processCommand(cmdString); err != nil {
-			logger.Error().Err(err).Msgf("Error processing command. cmdString=%s", cmdString)
-			return err
+		cmd, err := ParseMasterCommand(line)
+		if err != nil {
+			return nil, err
+		}
+		if cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return cmds, nil
 }
 
-func (ds *DiscoveryServer) RegisterSlave(ctx context.Context, status *pb.SlaveStatus) (*pb.RegisterSlaveResponse, error) {
+func ParseMasterCommand(cmdStr string) (*pb.MasterCommand, error) {
 
-	peer, ok := peerFromContext(ctx)
-	if !ok {
-		return nil, fmt.Errorf("could not retrieve peer from context")
+	// Trim all white space from the start and end of cmdStr.
+	cmdStr = strings.TrimSpace(cmdStr)
+
+	// Skip empty lines and comments.
+	if len(cmdStr) == 0 || cmdStr[0] == '#' {
+		return nil, nil
 	}
 
-	addrPort := peer.AddrPort
-
-	ds.slavesLock.Lock()
-	defer ds.slavesLock.Unlock()
-
-	ds.slaves[addrPort] = &SlaveStatus{
-		ID:        status.ID,
-		AddrPort:  addrPort,
-		PublicIP:  status.PublicIP,
-		PrivateIP: status.PrivateIP,
-		Status:    status.Status,
-		LastCmdID: status.LastCmdID,
-		Tag:       status.Tag,
+	tokens := strings.Fields(cmdStr)
+	if len(tokens) == 0 {
+		return nil, nil
 	}
 
-	logger.Info().Msgf("New slave. addrPort=%s slaveID=%d tag=%s", addrPort, status.ID, status.Tag)
+	cmdType := tokens[0]
 
-	return &pb.RegisterSlaveResponse{}, nil
-}
+	switch cmdType {
 
-func (ds *DiscoveryServer) GetNextCommand(ctx context.Context, req *pb.GetNextCommandRequest) (*pb.GetNextCommandResponse, error) {
-
-	peer, ok := peerFromContext(ctx)
-	if !ok {
-		return nil, fmt.Errorf("could not retrieve peer from context")
-	}
-
-	addrPort := peer.AddrPort
-
-	ds.slavesLock.Lock()
-	slave, ok := ds.slaves[addrPort]
-	if ok {
-		slave.Status = req.Status
-		slave.LastCmdID = req.LastCmdID
-	}
-	ds.slavesLock.Unlock()
-
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf("context canceled")
-
-	case cmd := <-ds.CommandChan:
-		return &pb.GetNextCommandResponse{
-			Command: cmd,
-		}, nil
-	}
-}
-
-func (ds *DiscoveryServer) WaitForSlaves(tag string, n uint64, timeout time.Duration) error {
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-timer.C:
-			return fmt.Errorf("timeout waiting for slaves")
-
-		default:
-			ds.slavesLock.Lock()
-			count := uint64(0)
-			for _, slave := range ds.slaves {
-				if slave.Tag == tag {
-					count++
-				}
-			}
-			ds.slavesLock.Unlock()
-
-			if count >= n {
-				logger.Info().Msgf("Finished waiting for slaves. numSlaves=%d tag=%s", count, tag)
-				return nil
-			}
-
-			time.Sleep(200 * time.Millisecond)
+	case "start-slave":
+		// start-slave <exec> <args...>
+		if len(tokens) < 2 {
+			return nil, errors.New("invalid start-slave command")
 		}
-	}
-}
+		exec := tokens[1]
+		args := []string{}
+		if len(tokens) > 2 {
+			args = tokens[2:]
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_START_SLAVE,
+			Arg:  exec,
+			Args: args,
+		}, nil
 
-func (ds *DiscoveryServer) DisconnectSlave(addrPort string) {
-	ds.slaveDisconnect <- addrPort
+	case "exec-slave":
+		// exec-slave <id> <exec> <args...>
+		if len(tokens) < 3 {
+			return nil, errors.New("invalid exec-slave command")
+		}
+		id, err := strconv.ParseUint(tokens[1], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		exec := tokens[2]
+		args := []string{}
+		if len(tokens) > 3 {
+			args = tokens[3:]
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_EXEC_SLAVE,
+			Id:   uint32(id),
+			Arg:  exec,
+			Args: args,
+		}, nil
+
+	case "kill-slave":
+		// kill-slave <id>
+		if len(tokens) != 2 {
+			return nil, errors.New("invalid kill-slave command")
+		}
+		id, err := strconv.ParseUint(tokens[1], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_KILL_SLAVE,
+			Id:   uint32(id),
+		}, nil
+
+	case "remove-slave":
+		// remove-slave <id>
+		if len(tokens) != 2 {
+			return nil, errors.New("invalid remove-slave command")
+		}
+		id, err := strconv.ParseUint(tokens[1], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_REMOVE_SLAVE,
+			Id:   uint32(id),
+		}, nil
+
+	case "broadcast":
+		// broadcast <exec> <args...>
+		if len(tokens) < 2 {
+			return nil, errors.New("invalid broadcast command")
+		}
+		exec := tokens[1]
+		args := []string{}
+		if len(tokens) > 2 {
+			args = tokens[2:]
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_BROADCAST,
+			Arg:  exec,
+			Args: args,
+		}, nil
+
+	case "broadcast-wait":
+		// broadcast-wait <exec> <args...>
+		if len(tokens) < 2 {
+			return nil, errors.New("invalid broadcast-wait command")
+		}
+		exec := tokens[1]
+		args := []string{}
+		if len(tokens) > 2 {
+			args = tokens[2:]
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_BROADCAST_WAIT,
+			Arg:  exec,
+			Args: args,
+		}, nil
+
+	case "wait":
+		// wait <id>
+		if len(tokens) != 2 {
+			return nil, errors.New("invalid wait command")
+		}
+		id, err := strconv.ParseUint(tokens[1], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_WAIT,
+			Id:   uint32(id),
+		}, nil
+
+	case "wait-all":
+		// wait-all
+		if len(tokens) != 1 {
+			return nil, errors.New("invalid wait-all command")
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_WAIT_ALL,
+		}, nil
+
+	case "sleep":
+		// sleep <duration>
+		if len(tokens) != 2 {
+			return nil, errors.New("invalid sleep command")
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_SLEEP,
+			Arg:  tokens[1],
+		}, nil
+
+	case "write-file":
+		// write-file <path> <content...>
+		if len(tokens) < 3 {
+			return nil, errors.New("invalid write-file command")
+		}
+		path := tokens[1]
+		content := strings.Join(tokens[2:], " ")
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_WRITE_FILE,
+			Arg:  path,
+			Args: []string{content},
+		}, nil
+
+	case "delete-file":
+		// delete-file <path>
+		if len(tokens) != 2 {
+			return nil, errors.New("invalid delete-file command")
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_DELETE_FILE,
+			Arg:  tokens[1],
+		}, nil
+
+	case "copy-file":
+		// copy-file <src> <dst>
+		if len(tokens) != 3 {
+			return nil, errors.New("invalid copy-file command")
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_COPY_FILE,
+			Arg:  tokens[1],
+			Args: []string{tokens[2]},
+		}, nil
+
+	case "copy-dir":
+		// copy-dir <src> <dst>
+		if len(tokens) != 3 {
+			return nil, errors.New("invalid copy-dir command")
+		}
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_COPY_DIR,
+			Arg:  tokens[1],
+			Args: []string{tokens[2]},
+		}, nil
+
+	case "exec-start":
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_EXEC_START,
+		}, nil
+
+	case "exec-wait":
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_EXEC_WAIT,
+		}, nil
+
+	case "exec-finish":
+		return &pb.MasterCommand{
+			Type: pb.MasterCommand_EXEC_FINISH,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown command: %s", cmdType)
+	}
 }
 
