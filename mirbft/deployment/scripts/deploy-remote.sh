@@ -273,6 +273,38 @@ rsync -rtz --delete \
   "${published_root}/"
 log_i "Publicação OK: ${published_root}"
 
+# -----------------------------------------------------------------------------
+# MÍNIMA ALTERAÇÃO: análise automática local (traces -> *.val -> result-summary.csv)
+# -----------------------------------------------------------------------------
+log_i "Auto-análise: gerando métricas a partir dos traces (*.trc) ..."
+
+ANALYZE_QUERIES=("queries/aggregates.sql" "queries/histograms.sql")
+
+for exp_dir in "${published_root}"/[0-9][0-9][0-9][0-9]; do
+  [[ -d "$exp_dir" ]] || continue
+  exp_id="$(basename "$exp_dir")"
+
+  # opcional: não sumarizar experimento quebrado
+  if ls "$exp_dir"/slave-*/FAILED >/dev/null 2>&1; then
+    log_w "Auto-análise: pulando exp ${exp_id} (há FAILED)."
+    continue
+  fi
+
+  log_i "Auto-análise: analisando exp ${exp_id} em ${exp_dir}"
+  scripts/analyze/analyze.sh -d "$exp_dir" \
+    -q "${ANALYZE_QUERIES[0]}" \
+    -q "${ANALYZE_QUERIES[1]}" || log_w "Auto-análise: falhou no exp ${exp_id} (continuando)."
+done
+
+if [[ -f "$exp_data_dir/deployment.csv" ]]; then
+  out_csv="$exp_data_dir/result-summary.csv"
+  scripts/analyze/summarize.sh "$exp_data_dir/deployment.csv" "${published_root}" > "$out_csv" || true
+  log_i "Auto-análise: CSV consolidado gerado em: $out_csv"
+else
+  log_w "Auto-análise: deployment.csv não encontrado em $exp_data_dir (pulando summarize)."
+fi
+# -----------------------------------------------------------------------------
+
 if $cancel_instances; then
   log_i "Encerrando instâncias (cancel_instances=true)..."
   scripts/cancel-cloud-instances.sh "$exp_data_dir/$instance_info_file_name"

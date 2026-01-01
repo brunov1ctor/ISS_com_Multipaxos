@@ -1,142 +1,138 @@
-#!/bin/bash
-#
-# If ran on MacOS, the gdate (Linux-style date) command is preferred.
-# Prerequisite is coreutils which has gdate and can be installed via homebrew:
-#
-#   brew install coreutils
-#
-# But this script should work also without gdate installed, in which case, on
-# MacOS, it will use the default date command.
-#
-
+#!/usr/bin/env bash
 set -euo pipefail
 
-function usage {
-  cat 1>&2 <<EOF
-Usage: $0 [--db NAME] [--no-prefix] [--skip-pre] DIR [DIR...]
+# scripts/analyze/analyze.sh
+#
+# Padronizado (Opção A): SEM summarize.py.
+# Este script:
+#   1) carrega traces (*.trc) -> <exp_dir>/trace.db
+#   2) executa queries SQL -> gera *.val dentro de <exp_dir>
+#
+# A sumarização/consolidação em CSV deve ser feita por:
+#   scripts/analyze/summarize.sh <deployment.csv> <experiment-output-root> > result-summary.csv
+#
+# Uso típico:
+#   scripts/analyze/analyze.sh -d path/to/experiment-output/0000 -q queries/aggregates.sql -q queries/histograms.sql
+#
+# Compatível com analyze-continuously.sh (aceita -d, -q, -f, etc.)
 
-Processes ISS trace logs in the given directory(ies) and generates CSV summaries.
-EOF
+dbfile="trace.db"
+exp_dir=""
+queries=()
+
+# flags legadas (mantidas pra compatibilidade; não são necessárias aqui)
+peer_bin=""
+client_bin=""
+force=false
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  scripts/analyze/analyze.sh -d EXP_DIR [-q QUERY.sql ...] [--db trace.db] [-f]
+
+Required:
+  -d EXP_DIR            Diretório do experimento (ex.: .../experiment-output/0000)
+
+Optional:
+  -q QUERY.sql          Query SQL (pode repetir -q várias vezes)
+  --db FILE             Nome do arquivo sqlite gerado dentro de EXP_DIR (default: trace.db)
+  -f, --force           Recria o DB (remove EXP_DIR/trace.db antes)
+  -b PEER_BIN           (legado) ignorado
+  -c CLIENT_BIN         (legado) ignorado
+  -h, --help            Ajuda
+
+Notes:
+  - Este script gera *.val em EXP_DIR via diretivas '-- export' presentes nos .sql.
+  - Para consolidar resultados em CSV, use summarize.sh (não é feito aqui).
+USAGE
 }
 
-# Defaults
-skip_pre=false
-dbfile="trace.db"
-no_prefix=false
-
-# Parse options
+# parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --skip-pre)
-      skip_pre=true
-      shift
-      ;;
-    --db)
-      dbfile="$2"
-      shift 2
-      ;;
-    --no-prefix)
-      no_prefix=true
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    -*)
-      echo "Unknown option: $1" >&2
-      usage
-      exit 1
-      ;;
+    -d) exp_dir="${2:-}"; shift 2 ;;
+    --db) dbfile="${2:-}"; shift 2 ;;
+    -q) queries+=("${2:-}"); shift 2 ;;
+    -b) peer_bin="${2:-}"; shift 2 ;;      # legado, ignorado
+    -c) client_bin="${2:-}"; shift 2 ;;    # legado, ignorado
+    -f|--force) force=true; shift ;;
+    -h|--help) usage; exit 0 ;;
     *)
-      break
+      # permite passar EXP_DIR sem -d como primeiro argumento
+      if [[ -z "$exp_dir" && -d "$1" ]]; then
+        exp_dir="$1"; shift
+      else
+        echo "Unknown arg: $1" >&2
+        usage >&2
+        exit 2
+      fi
       ;;
   esac
 done
 
-if [[ $# -lt 1 ]]; then
-  usage
+if [[ -z "$exp_dir" || ! -d "$exp_dir" ]]; then
+  echo "EXP_DIR inválido (use -d)." >&2
+  usage >&2
   exit 1
 fi
 
-# We expect to be run from mirbft/deployment.
-if [[ ! -d scripts/analyze ]]; then
-  echo "This script must be run from mirbft/deployment." >&2
-  exit 1
-fi
-
-# Main loop over experiment directories
-while [[ $# -gt 0 ]]; do
-  dir="$1"
-
-  if [[ ! -d "$dir" ]]; then
-    echo "[warn] experiment directory not found: $dir"
-    shift
-    continue
-  fi
-
-  echo "Analyzing: $dir"
-
-  # If requested, we might want to skip some pre-processing steps (not shown here).
-  skipping=false
-
-  # 1) Load logs into SQLite DB
-  if [[ "$skipping" == false ]]; then
-    echo "  > Loading trace into database..."
-
-    # Using gdate when available (Linux-style date) and falling back to date otherwise.
-    # This also works on Mac when coreutils is installed.
-    startTimeNs=$(gdate +%s%N 2>/dev/null || date +%s%N) # This is due to a different date command on Mac.
-
-    # ----------------------------------------------------------------------
-    # NOVO BLOCO: detecção explícita dos arquivos .trc com logs detalhados
-    # ----------------------------------------------------------------------
-
-    # Expand the glob in a safe way; if there is no match we will get an empty array
-    # instead de literalmente "slave-*/*.trc", evitando FileNotFoundError no Python.
-    shopt -s nullglob
-    trc_files=("$dir"/slave-*/*.trc)
-    shopt -u nullglob
-
-    if [ ${#trc_files[@]} -eq 0 ]; then
-      echo "  [warn] Nenhum arquivo .trc encontrado em $dir/slave-*/."
-      echo "         Sem traces não é possível calcular as métricas de throughput/latência."
-      echo "         Verifique:"
-      echo "           - se o orderingpeer está sendo iniciado com os argumentos de tracing;"
-      echo "           - se ele recebeu SIGINT (veja se há logs de 'Started tracing.' em peer.log);"
-      echo "           - se o diretório 'experiment-output/.../slave-*/' bate com o master-commands.cmd."
-      echo "         (o script seguirá, mas as métricas dependentes das traces ficarão vazias)."
-      skipping=true
-    else
-      echo "  > Encontrados ${#trc_files[@]} arquivos .trc em $dir/slave-*/:"
-      for f in "${trc_files[@]}"; do
-        echo "      - $f"
-      done
-
-      # Chamada original, agora com a lista expandida de arquivos .trc.
-      # IMPORTANTE: não colocar aspas ao redor de ${trc_files[@]} no Python,
-      # para que cada arquivo vire um argumento separado, como esperado.
-      python3 scripts/analyze/load-logs.py "$dir/$dbfile" "${trc_files[@]}"
-
-      endTimeNs=$(gdate +%s%N 2>/dev/null || date +%s%N) # This is due to a different data command on Mac.
-      echo "  > Loaded trace into database in $(((endTimeNs - startTimeNs) / 1000000000)) s."
-      skipping=false
+# descobrir queries padrão se nenhuma foi passada:
+# pega analysis_query_params de scripts/global-vars.sh (contexto mirbft/deployment)
+if [[ ${#queries[@]} -eq 0 ]]; then
+  # shellcheck source=/dev/null
+  if [[ -f "scripts/global-vars.sh" ]]; then
+    source scripts/global-vars.sh
+    if [[ -n "${analysis_query_params:-}" ]]; then
+      # analysis_query_params é algo como: "-q queries/aggregates.sql -q queries/histograms.sql"
+      # transforma em array de caminhos
+      while read -r tok; do
+        [[ "$tok" == "-q" || -z "$tok" ]] && continue
+        queries+=("$tok")
+      done < <(echo "$analysis_query_params" | tr ' ' '\n')
     fi
   fi
+fi
 
-  # 2) Generate CSV summary if we actually loaded something
-  if [[ "$skipping" == false ]]; then
-    echo "  > Generating CSV summary..."
+if [[ ${#queries[@]} -eq 0 ]]; then
+  echo "[warn] Nenhuma query foi informada (-q) e não foi possível obter defaults via scripts/global-vars.sh." >&2
+  echo "       Rode assim, por exemplo:" >&2
+  echo "       scripts/analyze/analyze.sh -d \"$exp_dir\" -q queries/aggregates.sql -q queries/histograms.sql" >&2
+  exit 1
+fi
 
-    # A função do summarize.py continua a mesma; ele vai olhar para o DB gerado.
-    python3 scripts/analyze/summarize.py "$dir/$dbfile" > "$dir/summary.csv"
+# localizar traces
+shopt -s nullglob
+trc_files=("$exp_dir"/slave-*/*.trc "$exp_dir"/slave-*/*client*.trc "$exp_dir"/*client*.trc)
+shopt -u nullglob
 
-    echo "  > Summary written to $dir/summary.csv"
+if [[ ${#trc_files[@]} -eq 0 ]]; then
+  echo "[warn] Nenhum arquivo .trc encontrado em $exp_dir (nem em slave-*). Nada para analisar."
+  exit 0
+fi
+
+dbpath="$exp_dir/$dbfile"
+if $force; then
+  rm -f "$dbpath"
+fi
+
+echo "[analyze] EXP_DIR=$exp_dir"
+echo "[analyze] DB=$dbpath"
+echo "[analyze] traces=${#trc_files[@]}"
+
+# 1) Carrega traces no sqlite
+echo "[analyze] loading traces -> sqlite"
+python3 scripts/analyze/load-logs.py "$dbpath" "${trc_files[@]}"
+
+# 2) Executa queries e exporta *.val em exp_dir
+echo "[analyze] running queries -> exporting *.val"
+for q in "${queries[@]}"; do
+  if [[ ! -f "$q" ]]; then
+    echo "[warn] query não encontrada: $q (pulando)" >&2
+    continue
   fi
-
-  # Opcional: se quiser, podemos extrair campos específicos para um CSV "global" aqui.
-  # (mantive o comportamento original de apenas gerar o summary por diretório.)
-
-  shift
+  python3 scripts/analyze/run-queries.py "$dbpath" "$q" "$exp_dir" >/dev/null
 done
+
+val_count=$(ls -1 "$exp_dir"/*.val 2>/dev/null | wc -l | tr -d ' ')
+echo "[analyze] done: ${val_count} *.val generated in $exp_dir"
 
