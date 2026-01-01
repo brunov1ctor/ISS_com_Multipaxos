@@ -357,8 +357,10 @@ def generateCommands(expID, peers, clients):
     startPeers(expID, list(peers))
     runClients(expID, list(clients))
 
-    # Voltamos ao stop via framework.
-    stopPeers(list(peers))
+    # (ALTERAÇÃO MÍNIMA)
+    # Em vez de "stop" do framework (pode travar pra sempre),
+    # usamos o best-effort pkill -INT do orderingpeer e seguimos o pipeline.
+    stopPeerProcesses(expID, list(peers))
 
     unsetBandwidth(expID, bandwidths)
 
