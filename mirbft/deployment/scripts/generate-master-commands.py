@@ -3,10 +3,19 @@ import os
 import sys
 from collections import defaultdict
 
-CLIENT_TIMEOUT = 480000  # ms
+# =====================================================================
+# MINIMAL FIX:
+# - faz o exec-wait do client = ClientRunTime + ClientDrainTime + folga
+#   (em vez de um CLIENT_TIMEOUT fixo que pode ser menor/maior e causar
+#   master ficar "preso" ou matar antes da hora)
+# - usa os valores diretamente do config.yml (ou env override), sem
+#   depender de suposições.
+# =====================================================================
+
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
+
 BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
     f"/users/{os.environ.get('USER', 'user')}/iss",
@@ -41,6 +50,71 @@ ORDERINGPEER_BIN = os.path.join(REMOTE_BIN_DIR, "orderingpeer")
 ORDERINGCLIENT_BIN = os.path.join(REMOTE_BIN_DIR, "orderingclient")
 REMOTE_TLS_LINK = f"{REMOTE_WORK_DIR}/tls-data"
 REMOTE_TLS_SRC = f"{BASE_DIR}/tls-data"
+
+# =====================================================================
+# MINIMAL FIX: compute client wait from config or env
+# =====================================================================
+
+def _parse_config_int(path: str, key: str, default: int) -> int:
+    """
+    Very small YAML-ish parser for lines like: Key: 30000
+    Supports spaces and comments. Returns default if not found.
+    """
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                # strip comments
+                raw = line.split("#", 1)[0].strip()
+                if not raw:
+                    continue
+                if ":" not in raw:
+                    continue
+                k, v = raw.split(":", 1)
+                if k.strip() != key:
+                    continue
+                v = v.strip().strip('"').strip("'")
+                # allow ints only
+                try:
+                    return int(v)
+                except ValueError:
+                    return default
+    except FileNotFoundError:
+        return default
+    except OSError:
+        return default
+    return default
+
+
+def compute_client_wait_ms() -> int:
+    """
+    exec-wait precisa cobrir:
+      ClientRunTime (tempo de submissão) +
+      ClientDrainTime (janela extra p/ medir/esperar) +
+      folga (rede/FS jitter)
+    """
+    # Allow override via env (useful for quick experiments)
+    env_override = os.environ.get("ISS_CLIENT_WAIT_MS", "").strip()
+    if env_override:
+        try:
+            return int(env_override)
+        except ValueError:
+            pass
+
+    # Read from the master-side config file (the same used to scp to slaves).
+    # If you generate per-exp configs, this still works because the keys are stable.
+    cfg_path = os.path.join(BASE_DIR, "config", "config.yml")
+
+    client_run = _parse_config_int(cfg_path, "ClientRunTime", 30000)
+    client_drain = _parse_config_int(cfg_path, "ClientDrainTime", 0)
+
+    # Folga: 10s + 2x FS settle (bem conservador, mas ainda "mínimo")
+    slack = int(os.environ.get("ISS_CLIENT_WAIT_SLACK_MS", "10000"))
+    wait_ms = max(0, client_run) + max(0, client_drain) + max(0, slack) + 2 * FS_SETTLE_DELAY_MS
+
+    return wait_ms
+
+
+CLIENT_TIMEOUT = compute_client_wait_ms()
 
 lastFinished = -1
 deploymentSchedule = []
@@ -259,7 +333,9 @@ def runClients(expID, clients):
             f"{_exp_slave_dir(expID)}/client {_exp_slave_dir(expID)}/prof-client"
         )
 
+    # MINIMAL FIX applied here: timeout derived from config (run + drain + slack)
     timeout = CLIENT_TIMEOUT
+
     for c in clients:
         output(
             "exec-wait {0} {2} "
