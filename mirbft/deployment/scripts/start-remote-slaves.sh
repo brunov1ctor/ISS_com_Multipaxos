@@ -11,6 +11,10 @@
 # - Copia scripts, binários e TLS para o remoto (atomic)
 # - Dispara start-slave.sh via nohup (não pode travar)
 #
+# ALTERAÇÃO MÍNIMA:
+#   - NÃO copiar discoverymaster para os slaves (evita overwrite no NFS /users/$USER/go/bin)
+#   - NÃO exigir discoverymaster no remote_check_assets
+#
 
 set -euo pipefail
 
@@ -258,7 +262,6 @@ remote_check_assets() {
       ls -1 '${remote_base_dir}/tls-data' 2>/dev/null | wc -l; \
     echo -n '[remote-check] experiment-config: '; \
       ls -1 '${remote_exp_config_dir}' 2>/dev/null | wc -l; \
-    test -x '${remote_bin_dir}/discoverymaster' && \
     test -x '${remote_bin_dir}/discoveryslave' && \
     test -x '${remote_bin_dir}/orderingpeer' && \
     test -x '${remote_bin_dir}/orderingclient' && \
@@ -288,7 +291,7 @@ copy_required_assets() {
 
   remote_kill_bins "${ip}"
 
-  copy_bin_atomic "${ip}" discoverymaster
+  # ALTERAÇÃO MÍNIMA: NÃO copiar discoverymaster para os slaves
   copy_bin_atomic "${ip}" discoveryslave
   copy_bin_atomic "${ip}" orderingpeer
   copy_bin_atomic "${ip}" orderingclient
