@@ -137,12 +137,20 @@ def pushConfigFiles(expID, slaves):
 def snapshotConfigNow(expID, slaves):
     output("# snapshot config (per-run)")
     for s in slaves:
+        # garante o diretório do slave ANTES do cp
+        output("exec-start {0} - mkdir -p {1}".format(s, _exp_slave_dir(expID)))
+        output(
+            "exec-wait {0} 60000 "
+            "exec-start {0} {1}/FAILED echo Could not mkdir snapshot dir; "
+            "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
+        )
+
+        # agora o snapshot
         output(
             "exec-start {0} - cp {1} {2}/config.yml".format(
                 s, SLAVE_CONFIG_FILE, _exp_slave_dir(expID)
             )
         )
-        # ÚNICA ALTERAÇÃO: de 5000ms -> 60000ms para evitar falsos FAILED em FS lento
         output(
             "exec-wait {0} 60000 "
             "exec-start {0} {1}/FAILED echo Could not snapshot config; "
