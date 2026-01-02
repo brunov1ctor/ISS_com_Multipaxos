@@ -1,3 +1,4 @@
+# mirbft/deployment/scripts/generate-master-commands.py
 #!/usr/bin/env python3
 import os
 import sys
@@ -7,6 +8,12 @@ CLIENT_TIMEOUT = 480000  # ms
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
+
+CLIENT_TIMEOUT = 480000  # ms
+SIGNAL_DELAY = "5s"
+STOP_SLAVES_DELAY = "3s"
+SCP_RETRY_COUNT = "10"
+
 BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
     f"/users/{os.environ.get('USER', 'user')}/iss",
@@ -34,11 +41,15 @@ BEST_EFFORT_SCP_WAIT_MS = 180000
 FETCH_CONFIG_WAIT_MS = 180000   # era 60000
 VERIFY_CONFIG_WAIT_MS = 60000   # era 2000
 
-REMOTE_WORK_DIR = os.environ.get("ISS_REMOTE_WORK_DIR", "/tmp/iss-Bruno")
-REMOTE_USER = os.environ.get("ISS_REMOTE_USER", "Bruno")
+# Defaults sem usuário hardcoded
+_DEFAULT_USER = os.environ.get("USER", "user")
+REMOTE_WORK_DIR = os.environ.get("ISS_REMOTE_WORK_DIR", f"/tmp/iss-{_DEFAULT_USER}")
+REMOTE_USER = os.environ.get("ISS_REMOTE_USER", _DEFAULT_USER)
+
 REMOTE_BIN_DIR = os.environ.get("ISS_REMOTE_BIN_DIR", f"/users/{REMOTE_USER}/go/bin")
 ORDERINGPEER_BIN = os.path.join(REMOTE_BIN_DIR, "orderingpeer")
 ORDERINGCLIENT_BIN = os.path.join(REMOTE_BIN_DIR, "orderingclient")
+
 REMOTE_TLS_LINK = f"{REMOTE_WORK_DIR}/tls-data"
 REMOTE_TLS_SRC = f"{BASE_DIR}/tls-data"
 
@@ -163,10 +174,10 @@ def snapshotConfigNow(expID, slaves):
 
 def ensureTlsDataLink(expID, slaves):
     """
-    Corrige o problema que você viu: o framework executava `bash -lc '...'`
-    mas o parser acabava enviando o `-lc '...'` como UM único argumento
-    (exit status 2). Aqui fazemos só comandos simples, sem shell -lc,
-    e criamos o link ABSOLUTO esperado: /tmp/iss-Bruno/tls-data -> /users/Bruno/iss/tls-data
+    Cria/garante o link ABSOLUTO esperado:
+      <remote_work_dir>/tls-data  ->  <base_dir>/tls-data
+
+    Mantém comandos simples (sem bash -lc) para evitar parsing/quoting problemático.
     """
     output("# ensure tls-data link (ABSOLUTO, sem bash -lc)")
     for s in slaves:
@@ -279,7 +290,6 @@ def runClients(expID, clients):
 
 
 def stopPeers(peers):
-    # VOLTA À LÓGICA ANTIGA: parar peers via framework (sem pkill)
     output("# stop peers (framework stop)")
     for p in peers:
         output("stop {0}".format(p))
@@ -288,7 +298,6 @@ def stopPeers(peers):
 
 
 def stopPeerProcesses(expID, peers):
-    # Mantida por compatibilidade, mas NÃO usada no pipeline (voltamos ao stopPeers()).
     output("# stop orderingpeer processes (keep discoveryslave alive) [BEST-EFFORT]")
     for p in peers:
         output("exec-start {0} - pkill -INT -f (^|/)(orderingpeer)(\\\\s|$)".format(p))

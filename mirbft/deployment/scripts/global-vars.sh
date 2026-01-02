@@ -1,3 +1,4 @@
+# mirbft/deployment/scripts/global-vars.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -13,13 +14,12 @@ exp_id_digits=4
 analysis_query_params="-q queries/ethereum.sql -q queries/aggregates.sql -q queries/histograms.sql"
 
 ###############################################################################
-# SSH options (Emulab / cluster com usuário Bruno)
+# SSH options (Emulab / cluster)
 ###############################################################################
-# No seu fluxo atual você já usa chaves/ssh normal do usuário Bruno.
 # Se quiser forçar uma chave específica, defina private_key_file e adicione "-i".
 private_key_file="${private_key_file:-}"
 
-# Opções default (compatível com o que você mostrou nos logs: StrictHostKeyChecking=no etc.)
+# Opções default
 if [[ -n "${private_key_file}" ]]; then
   ssh_options="-i ${private_key_file} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60"
 else
@@ -53,16 +53,13 @@ local_master_ready_file=master-ready
 local_result_fetching_log=result-fetching.log
 
 ###############################################################################
-# Remote layout (MUDANÇA CRÍTICA)
+# Remote layout
 #
 # Objetivo:
 # - heavy/work/status/logs/output em /tmp/iss-<user>
 # - configs/TLS em /users/<user>/iss
-#
-# Isso precisa bater com o master-commands.cmd que você mostrou:
-#   /users/Bruno/iss/experiment-config/config-0000.yml
 ###############################################################################
-remote_user="${remote_user:-Bruno}"
+remote_user="${remote_user:-${USER:-user}}"
 
 # (pesado)
 remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
@@ -89,22 +86,20 @@ remote_runtime_config_dir="${remote_runtime_config_dir:-$remote_base_dir/config}
 # TLS sincronizado para os nós:
 remote_tls_directory="${remote_tls_directory:-$remote_base_dir/tls-data}"
 
-# binários no cluster (onde seu log disse que já existe):
+# binários no cluster:
 remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
 
 # output pesado no cluster
 remote_experiment_output_dir="${remote_experiment_output_dir:-$remote_work_dir/experiment-output}"
 
 # Em vários scripts antigos, remote_exp_dir era "deployment-data no remoto".
-# No seu fluxo atual, você está usando /tmp/iss-Bruno como base de trabalho.
 remote_exp_dir="${remote_exp_dir:-$remote_work_dir}"
 
 remote_analysis_processes=8
 
 ###############################################################################
-# Go code directory (não obrigatório no Emulab, mas mantido p/ compatibilidade)
+# Go code directory (não obrigatório no cluster, mas mantido p/ compatibilidade)
 ###############################################################################
-# Se você não sincroniza código (só binários), isso não é usado.
 remote_gopath="${remote_gopath:-/users/${remote_user}/go}"
 remote_code_dir="${remote_code_dir:-$remote_gopath/src/github.com/hyperledger-labs/mirbft}"
 
