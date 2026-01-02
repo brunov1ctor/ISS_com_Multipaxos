@@ -216,6 +216,26 @@ scripts/start-remote-slaves.sh "$exp_data_dir" 0 1client "$instance_info_file"
 
 log_i "Todos os slaves disparados."
 
+# -----------------------------------------------------------------------------
+# MINIMA CORREÇÃO: esperar o master finalizar (status == DONE) antes do fetch
+# -----------------------------------------------------------------------------
+log_i "Aguardando o master finalizar (status: ${remote_status_file})..."
+timeout_s="${WAIT_DONE_TIMEOUT_S:-1200}"   # 20min (override via env se quiser)
+sleep_s="${WAIT_DONE_POLL_S:-3}"
+start_epoch="$(date +%s)"
+
+while true; do
+  status="$(ssh $ssh_options "${remote_user}@${master_ip}" "cat '${remote_status_file}' 2>/dev/null || true" </dev/null | tr -d '\r\n')"
+  [[ "${status}" == "DONE" ]] && break
+
+  now_epoch="$(date +%s)"
+  if (( now_epoch - start_epoch > timeout_s )); then
+    log_w "Timeout esperando DONE (>${timeout_s}s). Continuando para fetch mesmo assim."
+    break
+  fi
+  sleep "$sleep_s"
+done
+
 export REMOTE_WORK_DIR="${remote_work_dir}"
 export REMOTE_EXP_DIR="${remote_exp_dir}"
 export REMOTE_EXPERIMENT_OUTPUT_DIR="${remote_experiment_output_dir}"
