@@ -207,6 +207,38 @@ throughputsNoAuthSingleRaft[32]=""
 throughputsNoAuthSingleRaft[64]=""
 throughputsNoAuthSingleRaft[128]=""
 
+throughputsAuthDummy=$()
+throughputsAuthDummy[4]="128 256"
+throughputsAuthDummy[8]=""
+throughputsAuthDummy[16]="128 256"
+throughputsAuthDummy[32]=""
+throughputsAuthDummy[64]="128 256"
+throughputsAuthDummy[128]="128 256"
+
+throughputsNoAuthDummy=$()
+throughputsNoAuthDummy[4]=""
+throughputsNoAuthDummy[8]=""
+throughputsNoAuthDummy[16]=""
+throughputsNoAuthDummy[32]=""
+throughputsNoAuthDummy[64]=""
+throughputsNoAuthDummy[128]=""
+
+throughputsAuthSingleDummy=$()
+throughputsAuthSingleDummy[4]="128 256"
+throughputsAuthSingleDummy[8]=""
+throughputsAuthSingleDummy[16]="128 256"
+throughputsAuthSingleDummy[32]=""
+throughputsAuthSingleDummy[64]="128 256"
+throughputsAuthSingleDummy[128]="128 256"
+
+throughputsNoAuthSingleDummy=$()
+throughputsNoAuthSingleDummy[4]=""
+throughputsNoAuthSingleDummy[8]=""
+throughputsNoAuthSingleDummy[16]=""
+throughputsNoAuthSingleDummy[32]=""
+throughputsNoAuthSingleDummy[64]=""
+throughputsNoAuthSingleDummy[128]=""
+
 # ===== MultiPaxos throughput profiles =====
 throughputsAuthMultiPaxos=$()
 throughputsAuthMultiPaxos[4]="128 256"
