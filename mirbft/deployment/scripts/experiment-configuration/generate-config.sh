@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Notes:
 # RAFT:
@@ -434,6 +435,7 @@ function generateCombinations() {
                                     for requestHandlers in $requestHandlerThreadNums; do
                                       for requestBufferSize in $requestBufferSizes; do
                                         for orderer in $orderers; do
+                                          throughputs=""   # <<< ÚNICA ALTERAÇÃO: evita "throughputs: unbound variable" com set -u
                                           for cpt in $checkpointers; do
                                             for auth in $auths; do
                                               epoch=$((segmentLength * numPeers))
