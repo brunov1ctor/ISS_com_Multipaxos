@@ -1,3 +1,4 @@
+# mirbft/deployment/deploy.sh
 #!/bin/bash
 set -euo pipefail
 
@@ -40,7 +41,7 @@ ensure_local_binaries() {
   # Raiz do repositório (deployment/ fica dentro do repo)
   local repo_root="$deploy_dir/.."
 
-  # tenta achar Go no caminho padrão do Emulab
+  # tenta achar Go no caminho padrão do cluster
   if ! command -v go >/dev/null 2>&1; then
     if [ -x /usr/local/go/bin/go ]; then
       export GOROOT=/usr/local/go
@@ -136,7 +137,6 @@ pick_next_experiment_dir() {
     candidate="$(printf "%s/remote-%04d" "$root" "$idx")"
 
     # Se o diretório do experimento já existe, considera usado e pula.
-    # (Não depende de config/, porque o generate-config vai criar do jeito dele.)
     if [ -d "$candidate" ]; then
       idx=$((idx + 1))
       continue
@@ -231,7 +231,7 @@ fi
 
 ensure_local_binaries
 
-export ISS_EXPERIMENT_OUTPUT_DIR="${ISS_EXPERIMENT_OUTPUT_DIR:-/tmp/iss-Bruno/experiment-output}"
+export ISS_EXPERIMENT_OUTPUT_DIR="${ISS_EXPERIMENT_OUTPUT_DIR:-/tmp/iss-${USER:-user}/experiment-output}"
 log_info "ISS_EXPERIMENT_OUTPUT_DIR=$ISS_EXPERIMENT_OUTPUT_DIR"
 ### =========================================================
 
