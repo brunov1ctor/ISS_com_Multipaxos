@@ -84,7 +84,7 @@ func main() {
 		Int("numPeers", len(nodeIdentities)).
 		Msg("Registered with discovery server.")
 
-	// Desirialize TBLS keys
+	// Deserialize TBLS keys
 	TBLSPubKey, err := crypto.TBLSPubKeyFromBytes(serializedTBLSPubKey)
 	if err != nil {
 		logger.Fatal().Msgf("Could not deserialize TBLS public key %s", err.Error())
@@ -132,7 +132,7 @@ func main() {
 
 	// Instantiate component modules (with stubs).
 	mngr = setManager(config.Config.Manager)
-	ord = setOrderer(config.Config.Orderer)
+	ord = setOrderer(config.Config.Orderer, ownPrivateIP) // <-- CORREÇÃO
 	chkp = setCheckpointer(config.Config.Checkpointer)
 	rsp = request.NewResponder()
 
@@ -237,7 +237,7 @@ func setManager(managerType string) (mngr manager.Manager) {
 	return mngr
 }
 
-func setOrderer(ordererType string) (ord orderer.Orderer) {
+func setOrderer(ordererType string, ownPrivateIP string) (ord orderer.Orderer) {
 	switch ordererType {
 	case "Dummy":
 		ord = &orderer.DummyOrderer{}
