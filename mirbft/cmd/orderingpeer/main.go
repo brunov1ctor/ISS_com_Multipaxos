@@ -250,7 +250,11 @@ func setOrderer(ordererType string) (ord orderer.Orderer) {
 	case "MultiPaxos":
 		ord = &orderer.MultiPaxosOrderer{}
 	case "MultiPaxosMulticast":
-		ord = &orderer.MultiPaxosMulticastOrderer{}
+		// Cria wrapper multicast com UDP real por padrão
+		ord = orderer.NewMultiPaxosMulticastOrderer(true, "224.0.1.0", 8080)
+	case "MultiPaxosMulticast":
+		// Cria wrapper multicast (fallback unicast para teste)
+		ord = orderer.NewMultiPaxosMulticastOrderer(false, "", 0)
 	default:
 		logger.Fatal().Str("ordererType", ordererType).Msg("Unsupported orderer type")
 	}
