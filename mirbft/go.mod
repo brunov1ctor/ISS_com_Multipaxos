@@ -9,6 +9,7 @@ require (
 	github.com/golang/protobuf v1.5.0
 	github.com/rs/zerolog v1.34.0
 	go.dedis.ch/kyber/v3 v3.1.0
+	golang.org/x/net v0.26.0
 	google.golang.org/grpc v1.66.2
 	google.golang.org/protobuf v1.34.2
 	gopkg.in/yaml.v2 v2.4.0

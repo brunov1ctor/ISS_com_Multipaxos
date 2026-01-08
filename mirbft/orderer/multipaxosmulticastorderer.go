@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultQuorumTimeoutMs = 250
-	maxGroupIDSpace  int32 = 1024
+	maxGroupIDSpace  int32 = 8  // Limitado para evitar explosão de sockets
 )
 
 // MultiPaxosMulticastOrderer é um wrapper que adiciona capacidades de multicast
@@ -38,7 +38,7 @@ type MultiPaxosMulticastOrderer struct {
 }
 
 // NewMultiPaxosMulticastOrderer cria um wrapper multicast sobre o orderer base
-func NewMultiPaxosMulticastOrderer(useUDPMulticast bool, baseAddr string, basePort int) *MultiPaxosMulticastOrderer {
+func NewMultiPaxosMulticastOrderer(useUDPMulticast bool, baseAddr string, basePort int, ifaceAddr ...string) *MultiPaxosMulticastOrderer {
 	o := &MultiPaxosMulticastOrderer{
 		MultiPaxosOrderer: &MultiPaxosOrderer{},
 		snMembers:         make(map[int32]map[int32]struct{}),
@@ -52,9 +52,13 @@ func NewMultiPaxosMulticastOrderer(useUDPMulticast bool, baseAddr string, basePo
 
 	// Escolhe implementação de multicast
 	if useUDPMulticast {
-		if mc, err := multicast.NewUDPMulticastRouter(baseAddr, basePort); err == nil {
+		var ifaceIP string
+		if len(ifaceAddr) > 0 {
+			ifaceIP = ifaceAddr[0]
+		}
+		if mc, err := multicast.NewUDPMulticastRouter(baseAddr, basePort, ifaceIP); err == nil {
 			o.mc = mc
-			fmt.Printf("[MC][INIT] Using UDP multicast %s:%d\n", baseAddr, basePort)
+			fmt.Printf("[MC][INIT] Using UDP multicast %s:%d (iface: %s)\n", baseAddr, basePort, ifaceIP)
 		} else {
 			fmt.Printf("[MC][INIT] UDP multicast failed: %v, falling back to unicast\n", err)
 			o.mc = multicast.NewStaticRouter()

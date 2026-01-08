@@ -250,11 +250,13 @@ func setOrderer(ordererType string) (ord orderer.Orderer) {
 	case "MultiPaxos":
 		ord = &orderer.MultiPaxosOrderer{}
 	case "MultiPaxosMulticast":
-		// Cria wrapper multicast com UDP real por padrão
-		ord = orderer.NewMultiPaxosMulticastOrderer(true, "224.0.1.0", 8080)
-	case "MultiPaxosMulticast":
-		// Cria wrapper multicast (fallback unicast para teste)
-		ord = orderer.NewMultiPaxosMulticastOrderer(false, "", 0)
+		// Wrapper multicast com UDP real (grupos limitados)
+		// Configura interface via env var MC_IFACE (ex: MC_IFACE=10.1.1.1)
+		mcIface := os.Getenv("MC_IFACE")
+		if mcIface == "" {
+			mcIface = ownPrivateIP // usa IP privado do nó como fallback
+		}
+		ord = orderer.NewMultiPaxosMulticastOrderer(true, "239.0.1", 9000, mcIface)
 	default:
 		logger.Fatal().Str("ordererType", ordererType).Msg("Unsupported orderer type")
 	}
