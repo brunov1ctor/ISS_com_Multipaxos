@@ -6,6 +6,27 @@ log_i() { echo "[start-master][$(ts)] $*"; }
 log_e() { echo "[start-master][$(ts)][ERRO] $*" >&2; }
 
 # -----------------------------------------------------------------------------
+# SSH options (não-interativo + keepalive + sem prompt de hostkey)
+# -----------------------------------------------------------------------------
+SSH_OPTS=(
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=3
+  -o TCPKeepAlive=yes
+  -o ConnectTimeout=10
+  -o ConnectionAttempts=3
+  -o LogLevel=ERROR
+)
+
+ssh_cmd() { ssh "${SSH_OPTS[@]}" "$@"; }
+
+# rsync precisa usar o mesmo ssh
+RSYNC_RSH="ssh ${SSH_OPTS[*]}"
+export RSYNC_RSH
+
+# -----------------------------------------------------------------------------
 # ASSINATURA (precisa bater com deploy-remote.sh):
 #   1: remote_user
 #   2: master_ip
@@ -63,7 +84,9 @@ log_i "status_file=${status_file} ready_file=${ready_file}"
 # -----------------------------------------------------------------------------
 # Preparar diretórios remotos (work + base)
 # -----------------------------------------------------------------------------
-ssh "${remote_user}@${master_ip}" "mkdir -p '${remote_work_dir}' '${log_dir}' '${remote_base_dir}/config' '${remote_base_dir}/tls-data' '${remote_config_dir}'"
+ssh_cmd "${remote_user}@${master_ip}" "mkdir -p \
+  '${remote_work_dir}' '${log_dir}' \
+  '${remote_base_dir}/config' '${remote_base_dir}/tls-data' '${remote_config_dir}'"
 
 # -----------------------------------------------------------------------------
 # Copiar master-commands.cmd para o work dir do master
@@ -78,22 +101,25 @@ log_i "Publicando configs do experimento no master: ${exp_data_dir}/config -> ${
 rsync -az "${exp_data_dir}/config/" "${remote_user}@${master_ip}:${remote_config_dir}/"
 
 # Validar presença de um config esperado
-ssh "${remote_user}@${master_ip}" "test -s '${remote_config_dir}/config-0000.yml'" \
+ssh_cmd "${remote_user}@${master_ip}" "test -s '${remote_config_dir}/config-0000.yml'" \
   || log_e "WARN: config-0000.yml não encontrado em ${remote_config_dir} (mas continuando)"
 
 # -----------------------------------------------------------------------------
 # Iniciar discoverymaster no master (modo master)
 # -----------------------------------------------------------------------------
 log_i "starting discoverymaster..."
-ssh "${remote_user}@${master_ip}" "bash -lc '
+ssh_cmd "${remote_user}@${master_ip}" "bash -lc '
 set -euo pipefail
 
 bin=\"${remote_bin_dir}/discoverymaster\"
-test -x \"\$bin\" || { echo \"bin not found: \$bin\" >&2; exit 1; }
+if [[ ! -x \"\$bin\" ]]; then
+  echo \"bin not found or not executable: \$bin\" >&2
+  exit 1
+fi
 
-mkdir -p \"$(dirname "${status_file}")\" \"$(dirname "${ready_file}")\" \"$(dirname "${log_file}")\"
+mkdir -p \"${remote_work_dir}\" \"${log_dir}\"
 
-cur=\"$( ( test -f "${status_file}" && cat "${status_file}" || true ) | tr -d \"\r\" | tail -n 1 )\"
+cur=\"\$( ( test -f \"${status_file}\" && cat \"${status_file}\" || true ) | tr -d \"\\r\" | tail -n 1 )\"
 if [[ \"\$cur\" != \"ANALYZED\" ]]; then
   echo RUNNING > \"${status_file}\" 2>/dev/null || true
 fi
@@ -103,18 +129,17 @@ echo READY > \"${ready_file}\" 2>/dev/null || true
 addr=\"${master_ip}:${master_port}\"
 
 # FORÇA master mode
-run_cmd=(\"\$bin\" master \"\$addr\" \"${cmd_file}\")
+# (não precisa array aqui; evita pegadinhas de quoting)
+nohup \"\$bin\" master \"\$addr\" \"${cmd_file}\" >>\"${log_file}\" 2>&1 &
 
-# Start em background (para o deploy continuar)
-nohup \"\${run_cmd[@]}\" >>\"${log_file}\" 2>&1 &
 echo STARTED
 '"
 
 # -----------------------------------------------------------------------------
 # Esperar porta abrir
 # -----------------------------------------------------------------------------
-for _ in $(seq 1 30); do
-  if ssh "${remote_user}@${master_ip}" "ss -lntp | grep -q ':${master_port} '"; then
+for _ in $(seq 1 60); do
+  if ssh_cmd "${remote_user}@${master_ip}" "ss -lnt | grep -qE '[:.]${master_port}[[:space:]]'"; then
     log_i "discoverymaster LISTEN on ${master_ip}:${master_port}"
     exit 0
   fi
@@ -122,6 +147,6 @@ for _ in $(seq 1 30); do
 done
 
 log_e "discoverymaster não abriu a porta ${master_port} a tempo. Últimas linhas do log:"
-ssh "${remote_user}@${master_ip}" "tail -n 80 '${log_file}' || true" || true
+ssh_cmd "${remote_user}@${master_ip}" "tail -n 120 '${log_file}' || true" || true
 exit 1
 
