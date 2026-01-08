@@ -54,6 +54,17 @@ func (r *UnicastRouter) SendGroup(g GroupID, builder func(dst ID) *pb.ProtocolMe
 	}
 }
 
+// ===== MINIMAL FIX: increase UDP socket buffers to avoid kernel drops =====
+const udpBufBytes = 32 * 1024 * 1024 // 32MB
+
+func tuneUDPConn(conn *net.UDPConn) {
+	if conn == nil {
+		return
+	}
+	_ = conn.SetReadBuffer(udpBufBytes)
+	_ = conn.SetWriteBuffer(udpBufBytes)
+}
+
 // UDPRouter implementa multicast UDP real com join correto e identificação de grupo
 type UDPRouter struct {
 	mu        sync.RWMutex
@@ -137,6 +148,8 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 	if err != nil {
 		return nil, err
 	}
+	// MINIMAL FIX: tune socket buffers
+	tuneUDPConn(allConn)
 
 	// Cria PacketConn para envio com interface/TTL configurados
 	r.sendPConn = ipv4.NewPacketConn(allConn)
@@ -173,6 +186,8 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 			fmt.Printf("[UDP-MC] Failed to pre-create group %d: %v\n", gid, err)
 			continue
 		}
+		// MINIMAL FIX: tune socket buffers
+		tuneUDPConn(conn)
 
 		pconn := ipv4.NewPacketConn(conn)
 		group := &udpGroup{
