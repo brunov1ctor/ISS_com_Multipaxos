@@ -52,6 +52,13 @@ var CheckpointMsgHandler func(msg *pb.CheckpointMsg, senderID int32)
 var StateTransferMsgHandler func(msg *pb.ProtocolMessage)
 var OrdererMsgHandler func(msg *pb.ProtocolMessage)
 
+// HandleMessage é uma função pública para permitir que o multicast UDP chame diretamente
+func HandleMessage(msg *pb.ProtocolMessage) {
+	if OrdererMsgHandler != nil {
+		OrdererMsgHandler(msg)
+	}
+}
+
 type connectionTest struct {
 	MsgSink         pb.Messenger_ListenClient
 	DataTransmitted int // Number of bytes transmitted
