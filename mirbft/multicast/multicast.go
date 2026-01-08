@@ -5,11 +5,11 @@ import (
 	"net"
 	"sync"
 
-	"google.golang.org/protobuf/proto"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"golang.org/x/net/ipv4"
+	"google.golang.org/protobuf/proto"
 )
 
 type ID = int32
@@ -58,12 +58,12 @@ func (r *UnicastRouter) SendGroup(g GroupID, builder func(dst ID) *pb.ProtocolMe
 type UDPRouter struct {
 	mu        sync.RWMutex
 	groups    map[GroupID]*udpGroup
-	addrToGID map[string]GroupID  // mapeia IP:porta -> GroupID
-	listeners map[GroupID]*net.UDPConn  // um listener por grupo
-	sendPConn *ipv4.PacketConn    // PacketConn para envio com interface/TTL
+	addrToGID map[string]GroupID       // mapeia IP:porta -> GroupID
+	listeners map[GroupID]*net.UDPConn // um listener por grupo
+	sendPConn *ipv4.PacketConn         // PacketConn para envio com interface/TTL
 	baseAddr  string
 	basePort  int
-	iface     *net.Interface      // interface de rede configurada
+	iface     *net.Interface // interface de rede configurada
 	stopped   bool
 }
 
@@ -74,11 +74,11 @@ type udpGroup struct {
 	pconn   *ipv4.PacketConn
 }
 
+// NewUDPMulticastRouter é a implementação principal (única) do roteador UDP multicast.
 func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (Router, error) {
 	// Detecta interface de rede adequada (configurável para Emulab)
 	var iface *net.Interface
-	var err error
-	
+
 	if len(ifaceAddr) > 0 && ifaceAddr[0] != "" {
 		// Usa interface especificada por IP
 		if interfaces, err := net.Interfaces(); err == nil {
@@ -87,7 +87,8 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 					for _, addr := range addrs {
 						if ipnet, ok := addr.(*net.IPNet); ok {
 							if ipnet.IP.String() == ifaceAddr[0] {
-								iface = &i
+								ii := i // evita capturar o range var
+								iface = &ii
 								break
 							}
 						}
@@ -106,7 +107,8 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 					for _, addr := range addrs {
 						if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 							if ipnet.IP.To4() != nil { // IPv4
-								iface = &i
+								ii := i // evita capturar o range var
+								iface = &ii
 								break
 							}
 						}
@@ -139,9 +141,9 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 	// Cria PacketConn para envio com interface/TTL configurados
 	r.sendPConn = ipv4.NewPacketConn(allConn)
 	if iface != nil {
-		r.sendPConn.SetMulticastInterface(iface)
+		_ = r.sendPConn.SetMulticastInterface(iface)
 	}
-	r.sendPConn.SetMulticastTTL(2) // TTL baixo para experimentos locais
+	_ = r.sendPConn.SetMulticastTTL(2) // TTL baixo para experimentos locais
 
 	r.groups[GroupID(0)] = &udpGroup{
 		addr:    allAddr,
@@ -157,17 +159,15 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 
 	// PRÉ-CRIA grupos fixos limitados (baseado no número de nós)
 	numNodes := len(membership.AllNodeIDs())
-	maxGroups := numNodes // ou numNodes/2, etc.
+	maxGroups := numNodes
 	if maxGroups > 8 {
 		maxGroups = 8 // limite absoluto para Emulab
 	}
 
 	for gid := 1; gid <= maxGroups; gid++ {
 		port := basePort + gid
-		addr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s.%d:%d", 
-			baseAddr, gid, port))
+		addr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s.%d:%d", baseAddr, gid, port))
 
-		// Usa interface específica para Emulab
 		conn, err := net.ListenMulticastUDP("udp4", iface, addr)
 		if err != nil {
 			fmt.Printf("[UDP-MC] Failed to pre-create group %d: %v\n", gid, err)
@@ -186,7 +186,6 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 		r.listeners[GroupID(gid)] = conn
 		r.addrToGID[addr.String()] = GroupID(gid)
 
-		// Inicia receiver para este grupo
 		go r.receiveLoop(GroupID(gid), conn)
 		fmt.Printf("[UDP-MC] Pre-created group %d on %v\n", gid, addr)
 	}
@@ -195,13 +194,17 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 	return r, nil
 }
 
+// NewUDPRouter: alias de compatibilidade (se algum lugar ainda chama esse nome).
+func NewUDPRouter(baseAddr string, basePort int, ifaceAddr ...string) (Router, error) {
+	return NewUDPMulticastRouter(baseAddr, basePort, ifaceAddr...)
+}
+
 func (r *UDPRouter) DefineGroup(g GroupID, members ...ID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Usa grupos pré-criados - mapeia gid para grupo existente
 	if group, exists := r.groups[g]; exists {
-		// Atualiza membros do grupo pré-existente
 		group.members = append([]ID{}, members...)
 		fmt.Printf("[UDP-MC] Updated group %d with %d members\n", g, len(members))
 		return
@@ -228,14 +231,13 @@ func (r *UDPRouter) DefineGroup(g GroupID, members ...ID) {
 func (r *UDPRouter) SendGroup(g GroupID, builder func(dst ID) *pb.ProtocolMessage) {
 	r.mu.RLock()
 	group := r.groups[g]
-	// Se grupo não existe, mapeia para grupo pré-criado
 	if group == nil {
 		numGroups := len(r.groups) - 1
 		if numGroups > 0 {
 			mappedGID := GroupID(1 + (int(g) % numGroups))
 			group = r.groups[mappedGID]
 		} else {
-			group = r.groups[GroupID(0)] // fallback multicast "all"
+			group = r.groups[GroupID(0)]
 		}
 	}
 	sendPConn := r.sendPConn
@@ -256,11 +258,13 @@ func (r *UDPRouter) SendGroup(g GroupID, builder func(dst ID) *pb.ProtocolMessag
 	}
 
 	// Envia usando PacketConn configurado com interface/TTL
-	sendPConn.WriteTo(data, nil, group.addr)
+	_, _ = sendPConn.WriteTo(data, nil, group.addr)
 }
 
 func (r *UDPRouter) receiveLoop(gid GroupID, conn *net.UDPConn) {
+	_ = gid // se quiser usar no log depois; por ora evita “unused” se você remover prints
 	buffer := make([]byte, 64*1024)
+
 	for {
 		r.mu.RLock()
 		stopped := r.stopped
@@ -269,7 +273,7 @@ func (r *UDPRouter) receiveLoop(gid GroupID, conn *net.UDPConn) {
 			return
 		}
 
-		n, srcAddr, err := conn.ReadFromUDP(buffer)
+		n, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			continue
 		}
@@ -280,7 +284,7 @@ func (r *UDPRouter) receiveLoop(gid GroupID, conn *net.UDPConn) {
 		}
 
 		if msg.SenderId != membership.OwnID {
-			// CORREÇÃO CRÍTICA: Entrega inbound via pipeline normal
+			// Entrega inbound via pipeline normal
 			messenger.HandleMessage(&msg)
 		}
 	}
@@ -289,21 +293,21 @@ func (r *UDPRouter) receiveLoop(gid GroupID, conn *net.UDPConn) {
 func (r *UDPRouter) Close() error {
 	r.mu.Lock()
 	r.stopped = true
-	
+
 	// Fecha PacketConn de envio
 	if r.sendPConn != nil {
-		r.sendPConn.Close()
+		_ = r.sendPConn.Close()
 	}
-	
+
 	// Fecha todos os listeners
 	for gid, conn := range r.listeners {
 		if group := r.groups[gid]; group != nil && group.pconn != nil {
-			group.pconn.Close()
+			_ = group.pconn.Close()
 		}
-		conn.Close()
+		_ = conn.Close()
 	}
 	r.mu.Unlock()
-	
+
 	return nil
 }
 
@@ -312,6 +316,3 @@ func NewStaticRouter() Router {
 	return NewUnicastRouter()
 }
 
-func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (Router, error) {
-	return NewUDPRouter(baseAddr, basePort, ifaceAddr...)
-}
