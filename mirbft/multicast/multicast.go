@@ -1,6 +1,7 @@
 package multicast
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"sync"
@@ -54,33 +55,15 @@ func (r *UnicastRouter) SendGroup(g GroupID, builder func(dst ID) *pb.ProtocolMe
 	}
 }
 
-// ===== TUNING: increase UDP socket buffers to avoid kernel drops =====
-const udpBufBytes = 32 * 1024 * 1024 // 32MB
+// ----------------------------------------------------------------------------
+// UDP Multicast router
+// ----------------------------------------------------------------------------
 
-func tuneUDPConn(conn *net.UDPConn) {
-	if conn == nil {
-		return
-	}
-	_ = conn.SetReadBuffer(udpBufBytes)
-	_ = conn.SetWriteBuffer(udpBufBytes)
-}
-
-// ===== Option A: create enough UDP multicast groups (match gid space) =====
-// IMPORTANT: Keep this aligned with the orderer (e.g., MultiPaxosMulticast uses up to 8).
-const maxGroupIDSpace = 8
-
-// UDPRouter implementa multicast UDP real com join correto e identificação de grupo
 type UDPRouter struct {
-	mu sync.RWMutex
-
-	// logical group membership (what the protocol wants per gid)
-	logicalMembers map[GroupID][]ID
-
-	// physical UDP groups (what we actually joined)
-	udpGroups map[GroupID]*udpGroup
-
+	mu        sync.RWMutex
+	groups    map[GroupID]*udpGroup
 	listeners map[GroupID]*net.UDPConn
-	sendPConn  *ipv4.PacketConn // PacketConn para envio (iface/TTL)
+	sendPConn *ipv4.PacketConn
 
 	baseAddr string
 	basePort int
@@ -90,13 +73,13 @@ type UDPRouter struct {
 }
 
 type udpGroup struct {
-	addr  *net.UDPAddr
-	conn  *net.UDPConn
-	pconn *ipv4.PacketConn
+	addr    *net.UDPAddr
+	members []ID
+	conn    *net.UDPConn
+	pconn   *ipv4.PacketConn
 }
 
-// NewUDPMulticastRouter é a implementação principal (única) do roteador UDP multicast.
-func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (Router, error) {
+func NewUDPRouter(baseAddr string, basePort int, ifaceAddr ...string) (Router, error) {
 	// Detecta interface de rede adequada (configurável para Emulab)
 	var iface *net.Interface
 
@@ -108,8 +91,7 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 					for _, addr := range addrs {
 						if ipnet, ok := addr.(*net.IPNet); ok {
 							if ipnet.IP.String() == ifaceAddr[0] {
-								ii := i
-								iface = &ii
+								iface = &i
 								break
 							}
 						}
@@ -128,8 +110,7 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 					for _, addr := range addrs {
 						if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 							if ipnet.IP.To4() != nil {
-								ii := i
-								iface = &ii
+								iface = &i
 								break
 							}
 						}
@@ -143,44 +124,47 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 	}
 
 	r := &UDPRouter{
-		logicalMembers: make(map[GroupID][]ID),
-		udpGroups:      make(map[GroupID]*udpGroup),
-		listeners:      make(map[GroupID]*net.UDPConn),
-		sendPConn:      nil,
-		baseAddr:       baseAddr,
-		basePort:       basePort,
-		iface:          iface,
+		groups:    make(map[GroupID]*udpGroup),
+		listeners: make(map[GroupID]*net.UDPConn),
+		sendPConn: nil,
+		baseAddr:  baseAddr,
+		basePort:  basePort,
+		iface:     iface,
 	}
 
-	// Grupo "all" via multicast (não broadcast) - usa porta base
+	// Grupo "all" via multicast - usa porta base
 	allAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s.0:%d", baseAddr, basePort))
 	allConn, err := net.ListenMulticastUDP("udp4", iface, allAddr)
 	if err != nil {
 		return nil, err
 	}
-	tuneUDPConn(allConn)
 
-	// PacketConn para envio (com interface/TTL)
+	// PacketConn para envio configurado (iface/TTL)
 	r.sendPConn = ipv4.NewPacketConn(allConn)
 	if iface != nil {
 		_ = r.sendPConn.SetMulticastInterface(iface)
 	}
 	_ = r.sendPConn.SetMulticastTTL(2)
 
-	r.udpGroups[GroupID(0)] = &udpGroup{
-		addr:  allAddr,
-		conn:  allConn,
-		pconn: ipv4.NewPacketConn(allConn),
+	r.groups[GroupID(0)] = &udpGroup{
+		addr:    allAddr,
+		members: membership.AllNodeIDs(),
+		conn:    allConn,
+		pconn:   ipv4.NewPacketConn(allConn),
 	}
 	r.listeners[GroupID(0)] = allConn
 
-	// logical "all"
-	r.logicalMembers[GroupID(0)] = membership.AllNodeIDs()
-
+	// Receiver do grupo "all"
 	go r.receiveLoop(GroupID(0), allConn)
 
-	// === Opção A: pré-criar SEMPRE 1..maxGroupIDSpace (8) ===
-	for gid := 1; gid <= maxGroupIDSpace; gid++ {
+	// Pré-cria grupos fixos (limitado)
+	numNodes := len(membership.AllNodeIDs())
+	maxGroups := numNodes
+	if maxGroups > 8 {
+		maxGroups = 8
+	}
+
+	for gid := 1; gid <= maxGroups; gid++ {
 		port := basePort + gid
 		addr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s.%d:%d", baseAddr, gid, port))
 
@@ -189,97 +173,155 @@ func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (
 			fmt.Printf("[UDP-MC] Failed to pre-create group %d: %v\n", gid, err)
 			continue
 		}
-		tuneUDPConn(conn)
 
-		pconn := ipv4.NewPacketConn(conn)
-		r.udpGroups[GroupID(gid)] = &udpGroup{
-			addr:  addr,
-			conn:  conn,
-			pconn: pconn,
+		group := &udpGroup{
+			addr:    addr,
+			members: []ID{},
+			conn:    conn,
+			pconn:   ipv4.NewPacketConn(conn),
 		}
+
+		r.groups[GroupID(gid)] = group
 		r.listeners[GroupID(gid)] = conn
 
 		go r.receiveLoop(GroupID(gid), conn)
 		fmt.Printf("[UDP-MC] Pre-created group %d on %v\n", gid, addr)
 	}
 
-	fmt.Printf("[UDP-MC] Initialized with %d pre-created groups, interface: %v\n", maxGroupIDSpace, iface)
+	fmt.Printf("[UDP-MC] Initialized with %d pre-created groups, interface: %v\n", maxGroups, iface)
 	return r, nil
-}
-
-// NewUDPRouter: alias de compatibilidade (se algum lugar ainda chama esse nome).
-func NewUDPRouter(baseAddr string, basePort int, ifaceAddr ...string) (Router, error) {
-	return NewUDPMulticastRouter(baseAddr, basePort, ifaceAddr...)
-}
-
-// mapLogicalToPhysical maps any logical gid to an existing UDP group.
-// If gid is within 1..maxGroupIDSpace, it's a 1:1 mapping.
-// If gid is outside, we wrap into 1..maxGroupIDSpace (never to 0).
-func mapLogicalToPhysical(g GroupID) GroupID {
-	if g == 0 {
-		return 0
-	}
-	if g <= GroupID(maxGroupIDSpace) {
-		return g
-	}
-	// wrap into [1..maxGroupIDSpace]
-	return GroupID(1 + (uint32(g-1) % uint32(maxGroupIDSpace)))
 }
 
 func (r *UDPRouter) DefineGroup(g GroupID, members ...ID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.logicalMembers[g] = append([]ID{}, members...)
-
-	pg := mapLogicalToPhysical(g)
-	if pg == 0 {
-		// "all" is fixed
+	// Se grupo existe, atualiza membros
+	if group, exists := r.groups[g]; exists {
+		group.members = append([]ID{}, members...)
+		fmt.Printf("[UDP-MC] Updated group %d with %d members\n", g, len(members))
 		return
 	}
 
-	if _, ok := r.udpGroups[pg]; ok {
-		fmt.Printf("[UDP-MC] DefineGroup logical=%d -> physical=%d members=%d\n", g, pg, len(members))
-		return
+	// Se não existe, mapeia para algum pré-criado (round-robin)
+	numGroups := len(r.groups) - 1 // exclui grupo 0
+	if numGroups > 0 {
+		mappedGID := GroupID(1 + (int(g) % numGroups))
+		if mappedGroup, exists := r.groups[mappedGID]; exists {
+			mappedGroup.members = append([]ID{}, members...)
+			fmt.Printf("[UDP-MC] Mapped group %d -> %d with %d members\n", g, mappedGID, len(members))
+			return
+		}
 	}
 
-	// If somehow physical group is missing, fallback to 0 (should not happen with precreate 1..8)
-	fmt.Printf("[UDP-MC] DefineGroup logical=%d -> physical missing, fallback to 0 members=%d\n", g, len(members))
+	// Fallback final: grupo 0 (all)
+	if group0, exists := r.groups[GroupID(0)]; exists {
+		group0.members = append([]ID{}, members...)
+		fmt.Printf("[UDP-MC] Fallback group %d -> 0 (all) with %d members\n", g, len(members))
+	}
 }
 
 func (r *UDPRouter) SendGroup(g GroupID, builder func(dst ID) *pb.ProtocolMessage) {
+	// Resolve grupo (inclui mapeamento)
 	r.mu.RLock()
+	group := r.groups[g]
+	if group == nil {
+		numGroups := len(r.groups) - 1
+		if numGroups > 0 {
+			mappedGID := GroupID(1 + (int(g) % numGroups))
+			group = r.groups[mappedGID]
+		} else {
+			group = r.groups[GroupID(0)]
+		}
+	}
 	sendPConn := r.sendPConn
-	members := r.logicalMembers[g]
-	pg := mapLogicalToPhysical(g)
-	group := r.udpGroups[pg]
 	r.mu.RUnlock()
 
-	if sendPConn == nil || group == nil || len(members) == 0 {
+	if group == nil || sendPConn == nil || len(group.members) == 0 {
 		return
 	}
 
-	// Build a representative message (dst not used for multicast)
-	msg := builder(members[0])
-	if msg == nil {
+	// ---------------------------
+	// MUDANÇA MÍNIMA #1:
+	// Verifica se builder(dst) gera mensagens idênticas.
+	// Se não forem idênticas, faz fallback para unicast (sem quebrar semântica).
+	// ---------------------------
+	var (
+		refBytes []byte
+		allEqual = true
+	)
+
+	// Monta bytes para o primeiro destino (que não seja eu)
+	var firstDst ID = -1
+	for _, dst := range group.members {
+		if dst == membership.OwnID {
+			continue
+		}
+		firstDst = dst
+		break
+	}
+	if firstDst == -1 {
 		return
 	}
 
-	data, err := proto.Marshal(msg)
+	refMsg := builder(firstDst)
+	if refMsg == nil {
+		return
+	}
+	b0, err := proto.Marshal(refMsg)
 	if err != nil {
 		return
 	}
+	refBytes = b0
 
-	_, _ = sendPConn.WriteTo(data, nil, group.addr)
+	// Compara com os demais destinos (se houver diferenças, fallback)
+	for _, dst := range group.members {
+		if dst == membership.OwnID || dst == firstDst {
+			continue
+		}
+		msg := builder(dst)
+		if msg == nil {
+			// Se builder decide não enviar para alguém, multicast não serve => fallback
+			allEqual = false
+			break
+		}
+		bi, err := proto.Marshal(msg)
+		if err != nil {
+			allEqual = false
+			break
+		}
+		if !bytes.Equal(refBytes, bi) {
+			allEqual = false
+			break
+		}
+	}
+
+	if !allEqual {
+		// Fallback correto: envia unicast normal (mantém semântica)
+		for _, dst := range group.members {
+			if dst == membership.OwnID {
+				continue
+			}
+			if msg := builder(dst); msg != nil {
+				messenger.EnqueueMsg(msg, dst)
+			}
+		}
+		return
+	}
+
+	// Multicast “real”: 1 envio para o endereço do grupo
+	_, _ = sendPConn.WriteTo(refBytes, nil, group.addr)
 }
 
 func (r *UDPRouter) receiveLoop(gid GroupID, conn *net.UDPConn) {
 	buffer := make([]byte, 64*1024)
-
 	for {
 		r.mu.RLock()
 		stopped := r.stopped
+		// snapshot do grupo para filtro rápido (mudança mínima)
+		group := r.groups[gid]
 		r.mu.RUnlock()
+
 		if stopped {
 			return
 		}
@@ -294,11 +336,33 @@ func (r *UDPRouter) receiveLoop(gid GroupID, conn *net.UDPConn) {
 			continue
 		}
 
-		// Avoid processing our own multicast sends
-		if msg.SenderId != membership.OwnID {
-			messenger.HandleMessage(&msg)
+		// Ignora eco próprio
+		if msg.SenderId == membership.OwnID {
+			continue
+		}
+
+		// ---------------------------
+		// MUDANÇA MÍNIMA #2:
+		// Entrega só se eu pertenço ao grupo (exceto gid==0 que é "all").
+		// Isso evita que todo mundo processe tudo só porque deu join no grupo.
+		// ---------------------------
+		if gid != GroupID(0) && group != nil {
+			if !idInList(membership.OwnID, group.members) {
+				continue
+			}
+		}
+
+		messenger.HandleMessage(&msg)
+	}
+}
+
+func idInList(id ID, members []ID) bool {
+	for _, m := range members {
+		if m == id {
+			return true
 		}
 	}
+	return false
 }
 
 func (r *UDPRouter) Close() error {
@@ -310,7 +374,7 @@ func (r *UDPRouter) Close() error {
 	}
 
 	for gid, conn := range r.listeners {
-		if group := r.udpGroups[gid]; group != nil && group.pconn != nil {
+		if group := r.groups[gid]; group != nil && group.pconn != nil {
 			_ = group.pconn.Close()
 		}
 		_ = conn.Close()
@@ -323,5 +387,10 @@ func (r *UDPRouter) Close() error {
 // Factory functions
 func NewStaticRouter() Router {
 	return NewUnicastRouter()
+}
+
+// Mantém o nome esperado pelos chamadores
+func NewUDPMulticastRouter(baseAddr string, basePort int, ifaceAddr ...string) (Router, error) {
+	return NewUDPRouter(baseAddr, basePort, ifaceAddr...)
 }
 
