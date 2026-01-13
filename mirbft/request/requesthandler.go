@@ -69,6 +69,20 @@ func HandleRequest(req *pb.ClientRequest) {
 }
 
 func GetBucketByHashing(req *pb.ClientRequest) *Bucket {
+	// Use user-defined group_id for bucket selection
+	if req.GroupId > 0 {
+		// User provided logical key - map directly to bucket
+		// Ensure GroupId maps to valid bucket range
+		bucketId := int(req.GroupId - 1) // GroupId 1-N maps to bucket 0-(N-1)
+		if bucketId >= 0 && bucketId < config.Config.NumBuckets {
+			return Buckets[bucketId]
+		}
+		// If GroupId out of range, use modulo as fallback
+		bucketId = int(req.GroupId % uint32(config.Config.NumBuckets))
+		return Buckets[bucketId]
+	}
+	
+	// Fallback to original hash-based routing for compatibility
 	H := new(big.Int)
 	H.SetString(crypto.Hspace, 10)
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -236,6 +237,7 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		},
 		Payload:   randomRequestPayload,
 		Signature: nil,
+		GroupId:   parseGroupId(), // User-defined group
 	}
 
 	// Sign request message.
@@ -731,5 +733,17 @@ func bucketAssignmentToString(assignment *pb.BucketAssignment) string {
 		}
 	}
 	return result
+}
+
+// parseGroupId parses MIR_GROUP_ID environment variable
+func parseGroupId() uint32 {
+	groupStr := os.Getenv("MIR_GROUP_ID")
+	if groupStr == "" {
+		return 0 // Default group
+	}
+	if groupId, err := strconv.ParseUint(groupStr, 10, 32); err == nil {
+		return uint32(groupId)
+	}
+	return 0
 }
 
