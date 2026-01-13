@@ -3,9 +3,9 @@ package orderer
 import (
 	"fmt"
 	"sync"
-	"time"
 
 	"google.golang.org/protobuf/proto"
+
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
@@ -19,7 +19,9 @@ const (
 // MultiPaxosMulticastOrderer uses group-based communication with existing MIR batches
 type MultiPaxosMulticastOrderer struct {
 	*MultiPaxosOrderer // Composição: reutiliza toda lógica base
-	am *AtomicMulticast  // Selective atomic multicast interface
+	am                *AtomicMulticast // Selective atomic multicast interface
+
+	composedMu   sync.RWMutex
 	composedWith map[string]*MultiPaxosMulticastOrderer // Connected SMRs
 }
 
@@ -27,8 +29,8 @@ type MultiPaxosMulticastOrderer struct {
 func NewMultiPaxosMulticastOrderer() *MultiPaxosMulticastOrderer {
 	o := &MultiPaxosMulticastOrderer{
 		MultiPaxosOrderer: &MultiPaxosOrderer{},
-		am:          NewAtomicMulticast(),
-		composedWith: make(map[string]*MultiPaxosMulticastOrderer),
+		am:                NewAtomicMulticast(),
+		composedWith:      make(map[string]*MultiPaxosMulticastOrderer),
 	}
 
 	fmt.Printf("[MPX-MC][INIT] Using group-based communication with MIR batches\n")
@@ -59,7 +61,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 		case *pb.MPxMsg_Commit:
 			groupID = GroupID(msg.Commit.GetGroupId())
 		}
-		
+
 		if groupID == 0 {
 			// Broadcast para todos se não há grupo específico
 			o.am.Multicast(0, pm, o.emitToMembers)
@@ -104,9 +106,10 @@ func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
 
 // ComposeWith connects this SMR with another SMR for composition
 func (o *MultiPaxosMulticastOrderer) ComposeWith(name string, other *MultiPaxosMulticastOrderer) {
-	o.mu.Lock()
+	o.composedMu.Lock()
 	o.composedWith[name] = other
-	o.mu.Unlock()
+	o.composedMu.Unlock()
+
 	fmt.Printf("[CSMR] Connected SMR component: %s\n", name)
 }
 
@@ -115,15 +118,21 @@ func (o *MultiPaxosMulticastOrderer) ExecuteAndForward(data []byte, targetCompon
 	// Execute locally first (existing Paxos)
 	pm := &pb.ProtocolMessage{
 		SenderId: membership.OwnID,
-		Sn: 0, // Will be set by Paxos
-		// Add data to message
+		Sn:       0, // Will be set by Paxos
+		// TODO: se você tiver um campo no proto pra payload (ex.: Request/Batch/Data),
+		// coloque o "data" nele aqui.
 	}
+
 	o.am.Multicast(0, pm, o.emitToMembers)
-	
-	// Forward to composed SMR
+
+	// Forward to composed SMR (com leitura protegida)
+	o.composedMu.RLock()
 	target := o.composedWith[targetComponent]
+	o.composedMu.RUnlock()
+
 	if target != nil {
 		target.am.Multicast(targetGroup, pm, target.emitToMembers)
 		fmt.Printf("[CSMR] Forwarded to component %s group %d\n", targetComponent, targetGroup)
 	}
 }
+
