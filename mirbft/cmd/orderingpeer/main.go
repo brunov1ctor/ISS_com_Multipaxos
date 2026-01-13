@@ -133,7 +133,9 @@ func main() {
 
 	// Instantiate component modules (with stubs).
 	mngr = setManager(config.Config.Manager)
-	ord = setOrderer(config.Config.Orderer, ownPrivateIP) // <-- CORREÇÃO
+
+	ord = setOrderer(config.Config.Orderer, ownPrivateIP, configFileName)
+
 	chkp = setCheckpointer(config.Config.Checkpointer)
 	rsp = request.NewResponder()
 
@@ -238,7 +240,7 @@ func setManager(managerType string) (mngr manager.Manager) {
 	return mngr
 }
 
-func setOrderer(ordererType string, ownPrivateIP string) (ord orderer.Orderer) {
+func setOrderer(ordererType string, ownPrivateIP string, configFileName string) (ord orderer.Orderer) {
 	switch ordererType {
 	case "Dummy":
 		ord = &orderer.DummyOrderer{}
@@ -257,7 +259,7 @@ func setOrderer(ordererType string, ownPrivateIP string) (ord orderer.Orderer) {
 			groupsFile := os.Getenv("MIR_GROUPS_FILE")
 			if groupsFile == "" {
 				// Caminho relativo ao config principal
-				configDir := strings.TrimSuffix(configFileName, "/"+filepath.Base(configFileName))
+				configDir := filepath.Dir(configFileName)
 				groupsFile = filepath.Join(configDir, "groups.yml")
 			}
 			if err := mcOrd.LoadGroupsFromYAML(groupsFile); err != nil {
