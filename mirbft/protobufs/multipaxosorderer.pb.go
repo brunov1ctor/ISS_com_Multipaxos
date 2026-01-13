@@ -129,6 +129,7 @@ type MPxPrepare struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Ballot        uint64                 `protobuf:"varint,2,opt,name=ballot,proto3" json:"ballot,omitempty"`
+	GroupId       uint32                 `protobuf:"varint,3,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"` // grupo do batch (bucket)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -173,6 +174,13 @@ func (x *MPxPrepare) GetId() *MPxInstanceId {
 func (x *MPxPrepare) GetBallot() uint64 {
 	if x != nil {
 		return x.Ballot
+	}
+	return 0
+}
+
+func (x *MPxPrepare) GetGroupId() uint32 {
+	if x != nil {
+		return x.GroupId
 	}
 	return 0
 }

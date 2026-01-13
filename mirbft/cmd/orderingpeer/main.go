@@ -253,7 +253,7 @@ func setOrderer(ordererType string, ownPrivateIP string, configFileName string) 
 	case "MultiPaxos":
 		ord = &orderer.MultiPaxosOrderer{}
 	case "MultiPaxosMulticast":
-		ord = orderer.NewMultiPaxosMulticastOrderer()
+		ord = &orderer.MultiPaxosMulticastOrderer{}
 		if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
 			// Use env var ou caminho relativo ao config principal
 			groupsFile := os.Getenv("MIR_GROUPS_FILE")

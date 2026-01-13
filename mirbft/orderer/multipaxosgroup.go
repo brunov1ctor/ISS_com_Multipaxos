@@ -19,22 +19,9 @@ type AtomicMulticast struct {
 	groups map[GroupID][]int32
 }
 
-// GroupConfig represents YAML configuration for groups and compositions
+// GroupConfig represents YAML configuration for groups
 type GroupConfig struct {
-	Groups       map[GroupID][]int32    `yaml:"groups"`
-	Compositions []CompositionConfig    `yaml:"compositions"`
-}
-
-// CompositionConfig defines how SMRs are composed
-type CompositionConfig struct {
-	Name  string           `yaml:"name"`
-	Steps []CompositionStep `yaml:"steps"`
-}
-
-// CompositionStep defines one step in a composed operation
-type CompositionStep struct {
-	Component string  `yaml:"component"`
-	Group     GroupID `yaml:"group"`
+	Groups map[GroupID][]int32 `yaml:"groups"`
 }
 
 // NewAtomicMulticast creates atomic multicast with selective delivery
@@ -85,11 +72,6 @@ func (am *AtomicMulticast) LoadGroupsFromYAML(filename string) error {
 	for gid, members := range config.Groups {
 		am.DefineGroup(gid, members...)
 		fmt.Printf("[MPX-MC][CONFIG] Loaded group %d: %v\n", gid, members)
-	}
-
-	// Log compositions (setup would be done externally)
-	for _, comp := range config.Compositions {
-		fmt.Printf("[CSMR][CONFIG] Composition %s with %d steps\n", comp.Name, len(comp.Steps))
 	}
 
 	return nil
