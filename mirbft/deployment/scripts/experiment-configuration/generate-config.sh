@@ -113,6 +113,7 @@ function skip() {
 
 throughputsAuthPbft=$()
 throughputsAuthPbft[4]="128 256"
+throughputsAuthPbft[5]="128 256"
 throughputsAuthPbft[8]=""
 throughputsAuthPbft[16]="128 256"
 throughputsAuthPbft[32]=""
@@ -129,6 +130,7 @@ throughputsNoAuthPbft[128]=""
 
 throughputsAuthSinglePbft=$()
 throughputsAuthSinglePbft[4]="128 256"
+throughputsAuthSinglePbft[5]="128 256"
 throughputsAuthSinglePbft[8]=""
 throughputsAuthSinglePbft[16]="128 256"
 throughputsAuthSinglePbft[32]=""
@@ -145,6 +147,7 @@ throughputsNoAuthSinglePbft[128]=""
 
 throughputsAuthHotStuff=$()
 throughputsAuthHotStuff[4]="128 256"
+throughputsAuthHotStuff[5]="128 256"
 throughputsAuthHotStuff[8]=""
 throughputsAuthHotStuff[16]="128 256"
 throughputsAuthHotStuff[32]=""
@@ -161,6 +164,7 @@ throughputsNoAuthHotStuff[128]=""
 
 throughputsAuthSingleHotStuff=$()
 throughputsAuthSingleHotStuff[4]="128 256"
+throughputsAuthSingleHotStuff[5]="128 256"
 throughputsAuthSingleHotStuff[8]=""
 throughputsAuthSingleHotStuff[16]="128 256"
 throughputsAuthSingleHotStuff[32]=""
@@ -177,6 +181,7 @@ throughputsNoAuthSingleHotStuff[128]=""
 
 throughputsAuthRaft=$()
 throughputsAuthRaft[4]="128 256"
+throughputsAuthRaft[5]="128 256"
 throughputsAuthRaft[8]=""
 throughputsAuthRaft[16]="128 256"
 throughputsAuthRaft[32]=""
@@ -193,6 +198,7 @@ throughputsNoAuthRaft[128]=""
 
 throughputsAuthSingleRaft=$()
 throughputsAuthSingleRaft[4]="128 256"
+throughputsAuthSingleRaft[5]="128 256"
 throughputsAuthSingleRaft[8]=""
 throughputsAuthSingleRaft[16]="128 256"
 throughputsAuthSingleRaft[32]=""
@@ -210,6 +216,7 @@ throughputsNoAuthSingleRaft[128]=""
 # ===== MultiPaxos throughput profiles =====
 throughputsAuthMultiPaxos=$()
 throughputsAuthMultiPaxos[4]="128 256"
+throughputsAuthMultiPaxos[5]="128 256"
 throughputsAuthMultiPaxos[8]=""
 throughputsAuthMultiPaxos[16]="128 256"
 throughputsAuthMultiPaxos[32]=""
@@ -226,6 +233,7 @@ throughputsNoAuthMultiPaxos[128]=""
 
 throughputsAuthSingleMultiPaxos=$()
 throughputsAuthSingleMultiPaxos[4]="128 256"
+throughputsAuthSingleMultiPaxos[5]="128 256"
 throughputsAuthSingleMultiPaxos[8]=""
 throughputsAuthSingleMultiPaxos[16]="128 256"
 throughputsAuthSingleMultiPaxos[32]=""
