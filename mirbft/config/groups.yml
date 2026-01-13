@@ -1,0 +1,18 @@
+groups:
+  1: [0, 1, 2]      # Storage SMR
+  2: [3, 4, 5]      # Index SMR  
+  3: [0, 2, 4]      # Cache SMR
+
+compositions:
+  - name: "distributed_write"
+    steps:
+      - component: "storage"
+        group: 1
+      - component: "index"
+        group: 2
+  - name: "cached_read"
+    steps:
+      - component: "cache"
+        group: 3
+      - component: "storage"
+        group: 1
