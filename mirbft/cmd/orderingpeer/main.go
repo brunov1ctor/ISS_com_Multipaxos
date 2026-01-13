@@ -250,13 +250,14 @@ func setOrderer(ordererType string, ownPrivateIP string) (ord orderer.Orderer) {
 	case "MultiPaxos":
 		ord = &orderer.MultiPaxosOrderer{}
 	case "MultiPaxosMulticast":
-		// Wrapper multicast com UDP real (grupos limitados)
-		// Configura interface via env var MC_IFACE (ex: MC_IFACE=10.1.1.1)
-		mcIface := os.Getenv("MC_IFACE")
-		if mcIface == "" {
-			mcIface = ownPrivateIP // usa IP privado do nó como fallback
+		// Orderer com suporte a grupos e composição SMR
+		ord = orderer.MultiPaxosMulticastOrderer()
+		// Carrega configuração de grupos se existir
+		if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
+			if err := mcOrd.LoadGroupsFromYAML("mirbft/config/groups.yml"); err != nil {
+				logger.Warn().Err(err).Msg("Could not load groups config, using defaults")
+			}
 		}
-		ord = orderer.NewMultiPaxosMulticastOrderer(true, "239.0.1", 9000, mcIface)
 	default:
 		logger.Fatal().Str("ordererType", ordererType).Msg("Unsupported orderer type")
 	}

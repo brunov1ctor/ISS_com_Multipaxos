@@ -36,8 +36,8 @@ type MultiPaxosMulticastOrderer struct {
 	lastAccept  map[int32]*pb.ProtocolMessage       // última msg Accept (para reenvio)
 }
 
-// NewMultiPaxosMulticastOrderer creates a new orderer with group-based communication
-func NewMultiPaxosMulticastOrderer() *MultiPaxosMulticastOrderer {
+// MultiPaxosMulticastOrderer creates a new orderer with group-based communication
+func MultiPaxosMulticastOrderer() *MultiPaxosMulticastOrderer {
 	o := &MultiPaxosMulticastOrderer{
 		MultiPaxosOrderer: &MultiPaxosOrderer{},
 		am:          NewAtomicMulticast(),
