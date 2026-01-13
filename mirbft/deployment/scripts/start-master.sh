@@ -100,6 +100,12 @@ rsync -az "${local_master_cmd}" "${remote_user}@${master_ip}:${cmd_file}"
 log_i "Publicando configs do experimento no master: ${exp_data_dir}/config -> ${remote_config_dir}/"
 rsync -az "${exp_data_dir}/config/" "${remote_user}@${master_ip}:${remote_config_dir}/"
 
+# Copiar groups.yml se existir
+if [[ -f "${exp_data_dir}/../mirbft/config/groups.yml" ]]; then
+  log_i "Copiando groups.yml para o master"
+  rsync -az "${exp_data_dir}/../mirbft/config/groups.yml" "${remote_user}@${master_ip}:${remote_config_dir}/"
+fi
+
 # Validar presença de um config esperado
 ssh_cmd "${remote_user}@${master_ip}" "test -s '${remote_config_dir}/config-0000.yml'" \
   || log_e "WARN: config-0000.yml não encontrado em ${remote_config_dir} (mas continuando)"

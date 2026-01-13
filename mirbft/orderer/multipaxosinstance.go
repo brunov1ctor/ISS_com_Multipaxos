@@ -32,6 +32,7 @@ type mpxInstance struct {
 
 	parent *MultiPaxosOrderer
 	sn     int32
+	bucketId uint32 // Bucket ID from user request
 
 	maxBatchSize  int
 	proposeEvery  time.Duration
@@ -70,6 +71,7 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, ma
 	inst := &mpxInstance{
 		parent:         parent,
 		sn:             sn,
+		bucketId:       0, // Default para broadcast (será atualizado se necessário)
 		maxBatchSize:   maxBatch,
 		proposeEvery:   interval,
 		announce:       announce,
@@ -293,7 +295,7 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 			Commit: &pb.MPxCommit{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 				Value:   i.lastVal,
-				GroupId: uint32(i.sn), // gid por SN; orderer multicast roteia
+				GroupId: i.bucketId, // Usa bucket do usuário
 			},
 		}}
 		pmOut := &pb.ProtocolMessage{
@@ -302,7 +304,7 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: commit},
 		}
 		if i.parent.emit != nil {
-			fmt.Printf("[MPX][NET] SEND Commit sn=%d gid=%d digest=%x\n", i.sn, uint32(i.sn), i.lastDigest[:8])
+			fmt.Printf("[MPX][NET] SEND Commit sn=%d gid=%d digest=%x\n", i.sn, i.bucketId, i.lastDigest[:8])
 			i.parent.emit(pmOut) // roteador do orderer decide grupo
 		}
 	}
@@ -311,7 +313,7 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
 		val := i.lastVal
 		i.mu.Unlock()
-		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Value: val, GroupId: uint32(i.sn)})
+		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Value: val, GroupId: i.bucketId})
 		i.mu.Lock()
 	}
 }
@@ -437,9 +439,20 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			return
 		}
+		
+		// Valida homogeneidade do batch (1 batch = 1 bucket) - agora redundante mas mantido como safety check
+		if !i.validateBatchHomogeneity(rb) {
+			return // Não deveria acontecer com CutBatchFromBucket
+		}
+		
 		i.lastReqBatch = rb
 		batchMsg := rb.Message()
 		reqs = len(batchMsg.Requests)
+
+		// Extrai bucket do primeiro request do batch
+		if len(batchMsg.Requests) > 0 {
+			i.bucketId = batchMsg.Requests[0].GetGroupId()
+		}
 
 		fmt.Printf("PROPOSE sn=%d size=%d\n", i.sn, reqs)
 
@@ -470,7 +483,7 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot:  0,
 		Value:   val,
-		GroupId: uint32(i.sn), // gid: 1 grupo por SN; orderer multicast decide membros
+		GroupId: i.bucketId, // Usa bucket do usuário
 	}}}
 	pm := &pb.ProtocolMessage{
 		SenderId: membership.OwnID,
@@ -478,7 +491,7 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accept},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[MPX][NET] SEND Accept sn=%d bytes=%d gid=%d digest=%x\n", i.sn, len(val.GetBatch()), uint32(i.sn), i.lastDigest[:8])
+		fmt.Printf("[MPX][NET] SEND Accept sn=%d bytes=%d gid=%d digest=%x\n", i.sn, len(val.GetBatch()), i.bucketId, i.lastDigest[:8])
 		i.parent.emit(pm)
 	} else {
 		fmt.Printf("[MPX][NET][WARN] emit=nil; não enviou Accept sn=%d\n", i.sn)
@@ -504,12 +517,12 @@ func (i *mpxInstance) tick(now time.Time) {
 							Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 							Ballot:  0,
 							Value:   i.lastVal,
-							GroupId: uint32(i.sn),
+							GroupId: i.bucketId, // Usa bucket do usuário
 						},
 					}},
 				},
 			}
-			fmt.Printf("[MPX][RTX] RESEND Accept sn=%d gid=%d digest=%x\n", i.sn, uint32(i.sn), i.lastDigest[:8])
+			fmt.Printf("[MPX][RTX] RESEND Accept sn=%d gid=%d digest=%x\n", i.sn, i.bucketId, i.lastDigest[:8])
 			i.parent.emit(pm)
 			i.lastAcceptAt = now
 		}
@@ -520,14 +533,14 @@ func (i *mpxInstance) tick(now time.Time) {
 		i.acceptCount < i.quorum &&
 		now.Sub(i.lastAcceptAt) >= i.sbNilAfter {
 
-		fmt.Printf("[MPX][NIL] TIMEOUT → DELIVER ⊥ sn=%d gid=%d\n", i.sn, uint32(i.sn))
+		fmt.Printf("[MPX][NIL] TIMEOUT → DELIVER ⊥ sn=%d gid=%d\n", i.sn, i.bucketId)
 
 		i.phase = phaseCommitted
 		nilCommit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
 			Commit: &pb.MPxCommit{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 				Value:   nil,
-				GroupId: uint32(i.sn),
+				GroupId: i.bucketId, // Usa bucket do usuário
 			},
 		}}
 		pmOut := &pb.ProtocolMessage{
@@ -550,10 +563,21 @@ func (i *mpxInstance) cutReqBatch() *request.Batch {
 	if i.seg == nil {
 		return nil
 	}
-	size := i.seg.BatchSize()
-	timeout := i.proposeEvery
-	i.seg.Buckets().WaitForRequests(int(size), timeout)
-	return i.seg.Buckets().CutBatch(int(size), timeout)
+	
+	// Escolhe bucket com requests (round-robin simples)
+	bucketIDs := i.seg.Buckets().GetBucketIDs()
+	for _, bucketID := range bucketIDs {
+		if request.Buckets[bucketID].Len() > 0 {
+			// Corta batch apenas deste bucket
+			size := i.seg.BatchSize()
+			timeout := i.proposeEvery
+			batch := i.seg.Buckets().CutBatchFromBucket(bucketID, int(size), timeout)
+			if len(batch.Requests) > 0 {
+				return batch
+			}
+		}
+	}
+	return nil
 }
 
 func (i *mpxInstance) getFallbackLeaderLocked() int32 {
@@ -589,5 +613,25 @@ func tracePropose(sn int32, size int) {
 func traceCommit(sn int32, size int) {
 	tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(size))
 	fmt.Printf("[MPX] COMMIT  sn=%d size=%d\n", sn, size)
+}
+
+// validateBatchHomogeneity checks if all requests in batch have same GroupId
+func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
+	reqs := batch.Message().Requests
+	if len(reqs) == 0 {
+		return true
+	}
+	
+	firstGroupId := reqs[0].GetGroupId()
+	for _, req := range reqs {
+		if req.GetGroupId() != firstGroupId {
+			fmt.Printf("[MPX][WARN] Heterogeneous batch sn=%d: first=%d current=%d → returning requests\n", 
+				i.sn, firstGroupId, req.GetGroupId())
+			// Retorna requests para seus buckets corretos
+			batch.Resurrect()
+			return false
+		}
+	}
+	return true
 }
 

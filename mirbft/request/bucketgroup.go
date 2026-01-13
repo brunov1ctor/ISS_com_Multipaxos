@@ -269,3 +269,37 @@ func (bg *BucketGroup) unlockBuckets() {
 		b.Unlock()
 	}
 }
+
+// CutBatchFromBucket cuts batch from a specific bucket only
+func (bg *BucketGroup) CutBatchFromBucket(bucketID int, size int, timeout time.Duration) *Batch {
+	// Find the specific bucket
+	var targetBucket *Bucket
+	for _, b := range bg.buckets {
+		if b.id == bucketID {
+			targetBucket = b
+			break
+		}
+	}
+	
+	if targetBucket == nil {
+		return &Batch{Requests: make([]*Request, 0)} // Empty batch
+	}
+	
+	// Lock only the target bucket
+	targetBucket.Lock()
+	
+	// Wait for requests in this bucket only
+	if targetBucket.Len() < size && timeout > 0 {
+		// Simple wait - could be optimized with proper signaling
+		targetBucket.Unlock()
+		time.Sleep(timeout)
+		targetBucket.Lock()
+	}
+	
+	// Cut batch from this bucket only
+	newBatch := Batch{Requests: make([]*Request, 0, size)}
+	newBatch.Requests = targetBucket.RemoveFirst(size, newBatch.Requests)
+	
+	targetBucket.Unlock()
+	return &newBatch
+}

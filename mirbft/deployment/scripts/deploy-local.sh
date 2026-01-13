@@ -15,6 +15,9 @@ go install -race ../cmd/... || exit 1
 echo "Copy TLS keys and certificates to $exp_data_dir"
 cp -r tls-data $exp_data_dir || exit 1
 
+echo "Copy groups configuration to $exp_data_dir"
+cp config/groups.yml $exp_data_dir/config/ 2>/dev/null || echo "groups.yml not found, using defaults"
+
 echo "Changing directory to $exp_data_dir"
 cd $exp_data_dir || exit 1
 

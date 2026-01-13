@@ -9,6 +9,7 @@ message ClientRequest {
     bytes payload = 2;
     bytes pubkey = 3;
     bytes signature = 4;
+    uint32 group_id = 5;  // User-defined logical key for routing
 }
 
 message ClientResponse {

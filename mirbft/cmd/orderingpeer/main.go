@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -250,12 +251,17 @@ func setOrderer(ordererType string, ownPrivateIP string) (ord orderer.Orderer) {
 	case "MultiPaxos":
 		ord = &orderer.MultiPaxosOrderer{}
 	case "MultiPaxosMulticast":
-		// Orderer com suporte a grupos e composição SMR
-		ord = orderer.MultiPaxosMulticastOrderer()
-		// Carrega configuração de grupos se existir
+		ord = orderer.NewMultiPaxosMulticastOrderer()
 		if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
-			if err := mcOrd.LoadGroupsFromYAML("mirbft/config/groups.yml"); err != nil {
-				logger.Warn().Err(err).Msg("Could not load groups config, using defaults")
+			// Use env var ou caminho relativo ao config principal
+			groupsFile := os.Getenv("MIR_GROUPS_FILE")
+			if groupsFile == "" {
+				// Caminho relativo ao config principal
+				configDir := strings.TrimSuffix(configFileName, "/"+filepath.Base(configFileName))
+				groupsFile = filepath.Join(configDir, "groups.yml")
+			}
+			if err := mcOrd.LoadGroupsFromYAML(groupsFile); err != nil {
+				logger.Warn().Err(err).Str("groupsFile", groupsFile).Msg("Could not load groups config")
 			}
 		}
 	default:

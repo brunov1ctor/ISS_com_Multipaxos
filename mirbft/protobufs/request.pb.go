@@ -27,6 +27,7 @@ type ClientRequest struct {
 	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
 	Pubkey        []byte                 `protobuf:"bytes,3,opt,name=pubkey,proto3" json:"pubkey,omitempty"`
 	Signature     []byte                 `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	GroupId       uint32                 `protobuf:"varint,5,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -87,6 +88,13 @@ func (x *ClientRequest) GetSignature() []byte {
 		return x.Signature
 	}
 	return nil
+}
+
+func (x *ClientRequest) GetGroupId() uint32 {
+	if x != nil {
+		return x.GroupId
+	}
+	return 0
 }
 
 type ClientResponse struct {
