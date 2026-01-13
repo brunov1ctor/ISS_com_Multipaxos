@@ -297,6 +297,11 @@ func (o *MultiPaxosMulticastOrderer) GetGroupMembers(gid GroupID) []int32 {
 	return o.am.getGroupMembers(gid)
 }
 
+// LoadGroupsFromYAML loads group configuration from YAML file
+func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
+	return o.am.LoadGroupsFromYAML(filename)
+}
+
 // ComposeWith connects this SMR with another SMR for composition
 func (o *MultiPaxosMulticastOrderer) ComposeWith(name string, other *MultiPaxosMulticastOrderer) {
 	o.mu.Lock()
