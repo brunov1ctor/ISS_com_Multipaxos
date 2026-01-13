@@ -2,9 +2,8 @@ package orderer
 
 import (
 	"fmt"
+	"sort"
 	"sync"
-
-	"google.golang.org/protobuf/proto"
 
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
@@ -12,127 +11,192 @@ import (
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 )
 
-const (
-	defaultQuorumTimeoutMs = 250
-)
-
-// MultiPaxosMulticastOrderer uses group-based communication with existing MIR batches
+// MultiPaxosMulticastOrderer uses group-based communication
 type MultiPaxosMulticastOrderer struct {
-	*MultiPaxosOrderer // Composição: reutiliza toda lógica base
-	am                *AtomicMulticast // Selective atomic multicast interface
-
-	composedMu   sync.RWMutex
-	composedWith map[string]*MultiPaxosMulticastOrderer // Connected SMRs
-}
-
-// NewMultiPaxosMulticastOrderer creates a new orderer with group-based communication
-func NewMultiPaxosMulticastOrderer() *MultiPaxosMulticastOrderer {
-	o := &MultiPaxosMulticastOrderer{
-		MultiPaxosOrderer: &MultiPaxosOrderer{},
-		am:                NewAtomicMulticast(),
-		composedWith:      make(map[string]*MultiPaxosMulticastOrderer),
-	}
-
-	fmt.Printf("[MPX-MC][INIT] Using group-based communication with MIR batches\n")
-	return o
+	*MultiPaxosOrderer
+	am *AtomicMulticast
+	// Guarda groupID para instâncias que ainda não existem
+	pendingGroups map[int32]uint32
+	mu            sync.RWMutex
 }
 
 func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
-	// Inicializa o orderer base
+	// Inicializa campos se não foram inicializados
+	if o.MultiPaxosOrderer == nil {
+		o.MultiPaxosOrderer = &MultiPaxosOrderer{}
+	}
+	if o.am == nil {
+		o.am = NewAtomicMulticast()
+	}
+	if o.pendingGroups == nil {
+		o.pendingGroups = make(map[int32]uint32)
+	}
+	
 	o.MultiPaxosOrderer.Init(mngr)
+	
+	// Configura hook para aplicar groupIDs pendentes
+	o.MultiPaxosOrderer.onInstanceCreated = func(sn int32) {
+		o.tryApplyPendingGroups(sn)
+	}
 
-	fmt.Printf("[MPX-MC][INIT] Using bucket-based routing with groups\n")
-
-	// Substitui a função emit do orderer base para usar grupos por bucket
 	originalEmit := o.MultiPaxosOrderer.emit
 	o.MultiPaxosOrderer.emit = func(pm *pb.ProtocolMessage) {
-		// Se não é mensagem Paxos, usa emit original
 		mpx := pm.GetMultipaxos()
 		if mpx == nil {
 			originalEmit(pm)
 			return
 		}
 
-		// Usa group_id da mensagem Paxos se disponível
 		var groupID GroupID = 0
 		switch msg := mpx.Type.(type) {
+		case *pb.MPxMsg_Prepare:
+			groupID = GroupID(msg.Prepare.GetGroupId())
+			if groupID == 0 {
+				groupID = o.determineGroupForSN(pm.Sn)
+			}
+			if groupID > 0 {
+				o.SetInstanceMembers(pm.Sn, uint32(groupID))
+			}
+		case *pb.MPxMsg_Promise:
+			groupID = GroupID(msg.Promise.GetGroupId())
+			if groupID == 0 {
+				groupID = o.determineGroupForSN(pm.Sn)
+			}
 		case *pb.MPxMsg_Accept:
 			groupID = GroupID(msg.Accept.GetGroupId())
+			if groupID == 0 {
+				groupID = o.determineGroupForSN(pm.Sn)
+			}
+			if groupID > 0 {
+				o.SetInstanceMembers(pm.Sn, uint32(groupID))
+			}
 		case *pb.MPxMsg_Commit:
 			groupID = GroupID(msg.Commit.GetGroupId())
+			if groupID == 0 {
+				groupID = o.determineGroupForSN(pm.Sn)
+			}
 		}
 
 		if groupID == 0 {
-			// Broadcast para todos se não há grupo específico
 			o.am.Multicast(0, pm, o.emitToMembers)
 		} else {
-			// Usa grupo específico
 			o.am.Multicast(groupID, pm, o.emitToMembers)
 		}
 	}
 }
 
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
-	// Delega processamento para o orderer base
+	// Captura groupID ANTES de processar no base
+	mpx := pm.GetMultipaxos()
+	var groupID GroupID = 0
+	if mpx != nil {
+		switch msg := mpx.Type.(type) {
+		case *pb.MPxMsg_Prepare:
+			groupID = GroupID(msg.Prepare.GetGroupId())
+			if groupID == 0 {
+				groupID = o.determineGroupForSN(pm.Sn)
+			}
+		case *pb.MPxMsg_Promise:
+			groupID = GroupID(msg.Promise.GetGroupId())
+			if groupID == 0 {
+				groupID = o.determineGroupForSN(pm.Sn)
+			}
+		case *pb.MPxMsg_Accept:
+			groupID = GroupID(msg.Accept.GetGroupId())
+			if groupID == 0 {
+				groupID = o.determineGroupForSN(pm.Sn)
+			}
+		case *pb.MPxMsg_Commit:
+			groupID = GroupID(msg.Commit.GetGroupId())
+			if groupID == 0 {
+				groupID = o.determineGroupForSN(pm.Sn)
+			}
+		default:
+			groupID = o.determineGroupForSN(pm.Sn)
+		}
+	}
+	
+	// Processa no base (pode criar instância ou ir para backlog)
 	o.MultiPaxosOrderer.HandleMessage(pm)
+	
+	// Aplica groupID (imediatamente ou guarda para depois)
+	if groupID > 0 {
+		o.applyGroupID(pm.Sn, uint32(groupID))
+	}
 }
 
 // emitToMembers sends message to specific group members using existing MIR infrastructure
 func (o *MultiPaxosMulticastOrderer) emitToMembers(pm *pb.ProtocolMessage, members []int32) {
+	// Multicast direto para o grupo (quorum já calculado corretamente na instância)
 	for _, nodeID := range members {
 		if nodeID == membership.OwnID {
 			continue
 		}
-		messenger.EnqueueMsg(proto.Clone(pm).(*pb.ProtocolMessage), nodeID)
+		messenger.EnqueueMsg(pm, nodeID)
 	}
 }
 
-// Public API for users to define groups
-
-// DefineGroup allows users to define custom groups by node IDs
-func (o *MultiPaxosMulticastOrderer) DefineGroup(gid GroupID, nodeIDs ...int32) {
-	o.am.DefineGroup(gid, nodeIDs...)
+func (o *MultiPaxosMulticastOrderer) SetInstanceMembers(sn int32, bucketID uint32) bool {
+	if inst, ok := o.MultiPaxosOrderer.dispatcher.load(sn); ok && inst != nil {
+		members := o.am.getGroupMembers(GroupID(bucketID))
+		if len(members) > 0 {
+			inst.SetMembers(members)
+		} else {
+			inst.SetMembers(membership.AllNodeIDs())
+		}
+		return true
+	}
+	return false
 }
 
-// GetGroupMembers returns current group members
-func (o *MultiPaxosMulticastOrderer) GetGroupMembers(gid GroupID) []int32 {
-	return o.am.getGroupMembers(gid)
+func (o *MultiPaxosMulticastOrderer) determineGroupForSN(sn int32) GroupID {
+	groupIDs := make([]GroupID, 0)
+	for gid := range o.am.groups {
+		if gid > 0 {
+			groupIDs = append(groupIDs, gid)
+		}
+	}
+	if len(groupIDs) == 0 {
+		return 0
+	}
+	sort.Slice(groupIDs, func(i, j int) bool {
+		return groupIDs[i] < groupIDs[j]
+	})
+	return groupIDs[int(sn)%len(groupIDs)]
 }
 
-// LoadGroupsFromYAML loads group configuration from YAML file
 func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
 	return o.am.LoadGroupsFromYAML(filename)
 }
 
-// ComposeWith connects this SMR with another SMR for composition
-func (o *MultiPaxosMulticastOrderer) ComposeWith(name string, other *MultiPaxosMulticastOrderer) {
-	o.composedMu.Lock()
-	o.composedWith[name] = other
-	o.composedMu.Unlock()
-
-	fmt.Printf("[CSMR] Connected SMR component: %s\n", name)
+// applyGroupID tenta aplicar groupID na instância ou guarda para quando ela existir
+func (o *MultiPaxosMulticastOrderer) applyGroupID(sn int32, groupID uint32) {
+	if o.SetInstanceMembers(sn, groupID) {
+		return // Aplicado com sucesso
+	}
+	
+	// Instância não existe ainda, guarda para depois
+	o.mu.Lock()
+	if existing, exists := o.pendingGroups[sn]; exists && existing != groupID {
+		fmt.Printf("[MPX][WARN] GroupID conflict sn=%d: existing=%d new=%d (keeping first)\n", sn, existing, groupID)
+		o.mu.Unlock()
+		return
+	}
+	o.pendingGroups[sn] = groupID
+	o.mu.Unlock()
 }
 
-// ExecuteAndForward executes locally then forwards to composed SMR
-func (o *MultiPaxosMulticastOrderer) ExecuteAndForward(data []byte, targetComponent string, targetGroup GroupID) {
-	// Execute locally first (existing Paxos)
-	pm := &pb.ProtocolMessage{
-		SenderId: membership.OwnID,
-		Sn:       0, // Will be set by Paxos
-		// TODO: se você tiver um campo no proto pra payload (ex.: Request/Batch/Data),
-		// coloque o "data" nele aqui.
+// tryApplyPendingGroups aplica groupIDs pendentes quando instância é criada
+func (o *MultiPaxosMulticastOrderer) tryApplyPendingGroups(sn int32) {
+	o.mu.Lock()
+	groupID, exists := o.pendingGroups[sn]
+	if exists {
+		delete(o.pendingGroups, sn)
 	}
-
-	o.am.Multicast(0, pm, o.emitToMembers)
-
-	// Forward to composed SMR (com leitura protegida)
-	o.composedMu.RLock()
-	target := o.composedWith[targetComponent]
-	o.composedMu.RUnlock()
-
-	if target != nil {
-		target.am.Multicast(targetGroup, pm, target.emitToMembers)
-		fmt.Printf("[CSMR] Forwarded to component %s group %d\n", targetComponent, targetGroup)
+	o.mu.Unlock()
+	
+	if exists {
+		o.SetInstanceMembers(sn, groupID)
 	}
 }
 

@@ -42,6 +42,8 @@ type mpxInstance struct {
 
 	seg manager.Segment
 
+	// Group-aware quorum calculation
+	members      []int32 // Members of this instance's group
 	quorum       int32
 	lastVal      *pb.MPxValue
 	lastDigest   [32]byte
@@ -57,9 +59,7 @@ type mpxInstance struct {
 	sbNilAfter       time.Duration
 
 	prepSent bool // líder já enviou PREPARE?
-
-	// líder observado para cada SN (preenchido ao receber Accept)
-	leaderForSN map[int32]int32
+	leader   int32 // líder observado para este SN (primeiro Accept recebido)
 
 	// processamento assíncrono
 	msgCh  chan *pb.ProtocolMessage
@@ -79,7 +79,6 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, ma
 		phase:          phaseInit,
 		acceptRtxEvery: interval * 2,
 		sbNilAfter:     interval * 3,
-		leaderForSN:    make(map[int32]int32),
 		msgCh:          make(chan *pb.ProtocolMessage, 4096),
 		stopCh:         make(chan struct{}),
 	}
@@ -92,14 +91,24 @@ func (i *mpxInstance) setSegment(seg manager.Segment) {
 	defer i.mu.Unlock()
 
 	i.seg = seg
-	n := int32(len(membership.AllNodeIDs()))
-	if n < 1 {
-		n = 1
+	// Quorum será calculado quando SetMembers() for chamado
+	// ou usa fallback para cluster inteiro se não definido
+	if len(i.members) == 0 {
+		n := int32(len(membership.AllNodeIDs()))
+		if n < 1 {
+			n = 1
+		}
+		i.quorum = n/2 + 1
+	} else {
+		n := int32(len(i.members))
+		if n < 1 {
+			n = 1
+		}
+		i.quorum = n/2 + 1
 	}
-	i.quorum = n/2 + 1
 
-	fmt.Printf("[MPX][CHK] seg bind sn=%d segID=%d firstSN=%d len=%d quorum=%d leaders=%v\n",
-		i.sn, seg.SegID(), seg.FirstSN(), seg.Len(), i.quorum, seg.Leaders())
+	fmt.Printf("[MPX][CHK] seg bind sn=%d segID=%d firstSN=%d len=%d quorum=%d leaders=%v members=%v\n",
+		i.sn, seg.SegID(), seg.FirstSN(), seg.Len(), i.quorum, seg.Leaders(), i.members)
 }
 
 func (i *mpxInstance) startWorkers(_ *sync.WaitGroup) {
@@ -152,8 +161,8 @@ func (i *mpxInstance) isClosed() bool {
 func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	switch t := mpx.Type.(type) {
 	case *pb.MPxMsg_Prepare:
-		fmt.Printf("[MPX][IN ] PREPARE sn=%d from=%d\n", i.sn, pm.GetSenderId())
-		i.onPrepare()
+		fmt.Printf("[MPX][IN ] PREPARE sn=%d from=%d gid=%d\n", i.sn, pm.GetSenderId(), t.Prepare.GetGroupId())
+		i.onPrepare(t.Prepare)
 	case *pb.MPxMsg_Promise:
 		fmt.Printf("[MPX][IN ] PROMISE sn=%d from=%d members=%v\n", i.sn, pm.GetSenderId(), t.Promise.GetMembers())
 		i.phase = phasePrepared
@@ -172,7 +181,7 @@ func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	}
 }
 
-func (i *mpxInstance) onPrepare() {
+func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -181,11 +190,21 @@ func (i *mpxInstance) onPrepare() {
 	}
 	i.phase = phasePrepared
 
-	// PROMISE com members = todos os peers (linha-base, garante progresso).
-	all := membership.AllNodeIDs()
-	members := make([]uint32, 0, len(all))
-	for _, id := range all {
-		members = append(members, uint32(id))
+	// Usa GroupId do Prepare recebido
+	groupId := prepare.GetGroupId()
+	members := make([]uint32, 0)
+	
+	if len(i.members) > 0 {
+		// Usa membros do grupo já configurados
+		for _, id := range i.members {
+			members = append(members, uint32(id))
+		}
+	} else {
+		// Fallback para todos os nós
+		all := membership.AllNodeIDs()
+		for _, id := range all {
+			members = append(members, uint32(id))
+		}
 	}
 
 	promise := &pb.MPxMsg{Type: &pb.MPxMsg_Promise{
@@ -193,8 +212,8 @@ func (i *mpxInstance) onPrepare() {
 			Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 			Ballot:  0,
 			Ok:      true,
-			GroupId: 0,
-			Members: members, // sugestão; orderer multicast aprende
+			GroupId: groupId, // Usa GroupId do Prepare
+			Members: members, // Membros do grupo ou fallback
 		},
 	}}
 
@@ -204,8 +223,8 @@ func (i *mpxInstance) onPrepare() {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: promise},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[MPX][NET] SEND Promise sn=%d members=%v\n", i.sn, members)
-		i.parent.emit(out) // broadcast (orderer roteia)
+		fmt.Printf("[MPX][NET] SEND Promise sn=%d gid=%d members=%v\n", i.sn, groupId, members)
+		i.parent.emit(out)
 	}
 }
 
@@ -213,8 +232,14 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	// registra o líder observado deste SN (para UNICAST do Accepted)
-	i.leaderForSN[i.sn] = from
+	// Garante estabilidade do líder: aceita primeiro, ignora demais
+	if i.leader == 0 {
+		i.leader = from
+		fmt.Printf("[MPX][LEADER] sn=%d leader set to %d\n", i.sn, from)
+	} else if i.leader != from {
+		fmt.Printf("[MPX][WARN] sn=%d ignoring Accept from %d (leader=%d)\n", i.sn, from, i.leader)
+		return
+	}
 
 	if a.GetValue() != nil {
 		if i.lastVal != nil {
@@ -233,15 +258,22 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	if i.acceptedFrom == nil {
 		i.acceptedFrom = make(map[int32]struct{})
 	}
+	
+	// Só conta voto próprio se estiver no grupo
 	if _, ok := i.acceptedFrom[membership.OwnID]; !ok {
-		i.acceptedFrom[membership.OwnID] = struct{}{}
-		i.acceptCount++
+		if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
+			i.acceptedFrom[membership.OwnID] = struct{}{}
+			i.acceptCount++
+			fmt.Printf("[MPX][SELF] sn=%d self-vote counted (in group)\n", i.sn)
+		} else {
+			fmt.Printf("[MPX][SELF] sn=%d self-vote SKIPPED (not in group)\n", i.sn)
+		}
 	}
 
 	fmt.Printf("[MPX][QUORUM] ACCEPT sn=%d acceptCount=%d quorum=%d digest=%x\n",
 		i.sn, i.acceptCount, i.quorum, i.lastDigest[:8])
 
-	// ====== Envia ACCEPTED **UNICAST** para o líder observado ======
+	// Envia ACCEPTED UNICAST para o líder
 	accepted := &pb.MPxMsg{Type: &pb.MPxMsg_Accepted{Accepted: &pb.MPxAccepted{
 		Id:     &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot: 0,
@@ -253,21 +285,14 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accepted},
 	}
 
-	var leader int32
-	if v, ok := i.leaderForSN[i.sn]; ok && v != 0 {
-		leader = v
-	} else {
-		leader = i.getFallbackLeaderLocked() // via seg.Leaders() ou menor ID vivo
-	}
-
-	// evita unicast para si mesmo (já contamos aceitação local)
-	if leader == membership.OwnID {
+	// Unicast para o líder (primeiro Accept recebido)
+	if i.leader == membership.OwnID {
 		fmt.Printf("[MPX][NET] SKIP Accepted sn=%d (leader=self)\n", i.sn)
 		return
 	}
 
-	fmt.Printf("[MPX][NET] SEND Accepted sn=%d → leader=%d (unicast)\n", i.sn, leader)
-	messenger.EnqueueMsg(resp, leader)
+	fmt.Printf("[MPX][NET] SEND Accepted sn=%d → leader=%d (unicast)\n", i.sn, i.leader)
+	messenger.EnqueueMsg(resp, i.leader)
 }
 
 func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
@@ -281,9 +306,19 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 		if _, ok := i.acceptedFrom[pm.SenderId]; ok {
 			return
 		}
-		i.acceptedFrom[pm.SenderId] = struct{}{}
+		
+		// Só conta voto se sender estiver no grupo
+		if len(i.members) == 0 || i.isInGroup(pm.SenderId) {
+			i.acceptedFrom[pm.SenderId] = struct{}{}
+			i.acceptCount++
+			fmt.Printf("[MPX][VOTE] sn=%d vote from %d counted (in group)\n", i.sn, pm.SenderId)
+		} else {
+			fmt.Printf("[MPX][VOTE] sn=%d vote from %d SKIPPED (not in group)\n", i.sn, pm.SenderId)
+			return
+		}
+	} else {
+		i.acceptCount++
 	}
-	i.acceptCount++
 
 	fmt.Printf("[MPX][QUORUM] ACCEPTED sn=%d count=%d/%d digest=%x\n",
 		i.sn, i.acceptCount, i.quorum, i.lastDigest[:8])
@@ -406,27 +441,6 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 	}
 	i.lastProposeAt = time.Now()
 
-	// PREPARE 1x antes do primeiro ACCEPT (líder)
-	if !i.prepSent {
-		i.prepSent = true
-		prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-			Prepare: &pb.MPxPrepare{
-				Id:     &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Ballot: 0,
-			},
-		}}
-		pm := &pb.ProtocolMessage{
-			SenderId: membership.OwnID,
-			Sn:       i.sn,
-			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
-		}
-		if i.parent.emit != nil {
-			fmt.Printf("[MPX][NET] SEND Prepare sn=%d\n", i.sn)
-			i.parent.emit(pm) // broadcast (gid=0) — roteador decide
-		}
-		i.phase = phasePrepared
-	}
-
 	if i.phase >= phaseAcceptSent {
 		return
 	}
@@ -434,15 +448,15 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 	var val *pb.MPxValue
 	reqs := 0
 
+	// PATCH: Descobre bucket ANTES de enviar Prepare
 	if i.lastVal == nil {
 		rb := i.cutReqBatch()
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			return
 		}
 		
-		// Valida homogeneidade do batch (1 batch = 1 bucket) - agora redundante mas mantido como safety check
 		if !i.validateBatchHomogeneity(rb) {
-			return // Não deveria acontecer com CutBatchFromBucket
+			return
 		}
 		
 		i.lastReqBatch = rb
@@ -454,7 +468,7 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 			i.bucketId = batchMsg.Requests[0].GetGroupId()
 		}
 
-		fmt.Printf("PROPOSE sn=%d size=%d\n", i.sn, reqs)
+		fmt.Printf("PROPOSE sn=%d size=%d bucket=%d\n", i.sn, reqs, i.bucketId)
 
 		batchBytes, err := proto.Marshal(batchMsg)
 		if err != nil {
@@ -471,19 +485,47 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 
 		i.acceptedFrom = map[int32]struct{}{}
 		i.acceptCount = 0
-		i.acceptedFrom[membership.OwnID] = struct{}{}
-		i.acceptCount = 1
+		
+		if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
+			i.acceptedFrom[membership.OwnID] = struct{}{}
+			i.acceptCount = 1
+			fmt.Printf("[MPX][SELF] sn=%d leader in group, self-vote counted\n", i.sn)
+		} else {
+			fmt.Printf("[MPX][SELF] sn=%d leader NOT in group, no self-vote\n", i.sn)
+		}
 
 		i.phase = phaseProposing
 	} else {
 		val = i.lastVal
 	}
 
+	// PREPARE 1x com GroupId já conhecido
+	if !i.prepSent {
+		i.prepSent = true
+		prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
+			Prepare: &pb.MPxPrepare{
+				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+				Ballot:  0,
+				GroupId: i.bucketId, // PATCH: Agora com bucket correto
+			},
+		}}
+		pm := &pb.ProtocolMessage{
+			SenderId: membership.OwnID,
+			Sn:       i.sn,
+			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
+		}
+		if i.parent.emit != nil {
+			fmt.Printf("[MPX][NET] SEND Prepare sn=%d gid=%d\n", i.sn, i.bucketId)
+			i.parent.emit(pm)
+		}
+		i.phase = phasePrepared
+	}
+
 	accept := &pb.MPxMsg{Type: &pb.MPxMsg_Accept{Accept: &pb.MPxAccept{
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot:  0,
 		Value:   val,
-		GroupId: i.bucketId, // Usa bucket do usuário
+		GroupId: i.bucketId,
 	}}}
 	pm := &pb.ProtocolMessage{
 		SenderId: membership.OwnID,
@@ -580,22 +622,6 @@ func (i *mpxInstance) cutReqBatch() *request.Batch {
 	return nil
 }
 
-func (i *mpxInstance) getFallbackLeaderLocked() int32 {
-	// tenta pelo segmento (mais correto)
-	if i.seg != nil {
-		lds := i.seg.Leaders()
-		if len(lds) > 0 {
-			return lds[0]
-		}
-	}
-	// fallback: menor ID vivo
-	all := membership.AllNodeIDs()
-	if len(all) > 0 {
-		return all[0]
-	}
-	return 0
-}
-
 func (i *mpxInstance) Close() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -604,6 +630,52 @@ func (i *mpxInstance) Close() {
 	}
 	i.closed = true
 	fmt.Printf("[MPX][CHK] instance close sn=%d\n", i.sn)
+}
+
+// SetMembers configures the group members for this instance and recalculates quorum
+func (i *mpxInstance) SetMembers(members []int32) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	
+	i.members = make([]int32, len(members))
+	copy(i.members, members)
+	
+	// Recalcula quorum baseado no grupo
+	n := int32(len(i.members))
+	if n < 1 {
+		n = 1
+	}
+	i.quorum = n/2 + 1
+	
+	// CRÍTICO: Reajusta acceptCount para só contar membros do grupo
+	if i.acceptedFrom != nil {
+		newAcceptedFrom := make(map[int32]struct{})
+		newCount := int32(0)
+		
+		// Só mantém votos de membros do grupo
+		for nodeID := range i.acceptedFrom {
+			if i.isInGroup(nodeID) {
+				newAcceptedFrom[nodeID] = struct{}{}
+				newCount++
+			}
+		}
+		
+		i.acceptedFrom = newAcceptedFrom
+		i.acceptCount = newCount
+		fmt.Printf("[MPX][RECOUNT] sn=%d adjusted acceptCount=%d/%d after SetMembers\n", i.sn, i.acceptCount, i.quorum)
+	}
+	
+	fmt.Printf("[MPX][CHK] instance sn=%d members=%v quorum=%d\n", i.sn, i.members, i.quorum)
+}
+
+// isInGroup verifica se um nó está nos membros do grupo desta instância
+func (i *mpxInstance) isInGroup(nodeID int32) bool {
+	for _, member := range i.members {
+		if member == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 func tracePropose(sn int32, size int) {

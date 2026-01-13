@@ -62,12 +62,6 @@ func (b *mpxBacklog) drainTo(sn int32, f func(*pb.ProtocolMessage)) {
 	}
 }
 
-// Hooks/Router (mantidos para compatibilidade e possível multicast futuro).
-type OutboundHooks struct {
-	OnSend func(pm *pb.ProtocolMessage) (dests []int32, err error)
-}
-type GroupResolver func(sn int32) uint32
-
 type MultiPaxosOrderer struct {
 	mgr         manager.Manager
 	segmentChan chan manager.Segment
@@ -83,15 +77,15 @@ type MultiPaxosOrderer struct {
 	emit     func(pm *pb.ProtocolMessage)
 	announce AnnounceFn
 
-	hooks        OutboundHooks
-	resolveGroup GroupResolver
-
 	maxBatchSize     int
 	proposeEvery     time.Duration
 	view             int32
 	stopWg           sync.WaitGroup
 	sbNilAfter       time.Duration
 	enableNilDeliver bool
+	
+	// Hook para quando instância é criada
+	onInstanceCreated func(sn int32)
 }
 
 func isSegmentLeader(seg manager.Segment, ownID int32, view int32) bool {
@@ -116,8 +110,17 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.sbNilAfter = o.proposeEvery * 3
 	o.enableNilDeliver = true
 
-	o.hooks = OutboundHooks{}
-	o.resolveGroup = func(sn int32) uint32 { return 0 } // não usado por enquanto
+	// emit padrão - broadcast simples
+	o.emit = func(pm *pb.ProtocolMessage) {
+		for _, nid := range membership.AllNodeIDs() {
+			if nid == membership.OwnID {
+				continue
+			}
+			messenger.EnqueueMsg(pm, nid)
+		}
+	}
+	o.segmentChan = o.mgr.SubscribeOrderer()
+	messenger.OrdererMsgHandler = o.HandleMessage
 
 	// announce padrão
 	o.announce = func(sn int32, batchBytes []byte, _ []byte) {
@@ -141,54 +144,8 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(len(b.Requests)))
 	}
 
-	// emit com hook (por ora, broadcast padrão; hook pode selecionar destinos)
-	o.emit = func(pm *pb.ProtocolMessage) {
-		o.broadcastHooked(pm, func(pm *pb.ProtocolMessage) {
-			for _, nid := range membership.AllNodeIDs() {
-				if nid == membership.OwnID {
-					continue
-				}
-				messenger.EnqueueMsg(pm, nid)
-			}
-		})
-	}
-
-	o.segmentChan = o.mgr.SubscribeOrderer()
-	messenger.OrdererMsgHandler = o.HandleMessage
-
 	fmt.Printf("[MPX] Init ok; cfg: batchSize=%d batchTimeout=%s view=%d leaderPolicy=%s\n",
 		o.maxBatchSize, o.proposeEvery, o.view, strings.ToLower(config.Config.LeaderPolicy))
-}
-
-func (o *MultiPaxosOrderer) broadcastHooked(pm *pb.ProtocolMessage, fallback func(pm *pb.ProtocolMessage)) {
-	if o.hooks.OnSend != nil {
-		if dests, err := o.hooks.OnSend(pm); err == nil && len(dests) > 0 {
-			fmt.Printf("[MPX][HOOK] selective send sn=%d type=%T dests=%v\n", pm.Sn, pm.GetMultipaxos().GetType(), dests)
-			for _, d := range dests {
-				if d == membership.OwnID {
-					continue
-				}
-				messenger.EnqueueMsg(pm, d)
-			}
-			return
-		}
-	}
-	fallback(pm)
-}
-
-// envio seletivo sem passar por hooks (usado se você quiser forçar destinos)
-func (o *MultiPaxosOrderer) emitTo(pm *pb.ProtocolMessage, dests []int32) {
-	if len(dests) == 0 {
-		o.emit(pm)
-		return
-	}
-	fmt.Printf("[MPX][SEND] sn=%d type=%T to=%v\n", pm.Sn, pm.GetMultipaxos().GetType(), dests)
-	for _, d := range dests {
-		if d == membership.OwnID {
-			continue
-		}
-		messenger.EnqueueMsg(pm, d)
-	}
 }
 
 func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
@@ -263,11 +220,16 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		inst.enableNilDeliver = o.enableNilDeliver
 		inst.sbNilAfter = o.sbNilAfter
 		o.dispatcher.store(sn, inst)
+		
+		// Hook para aplicar groupIDs pendentes ANTES de drenar backlog
+		if o.onInstanceCreated != nil {
+			o.onInstanceCreated(sn)
+		}
 	}
 	for _, sn := range seg.SNs() {
 		if inst, ok := o.dispatcher.load(sn); ok && inst != nil {
 			inst.startWorkers(&o.stopWg)
-			o.backlog.drainTo(sn, inst.enqueue)
+			o.backlog.drainTo(sn, inst.enqueue) // Agora drena com members já configurados
 		}
 	}
 	go func() {
