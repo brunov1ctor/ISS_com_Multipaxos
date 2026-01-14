@@ -194,6 +194,22 @@ done
 wait
 log_i "Reset remoto concluído."
 
+# === DIFUSÃO ATÔMICA SELETIVA: DEPLOY DE groups.yml ===
+# Copia groups.yml para todos os nós remotos
+# - Com groups.yml: multicast seletivo (apenas membros do grupo recebem mensagens)
+# - Sem groups.yml: fallback para broadcast (todos os nós em todos os grupos)
+log_i "Copiando groups.yml para ${remote_base_dir}/config em todos os nós..."
+groups_yml_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../config" && pwd)/groups.yml"
+if [[ -f "${groups_yml_src}" ]]; then
+  for ip in $(awk '{print $2}' "$instance_info_file"); do
+    scp $scp_options "${groups_yml_src}" "${remote_user}@${ip}:${remote_base_dir}/config/groups.yml" &
+  done
+  wait
+  log_i "groups.yml copiado para todos os nós."
+else
+  log_w "groups.yml não encontrado em ${groups_yml_src}, rodando sem grupos (broadcast mode)."
+fi
+
 log_i "Iniciando master em $master_ip..."
 scripts/start-master.sh \
   "$remote_user" \

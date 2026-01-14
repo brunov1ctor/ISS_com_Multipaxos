@@ -58,6 +58,10 @@ func (am *AtomicMulticast) DefineGroup(g GroupID, members ...int32) {
 	am.mu.Unlock()
 }
 
+func (am *AtomicMulticast) GetGroupMembers(groupID uint32) []int32 {
+	return am.getGroupMembers(GroupID(groupID))
+}
+
 func (am *AtomicMulticast) getGroupMembers(g GroupID) []int32 {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
