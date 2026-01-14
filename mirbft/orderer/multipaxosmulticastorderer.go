@@ -1,6 +1,8 @@
 package orderer
 
 import (
+	"fmt"
+	"os"
 	"sync"
 
 	"github.com/hyperledger-labs/mirbft/manager"
@@ -33,9 +35,18 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	
 	o.MultiPaxosOrderer.Init(mngr)
 	
-	// Carrega grupos se arquivo foi especificado antes do Init
 	if o.groupsFile != "" {
-		o.MultiPaxosOrderer.am.LoadGroupsFromYAML(o.groupsFile)
+		err := o.MultiPaxosOrderer.am.LoadGroupsFromYAML(o.groupsFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				fmt.Printf("[MULTICAST] groups.yml não encontrado (%s), rodando em broadcast mode\n", o.groupsFile)
+			} else {
+				fmt.Printf("[MULTICAST][ERRO] Falha ao carregar groups.yml: %v\n", err)
+				return
+			}
+		} else {
+			fmt.Printf("[MULTICAST] groups.yml carregado com sucesso: %s\n", o.groupsFile)
+		}
 	}
 	
 	o.MultiPaxosOrderer.onInstanceCreated = func(sn int32) {

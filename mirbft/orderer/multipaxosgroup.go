@@ -75,7 +75,7 @@ func (am *AtomicMulticast) getGroupMembers(g GroupID) []int32 {
 func (am *AtomicMulticast) LoadGroupsFromYAML(filename string) error {
 	data, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return fmt.Errorf("failed to read config file: %v", err)
+		return err
 	}
 
 	var config GroupConfig
@@ -83,7 +83,6 @@ func (am *AtomicMulticast) LoadGroupsFromYAML(filename string) error {
 		return fmt.Errorf("failed to parse YAML: %v", err)
 	}
 
-	// Define groups from config
 	for gid, members := range config.Groups {
 		am.DefineGroup(gid, members...)
 	}
