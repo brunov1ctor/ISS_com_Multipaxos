@@ -79,10 +79,10 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, ma
 		phase:          phaseInit,
 		acceptRtxEvery: interval * 2,
 		sbNilAfter:     interval * 3,
-		msgCh:          make(chan *pb.ProtocolMessage, 4096),
+		msgCh:          make(chan *pb.ProtocolMessage, 8192),
 		stopCh:         make(chan struct{}),
 	}
-	fmt.Printf("[MPX][CHK] instance init sn=%d\n", sn)
+	// Instance initialized
 	return inst
 }
 
@@ -107,8 +107,7 @@ func (i *mpxInstance) setSegment(seg manager.Segment) {
 		i.quorum = n/2 + 1
 	}
 
-	fmt.Printf("[MPX][CHK] seg bind sn=%d segID=%d firstSN=%d len=%d quorum=%d leaders=%v members=%v\n",
-		i.sn, seg.SegID(), seg.FirstSN(), seg.Len(), i.quorum, seg.Leaders(), i.members)
+	// Segment bound
 }
 
 func (i *mpxInstance) startWorkers(_ *sync.WaitGroup) {
@@ -161,23 +160,23 @@ func (i *mpxInstance) isClosed() bool {
 func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	switch t := mpx.Type.(type) {
 	case *pb.MPxMsg_Prepare:
-		fmt.Printf("[MPX][IN ] PREPARE sn=%d from=%d gid=%d\n", i.sn, pm.GetSenderId(), t.Prepare.GetGroupId())
+		// Prepare received
 		i.onPrepare(t.Prepare)
 	case *pb.MPxMsg_Promise:
-		fmt.Printf("[MPX][IN ] PROMISE sn=%d from=%d members=%v\n", i.sn, pm.GetSenderId(), t.Promise.GetMembers())
+		// Promise received
 		i.phase = phasePrepared
 	case *pb.MPxMsg_Accept:
 		// registra o líder observado para este SN
-		fmt.Printf("[MPX][IN ] ACCEPT sn=%d from=%d gid=%d\n", i.sn, pm.GetSenderId(), t.Accept.GetGroupId())
+		// Accept received
 		i.onAccept(pm.GetSenderId(), t.Accept)
 	case *pb.MPxMsg_Accepted:
-		fmt.Printf("[MPX][IN ] ACCEPTED sn=%d from=%d\n", i.sn, pm.GetSenderId())
+		// Accepted received
 		i.onAccepted(pm, t.Accepted)
 	case *pb.MPxMsg_Commit:
-		fmt.Printf("[MPX][IN ] COMMIT sn=%d from=%d gid=%d\n", i.sn, pm.GetSenderId(), t.Commit.GetGroupId())
+		// Commit received
 		i.onCommit(t.Commit)
 	default:
-		fmt.Printf("[MPX][WARN] msg MPx desconhecida sn=%d (%T)\n", i.sn, mpx.Type)
+		// Unknown message type
 	}
 }
 
@@ -223,7 +222,7 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: promise},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[MPX][NET] SEND Promise sn=%d gid=%d members=%v\n", i.sn, groupId, members)
+		// Send Promise
 		i.parent.emit(out)
 	}
 }
@@ -235,9 +234,9 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	// Garante estabilidade do líder: aceita primeiro, ignora demais
 	if i.leader == 0 {
 		i.leader = from
-		fmt.Printf("[MPX][LEADER] sn=%d leader set to %d\n", i.sn, from)
+		// Leader set
 	} else if i.leader != from {
-		fmt.Printf("[MPX][WARN] sn=%d ignoring Accept from %d (leader=%d)\n", i.sn, from, i.leader)
+		// Ignoring Accept from different leader
 		return
 	}
 
@@ -245,8 +244,7 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		if i.lastVal != nil {
 			incomingDigest := sha256.Sum256(a.GetValue().GetBatch())
 			if incomingDigest != i.lastDigest {
-				fmt.Printf("[MPX][WARN] ACCEPT sn=%d digest mismatch (have=%x new=%x) → ignore\n",
-					i.sn, i.lastDigest[:8], incomingDigest[:8])
+			// Digest mismatch
 				return
 			}
 		} else {
@@ -264,14 +262,13 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
 			i.acceptedFrom[membership.OwnID] = struct{}{}
 			i.acceptCount++
-			fmt.Printf("[MPX][SELF] sn=%d self-vote counted (in group)\n", i.sn)
+			// Self-vote counted
 		} else {
-			fmt.Printf("[MPX][SELF] sn=%d self-vote SKIPPED (not in group)\n", i.sn)
+			// Self-vote skipped
 		}
 	}
 
-	fmt.Printf("[MPX][QUORUM] ACCEPT sn=%d acceptCount=%d quorum=%d digest=%x\n",
-		i.sn, i.acceptCount, i.quorum, i.lastDigest[:8])
+	// Quorum check
 
 	// Envia ACCEPTED UNICAST para o líder
 	accepted := &pb.MPxMsg{Type: &pb.MPxMsg_Accepted{Accepted: &pb.MPxAccepted{
@@ -287,11 +284,11 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 
 	// Unicast para o líder (primeiro Accept recebido)
 	if i.leader == membership.OwnID {
-		fmt.Printf("[MPX][NET] SKIP Accepted sn=%d (leader=self)\n", i.sn)
+		// Skip Accepted to self
 		return
 	}
 
-	fmt.Printf("[MPX][NET] SEND Accepted sn=%d → leader=%d (unicast)\n", i.sn, i.leader)
+	// Send Accepted
 	messenger.EnqueueMsg(resp, i.leader)
 }
 
@@ -311,21 +308,20 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 		if len(i.members) == 0 || i.isInGroup(pm.SenderId) {
 			i.acceptedFrom[pm.SenderId] = struct{}{}
 			i.acceptCount++
-			fmt.Printf("[MPX][VOTE] sn=%d vote from %d counted (in group)\n", i.sn, pm.SenderId)
+			// Vote counted
 		} else {
-			fmt.Printf("[MPX][VOTE] sn=%d vote from %d SKIPPED (not in group)\n", i.sn, pm.SenderId)
+			// Vote skipped - not in group
 			return
 		}
 	} else {
 		i.acceptCount++
 	}
 
-	fmt.Printf("[MPX][QUORUM] ACCEPTED sn=%d count=%d/%d digest=%x\n",
-		i.sn, i.acceptCount, i.quorum, i.lastDigest[:8])
+	// Quorum status
 
 	// líder decide commit quando atingir maioria
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
-		fmt.Printf("[MPX][QUORUM] MAJORITY REACHED sn=%d → COMMIT digest=%x\n", i.sn, i.lastDigest[:8])
+		// Majority reached - sending Commit
 		commit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
 			Commit: &pb.MPxCommit{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
@@ -339,7 +335,7 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: commit},
 		}
 		if i.parent.emit != nil {
-			fmt.Printf("[MPX][NET] SEND Commit sn=%d gid=%d digest=%x\n", i.sn, i.bucketId, i.lastDigest[:8])
+			// Send Commit
 			i.parent.emit(pmOut) // roteador do orderer decide grupo
 		}
 	}
@@ -363,7 +359,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 
 	val := c.GetValue()
 	if val == nil || len(val.GetBatch()) == 0 {
-		fmt.Printf("[MPX][NIL] COMMIT ⊥ sn=%d gid=%d\n", i.sn, c.GetGroupId())
+		// Nil commit
 		i.phase = phaseCommitted
 		nilCommit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
 			Commit: &pb.MPxCommit{
@@ -405,7 +401,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: commit},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[MPX][NET] GOSSIP Commit sn=%d gid=%d digest=%x\n", i.sn, c.GetGroupId(), i.lastDigest[:8])
+		// Gossip Commit
 		i.parent.emit(pmOut)
 	}
 
@@ -416,14 +412,14 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 
 	var b pb.Batch
 	if err := proto.Unmarshal(i.lastVal.GetBatch(), &b); err != nil {
-		fmt.Printf("[MPX][ERR] COMMIT sn=%d unmarshal batch: %v\n", i.sn, err)
+		// Unmarshal error
 		return
 	}
 	if i.announce != nil {
-		fmt.Printf("[MPX][CHK] ANNOUNCE sn=%d reqs=%d\n", i.sn, len(b.Requests))
+		// Announce commit
 		i.announce(i.sn, i.lastVal.GetBatch(), nil)
 	} else {
-		fmt.Printf("[MPX][WARN] COMMIT sn=%d announcer=nil — não vai acionar Responder!\n", i.sn)
+		// Announcer nil warning
 	}
 
 	i.closed = true
@@ -436,7 +432,9 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if time.Since(i.lastProposeAt) < i.proposeEvery {
+	// Propor mais agressivamente - reduzir intervalo
+	minInterval := i.proposeEvery / 5 // 5x mais agressivo
+	if time.Since(i.lastProposeAt) < minInterval {
 		return
 	}
 	i.lastProposeAt = time.Now()
@@ -468,11 +466,11 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 			i.bucketId = batchMsg.Requests[0].GetGroupId()
 		}
 
-		fmt.Printf("PROPOSE sn=%d size=%d bucket=%d\n", i.sn, reqs, i.bucketId)
+		// Propose batch
 
 		batchBytes, err := proto.Marshal(batchMsg)
 		if err != nil {
-			fmt.Printf("[MPX][ERR] PROPOSE sn=%d marshal batch: %v\n", i.sn, err)
+			// Marshal error
 			return
 		}
 
@@ -489,9 +487,9 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 		if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
 			i.acceptedFrom[membership.OwnID] = struct{}{}
 			i.acceptCount = 1
-			fmt.Printf("[MPX][SELF] sn=%d leader in group, self-vote counted\n", i.sn)
+			// Leader in group
 		} else {
-			fmt.Printf("[MPX][SELF] sn=%d leader NOT in group, no self-vote\n", i.sn)
+			// Leader not in group
 		}
 
 		i.phase = phaseProposing
@@ -499,14 +497,15 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 		val = i.lastVal
 	}
 
-	// PREPARE 1x com GroupId já conhecido
-	if !i.prepSent {
+	// PREPARE 1x com GroupId já conhecido - Skip se líder já estabelecido
+	skipPrepare := i.parent.isLeaderEstablished(i.bucketId)
+	if !i.prepSent && !skipPrepare {
 		i.prepSent = true
 		prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
 			Prepare: &pb.MPxPrepare{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 				Ballot:  0,
-				GroupId: i.bucketId, // PATCH: Agora com bucket correto
+				GroupId: i.bucketId,
 			},
 		}}
 		pm := &pb.ProtocolMessage{
@@ -515,9 +514,13 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
 		}
 		if i.parent.emit != nil {
-			fmt.Printf("[MPX][NET] SEND Prepare sn=%d gid=%d\n", i.sn, i.bucketId)
+			// Send Prepare
 			i.parent.emit(pm)
 		}
+		i.parent.markLeaderEstablished(i.bucketId)
+		i.phase = phasePrepared
+	} else if skipPrepare {
+		i.prepSent = true
 		i.phase = phasePrepared
 	}
 
@@ -533,10 +536,10 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accept},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[MPX][NET] SEND Accept sn=%d bytes=%d gid=%d digest=%x\n", i.sn, len(val.GetBatch()), i.bucketId, i.lastDigest[:8])
+		// Send Accept
 		i.parent.emit(pm)
 	} else {
-		fmt.Printf("[MPX][NET][WARN] emit=nil; não enviou Accept sn=%d\n", i.sn)
+		// Emit nil warning
 	}
 
 	i.phase = phaseAcceptSent
@@ -564,7 +567,7 @@ func (i *mpxInstance) tick(now time.Time) {
 					}},
 				},
 			}
-			fmt.Printf("[MPX][RTX] RESEND Accept sn=%d gid=%d digest=%x\n", i.sn, i.bucketId, i.lastDigest[:8])
+			// Resend Accept
 			i.parent.emit(pm)
 			i.lastAcceptAt = now
 		}
@@ -575,7 +578,7 @@ func (i *mpxInstance) tick(now time.Time) {
 		i.acceptCount < i.quorum &&
 		now.Sub(i.lastAcceptAt) >= i.sbNilAfter {
 
-		fmt.Printf("[MPX][NIL] TIMEOUT → DELIVER ⊥ sn=%d gid=%d\n", i.sn, i.bucketId)
+		// Nil timeout
 
 		i.phase = phaseCommitted
 		nilCommit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
@@ -606,14 +609,13 @@ func (i *mpxInstance) cutReqBatch() *request.Batch {
 		return nil
 	}
 	
-	// Escolhe bucket com requests (round-robin simples)
+	// Batch agressivo: escolhe bucket com requests e corta imediatamente
 	bucketIDs := i.seg.Buckets().GetBucketIDs()
 	for _, bucketID := range bucketIDs {
 		if request.Buckets[bucketID].Len() > 0 {
-			// Corta batch apenas deste bucket
 			size := i.seg.BatchSize()
-			timeout := i.proposeEvery
-			batch := i.seg.Buckets().CutBatchFromBucket(bucketID, int(size), timeout)
+			// Timeout zero = corta imediatamente (anti-starvation)
+			batch := i.seg.Buckets().CutBatchFromBucket(bucketID, int(size), 0)
 			if len(batch.Requests) > 0 {
 				return batch
 			}
@@ -629,7 +631,7 @@ func (i *mpxInstance) Close() {
 		return
 	}
 	i.closed = true
-	fmt.Printf("[MPX][CHK] instance close sn=%d\n", i.sn)
+	// Instance closed
 }
 
 // SetMembers configures the group members for this instance and recalculates quorum
@@ -662,10 +664,10 @@ func (i *mpxInstance) SetMembers(members []int32) {
 		
 		i.acceptedFrom = newAcceptedFrom
 		i.acceptCount = newCount
-		fmt.Printf("[MPX][RECOUNT] sn=%d adjusted acceptCount=%d/%d after SetMembers\n", i.sn, i.acceptCount, i.quorum)
+		// Recount after SetMembers
 	}
 	
-	fmt.Printf("[MPX][CHK] instance sn=%d members=%v quorum=%d\n", i.sn, i.members, i.quorum)
+	// Members set
 }
 
 // isInGroup verifica se um nó está nos membros do grupo desta instância
@@ -680,11 +682,9 @@ func (i *mpxInstance) isInGroup(nodeID int32) bool {
 
 func tracePropose(sn int32, size int) {
 	tracing.MainTrace.Event(tracing.PROPOSE, int64(sn), int64(size))
-	fmt.Printf("[MPX] PROPOSE sn=%d size=%d\n", sn, size)
 }
 func traceCommit(sn int32, size int) {
 	tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(size))
-	fmt.Printf("[MPX] COMMIT  sn=%d size=%d\n", sn, size)
 }
 
 // validateBatchHomogeneity checks if all requests in batch have same GroupId
@@ -697,9 +697,7 @@ func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
 	firstGroupId := reqs[0].GetGroupId()
 	for _, req := range reqs {
 		if req.GetGroupId() != firstGroupId {
-			fmt.Printf("[MPX][WARN] Heterogeneous batch sn=%d: first=%d current=%d → returning requests\n", 
-				i.sn, firstGroupId, req.GetGroupId())
-			// Retorna requests para seus buckets corretos
+			// Heterogeneous batch - returning requests
 			batch.Resurrect()
 			return false
 		}

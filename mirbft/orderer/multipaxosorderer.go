@@ -86,6 +86,10 @@ type MultiPaxosOrderer struct {
 	
 	// Hook para quando instância é criada
 	onInstanceCreated func(sn int32)
+	
+	// Leader sticky por grupo (Phase 1 amortizada)
+	establishedLeaders map[uint32]bool
+	leaderMu           sync.RWMutex
 }
 
 func isSegmentLeader(seg manager.Segment, ownID int32, view int32) bool {
@@ -102,6 +106,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.instances = make(map[int32]*mpxInstance)
 	o.backlog = newMPXBacklog()
 	o.last = -1
+	o.establishedLeaders = make(map[uint32]bool)
 
 	o.maxBatchSize = int(config.Config.BatchSize)
 	o.proposeEvery = time.Duration(config.Config.BatchTimeout)
@@ -246,6 +251,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					if inst == nil {
 						continue
 					}
+					// Pipeline: propor sem esperar commit anterior
 					inst.ProposeIfDue(nil)
 					inst.tick(now)
 					if inst.isClosed() && sn == nextSN {
@@ -313,5 +319,17 @@ func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
 func (o *MultiPaxosOrderer) Sign(data []byte) ([]byte, error) { return nil, nil }
 func (o *MultiPaxosOrderer) CheckSig(data []byte, senderID int32, signature []byte) error {
 	return nil
+}
+
+func (o *MultiPaxosOrderer) isLeaderEstablished(groupID uint32) bool {
+	o.leaderMu.RLock()
+	defer o.leaderMu.RUnlock()
+	return o.establishedLeaders[groupID]
+}
+
+func (o *MultiPaxosOrderer) markLeaderEstablished(groupID uint32) {
+	o.leaderMu.Lock()
+	o.establishedLeaders[groupID] = true
+	o.leaderMu.Unlock()
 }
 

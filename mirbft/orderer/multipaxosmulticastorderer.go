@@ -77,10 +77,13 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 			}
 		}
 
-		if groupID == 0 {
-			o.am.Multicast(0, pm, o.emitToMembers)
+		// CRÍTICO: Realmente envia a mensagem
+		members := o.am.getGroupMembers(groupID)
+		if len(members) == 0 {
+			// Fallback para broadcast
+			originalEmit(pm)
 		} else {
-			o.am.Multicast(groupID, pm, o.emitToMembers)
+			o.emitToMembers(pm, members)
 		}
 	}
 }
@@ -178,7 +181,6 @@ func (o *MultiPaxosMulticastOrderer) applyGroupID(sn int32, groupID uint32) {
 	// Instância não existe ainda, guarda para depois
 	o.mu.Lock()
 	if existing, exists := o.pendingGroups[sn]; exists && existing != groupID {
-		fmt.Printf("[MPX][WARN] GroupID conflict sn=%d: existing=%d new=%d (keeping first)\n", sn, existing, groupID)
 		o.mu.Unlock()
 		return
 	}
