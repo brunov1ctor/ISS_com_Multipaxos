@@ -419,7 +419,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 
 // ==================== Propose / Tick ====================
 
-func (i *mpxInstance) ProposeIfDue(_ context.Context) {
+func (i *mpxInstance) ProposeIfDue(nil) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -446,7 +446,7 @@ func (i *mpxInstance) ProposeIfDue(_ context.Context) {
 			return
 		}
 		
-		rb := i.seg.Buckets().CutBatchFromBucket(i.bucketId, int(i.seg.BatchSize()), 0)
+		rb := i.seg.Buckets().CutBatchFromBucket(int(i.bucketId), int(i.seg.BatchSize()), 0)
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			return
 		}

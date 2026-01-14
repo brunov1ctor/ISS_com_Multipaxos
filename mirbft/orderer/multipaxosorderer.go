@@ -262,7 +262,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			// Tenta propor para cada bucket, começando do último
 			for offset := 0; offset < len(bucketIDs); offset++ {
 				idx := (lastBucketIdx + offset) % len(bucketIDs)
-				bucketID := bucketIDs[idx]
+				bucketID := uint32(bucketIDs[idx])
 				
 				// === LIDERANÇA POR GRUPO (integrada com leader_policy) ===
 				// Verifica quem é o líder do grupo
