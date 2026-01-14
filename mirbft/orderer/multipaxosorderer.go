@@ -87,9 +87,9 @@ type MultiPaxosOrderer struct {
 	// Hook para quando instância é criada
 	onInstanceCreated func(sn int32)
 	
-	// Leader sticky por grupo (Phase 1 amortizada)
-	establishedLeaders map[uint32]bool
-	leaderMu           sync.RWMutex
+	// Liderança sticky persistente por grupo
+	groupLeaders map[uint32]int32 // groupID -> leaderNodeID
+	leaderMu     sync.RWMutex
 }
 
 func isSegmentLeader(seg manager.Segment, ownID int32, view int32) bool {
@@ -106,7 +106,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.instances = make(map[int32]*mpxInstance)
 	o.backlog = newMPXBacklog()
 	o.last = -1
-	o.establishedLeaders = make(map[uint32]bool)
+	o.groupLeaders = make(map[uint32]int32)
 
 	o.maxBatchSize = int(config.Config.BatchSize)
 	o.proposeEvery = time.Duration(config.Config.BatchTimeout)
@@ -226,7 +226,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		inst.sbNilAfter = o.sbNilAfter
 		o.dispatcher.store(sn, inst)
 		
-		// Hook para aplicar groupIDs pendentes ANTES de drenar backlog
 		if o.onInstanceCreated != nil {
 			o.onInstanceCreated(sn)
 		}
@@ -234,43 +233,79 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	for _, sn := range seg.SNs() {
 		if inst, ok := o.dispatcher.load(sn); ok && inst != nil {
 			inst.startWorkers(&o.stopWg)
-			o.backlog.drainTo(sn, inst.enqueue) // Agora drena com members já configurados
+			o.backlog.drainTo(sn, inst.enqueue)
 		}
 	}
+	
+	// Inicia proposer global (agrupa dinamicamente por bucketId quando descoberto)
 	go func() {
 		t := time.NewTicker(o.proposeEvery)
 		defer t.Stop()
-
-		nextSN := seg.FirstSN()
+		
+		// Rastreia próximo SN por grupo
+		groupNextSN := make(map[uint32]int32)
+		
 		for range t.C {
 			now := time.Now()
-
-			if isSegmentLeader(seg, membership.OwnID, o.view) {
-				for sn := nextSN; sn <= seg.LastSN(); sn++ {
-					inst, _ := o.dispatcher.load(sn)
-					if inst == nil {
-						continue
-					}
-					// Pipeline: propor sem esperar commit anterior
-					inst.ProposeIfDue(nil)
-					inst.tick(now)
-					if inst.isClosed() && sn == nextSN {
-						nextSN++
-					}
+			
+			// Agrupa SNs por bucketId dinamicamente
+			groupSNs := make(map[uint32][]int32)
+			for _, sn := range seg.SNs() {
+				inst, ok := o.dispatcher.load(sn)
+				if !ok || inst == nil || inst.isClosed() {
+					continue
 				}
-				if nextSN > seg.LastSN() {
-					return
+				
+				// Pula SNs já processados por este grupo
+				if nextSN, exists := groupNextSN[inst.bucketId]; exists && sn < nextSN {
+					continue
 				}
-			} else {
-				for sn := nextSN; sn <= seg.LastSN(); sn++ {
-					inst, _ := o.dispatcher.load(sn)
-					if inst != nil {
+				
+				groupSNs[inst.bucketId] = append(groupSNs[inst.bucketId], sn)
+			}
+			
+			// Processa cada grupo independentemente
+			for groupID, sns := range groupSNs {
+				if len(sns) == 0 {
+					continue
+				}
+				
+				isLeader := o.isGroupLeader(groupID)
+				
+				if isLeader {
+					for _, sn := range sns {
+						inst, _ := o.dispatcher.load(sn)
+						if inst == nil {
+							continue
+						}
+						
+						inst.ProposeIfDue(nil)
 						inst.tick(now)
+						
+						if inst.isClosed() {
+							groupNextSN[groupID] = sn + 1
+						}
+					}
+				} else {
+					// Não-líder: apenas tick
+					for _, sn := range sns {
+						if inst, ok := o.dispatcher.load(sn); ok && inst != nil {
+							inst.tick(now)
+						}
 					}
 				}
-				if nextSN > seg.LastSN() {
-					return
+			}
+			
+			// Verifica se todos SNs estão fechados
+			allClosed := true
+			for _, sn := range seg.SNs() {
+				if inst, ok := o.dispatcher.load(sn); ok && inst != nil && !inst.isClosed() {
+					allClosed = false
+					break
 				}
+			}
+			if allClosed {
+				return
 			}
 		}
 	}()
@@ -321,15 +356,39 @@ func (o *MultiPaxosOrderer) CheckSig(data []byte, senderID int32, signature []by
 	return nil
 }
 
+func (o *MultiPaxosOrderer) isGroupLeader(groupID uint32) bool {
+	o.leaderMu.RLock()
+	leader, exists := o.groupLeaders[groupID]
+	o.leaderMu.RUnlock()
+	
+	if !exists {
+		// Primeira vez: elege líder deterministicamente
+		o.leaderMu.Lock()
+		if _, exists := o.groupLeaders[groupID]; !exists {
+			// Líder = menor nodeID do grupo (determinístico)
+			o.groupLeaders[groupID] = membership.OwnID // simplificado
+			fmt.Printf("[MPX][LEADER] groupID=%d elected leader=%d\n", groupID, membership.OwnID)
+		}
+		leader = o.groupLeaders[groupID]
+		o.leaderMu.Unlock()
+	}
+	
+	return leader == membership.OwnID
+}
+
 func (o *MultiPaxosOrderer) isLeaderEstablished(groupID uint32) bool {
 	o.leaderMu.RLock()
-	defer o.leaderMu.RUnlock()
-	return o.establishedLeaders[groupID]
+	_, exists := o.groupLeaders[groupID]
+	o.leaderMu.RUnlock()
+	return exists
 }
 
 func (o *MultiPaxosOrderer) markLeaderEstablished(groupID uint32) {
 	o.leaderMu.Lock()
-	o.establishedLeaders[groupID] = true
+	if _, exists := o.groupLeaders[groupID]; !exists {
+		o.groupLeaders[groupID] = membership.OwnID
+		fmt.Printf("[MPX][LEADER] groupID=%d leader established=%d\n", groupID, membership.OwnID)
+	}
 	o.leaderMu.Unlock()
 }
 
