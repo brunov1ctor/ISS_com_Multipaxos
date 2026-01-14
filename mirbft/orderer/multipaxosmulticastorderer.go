@@ -18,10 +18,8 @@ import (
 type MultiPaxosMulticastOrderer struct {
 	*MultiPaxosOrderer
 	
-	// === PENDING GROUPS ===
-	// Guarda groupID para instâncias que ainda não existem
-	// Quando instância é criada, aplica membros do grupo
 	pendingGroups map[int32]uint32
+	groupsFile    string
 	mu            sync.RWMutex
 }
 
@@ -33,11 +31,13 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 		o.pendingGroups = make(map[int32]uint32)
 	}
 	
-	// Inicializa orderer base (cria o.MultiPaxosOrderer.am)
 	o.MultiPaxosOrderer.Init(mngr)
 	
-	// === CALLBACK: APLICA GRUPOS PENDENTES ===
-	// Quando instância é criada, verifica se há groupID pendente
+	// Carrega grupos se arquivo foi especificado antes do Init
+	if o.groupsFile != "" {
+		o.MultiPaxosOrderer.am.LoadGroupsFromYAML(o.groupsFile)
+	}
+	
 	o.MultiPaxosOrderer.onInstanceCreated = func(sn int32) {
 		o.tryApplyPendingGroups(sn)
 	}
@@ -64,10 +64,14 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 		case *pb.MPxMsg_Accept:
 			groupID = msg.Accept.GetGroupId()
 		case *pb.MPxMsg_Accepted:
-			// Accepted não tem GroupId, busca via SN
 			o.mu.RLock()
 			groupID = o.pendingGroups[pm.Sn]
 			o.mu.RUnlock()
+			if groupID == 0 {
+				if inst, ok := o.MultiPaxosOrderer.dispatcher.load(pm.Sn); ok && inst != nil {
+					groupID = inst.bucketId
+				}
+			}
 		case *pb.MPxMsg_Commit:
 			groupID = msg.Commit.GetGroupId()
 		}
@@ -78,11 +82,8 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 			return
 		}
 
-		// === MULTICAST SELETIVO ===
-		// Envia apenas para membros do grupo
-		members := o.MultiPaxosOrderer.am.getGroupMembers(GroupID(groupID))
+			members := o.MultiPaxosOrderer.am.GetGroupMembers(groupID)
 		if len(members) == 0 {
-			// Grupo não definido, fallback para broadcast
 			originalEmit(pm)
 		} else {
 			for _, nodeID := range members {
@@ -128,24 +129,23 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 func (o *MultiPaxosMulticastOrderer) SetInstanceMembers(sn int32, groupID uint32) bool {
 	inst, ok := o.MultiPaxosOrderer.dispatcher.load(sn)
 	if !ok || inst == nil {
-		// Instância ainda não existe
 		return false
 	}
 	
-	members := o.MultiPaxosOrderer.am.getGroupMembers(GroupID(groupID))
+	members := o.MultiPaxosOrderer.am.GetGroupMembers(groupID)
 	if len(members) > 0 {
-		// Usa membros do grupo
 		inst.SetMembers(members)
 	} else {
-		// Fallback: usa todos os nós
 		inst.SetMembers(membership.AllNodeIDs())
 	}
 	return true
 }
 
-// === CARREGA GRUPOS DO YAML ===
-// Define quais nós pertencem a cada grupo
 func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
+	if o.MultiPaxosOrderer == nil || o.MultiPaxosOrderer.am == nil {
+		o.groupsFile = filename
+		return nil
+	}
 	return o.MultiPaxosOrderer.am.LoadGroupsFromYAML(filename)
 }
 
@@ -170,12 +170,9 @@ func (o *MultiPaxosMulticastOrderer) applyGroupID(sn int32, groupID uint32) {
 // Chamado quando instância é criada (via onInstanceCreated callback)
 // Aplica groupID que estava pendente
 func (o *MultiPaxosMulticastOrderer) tryApplyPendingGroups(sn int32) {
-	o.mu.Lock()
+	o.mu.RLock()
 	groupID, exists := o.pendingGroups[sn]
-	if exists {
-		delete(o.pendingGroups, sn)
-	}
-	o.mu.Unlock()
+	o.mu.RUnlock()
 	
 	if exists {
 		o.SetInstanceMembers(sn, groupID)

@@ -254,7 +254,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		lastBucketIdx := 0
 		
 		// Cache local de Phase 1 por segmento (reseta a cada segmento)
-		localGroupPrepared := make(map[GroupID]bool)
+		localGroupPrepared := make(map[uint32]bool)
 		
 		for range t.C {
 			now := time.Now()
@@ -265,27 +265,16 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				bucketID := uint32(bucketIDs[idx])
 				
 				// === LIDERANÇA POR GRUPO (integrada com leader_policy) ===
-				// Verifica quem é o líder do grupo
-				var isGroupLeader bool
-				if o.am != nil {
-					segmentLeaders := seg.Leaders()
-					groupLeader := o.am.GetGroupLeader(GroupID(bucketID), segmentLeaders)
-					isGroupLeader = (groupLeader == membership.OwnID)
-				}
+				segmentLeaders := seg.Leaders()
+				groupLeader := o.am.GetGroupLeader(bucketID, segmentLeaders)
+				isGroupLeader := (groupLeader == membership.OwnID)
 				
 				mu.Lock()
 				inst := activeInstances[bucketID]
 				
 				// === TODOS OS NÓS CRIAM INSTÂNCIA ===
-				// Followers precisam ter instância registrada para receber mensagens
-				// Apenas líder propõe
 				if inst == nil || inst.isClosed() {
-					// Obtém próximo SN do contador do grupo
-					groupSN := o.am.NextSN(GroupID(bucketID))
-					if groupSN < 0 {
-						mu.Unlock()
-						continue
-					}
+					groupSN := o.am.NextSN(bucketID)
 					
 					// === MAPEAMENTO SN GLOBAL ===
 					// globalSN = base + groupSN*numBuckets + bucketIndex
@@ -310,17 +299,12 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst.bucketId = bucketID
 					
 					// === CONFIGURA MEMBROS DO GRUPO ===
-					// Define quorum baseado no grupo, não no cluster inteiro
-					members := o.am.getGroupMembers(GroupID(bucketID))
-					if len(members) == 0 {
-						members = membership.AllNodeIDs()
-					}
+					members := o.am.GetGroupMembers(bucketID)
 					inst.SetMembers(members)
 					
 					// === PHASE 1 AMORTIZADA (cache local por segmento) ===
-					// Envia PREPARE apenas se for líder e primeira instância do grupo
-					if isGroupLeader && !localGroupPrepared[GroupID(bucketID)] {
-						localGroupPrepared[GroupID(bucketID)] = true
+					if isGroupLeader && !localGroupPrepared[bucketID] {
+						localGroupPrepared[bucketID] = true
 						
 						prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
 							Prepare: &pb.MPxPrepare{
