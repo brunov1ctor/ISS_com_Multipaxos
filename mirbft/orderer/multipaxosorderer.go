@@ -302,6 +302,15 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					members := o.am.GetGroupMembers(bucketID)
 					inst.SetMembers(members)
 					
+					// Log diferenciado: multicast seletivo vs broadcast
+					if len(members) < len(membership.AllNodeIDs()) {
+						fmt.Printf("[MPX][MULTICAST] sn=%d bucketId=%d SELECTIVE members=%v quorum=%d\n", 
+							globalSN, bucketID, members, len(members)/2+1)
+					} else {
+						fmt.Printf("[MPX][BROADCAST] sn=%d bucketId=%d ALL_NODES members=%v quorum=%d\n", 
+							globalSN, bucketID, members, len(members)/2+1)
+					}
+					
 					// === PHASE 1 AMORTIZADA (cache local por segmento) ===
 					if isGroupLeader && !localGroupPrepared[bucketID] {
 						localGroupPrepared[bucketID] = true
@@ -319,7 +328,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 							Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
 						}
 						if o.emit != nil {
-							fmt.Printf("[MPX][SEG] sn=%d sending PREPARE bucketId=%d (first for group in segment)\n", globalSN, bucketID)
 							o.emit(pm)
 						}
 					}
