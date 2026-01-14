@@ -3,7 +3,6 @@ package orderer
 import (
 	"context"
 	"crypto/sha256"
-	"fmt"
 	"sync"
 	"time"
 
