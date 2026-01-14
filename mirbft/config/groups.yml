@@ -1,5 +1,9 @@
 # Group configuration for MultiPaxos Multicast
+# Difusão atômica seletiva: cada grupo tem membros específicos
 # Nodes: 0, 1, 2, 3, 4 (total: 5 nodes)
+# 
+# NOTA: GroupId é singular (um grupo por mensagem)
+# Para enviar para múltiplos grupos, use buckets diferentes ou expanda manualmente
 # 
 # All groups have 3 nodes for fault tolerance (majority = 2)
 # Node distribution:
