@@ -1,7 +1,6 @@
 package orderer
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"sync"
@@ -22,7 +21,6 @@ type instPhase int
 const (
 	phaseInit instPhase = iota
 	phasePrepared
-	phaseProposing
 	phaseAcceptSent
 	phaseCommitted
 )
@@ -34,7 +32,6 @@ type mpxInstance struct {
 	sn     int32
 	bucketId uint32 // Bucket ID from user request
 
-	maxBatchSize  int
 	proposeEvery  time.Duration
 	announce      AnnounceFn
 	lastProposeAt time.Time
@@ -67,12 +64,11 @@ type mpxInstance struct {
 	wg     sync.WaitGroup
 }
 
-func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, maxBatch int, interval time.Duration) *mpxInstance {
+func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ int, interval time.Duration) *mpxInstance {
 	inst := &mpxInstance{
 		parent:         parent,
 		sn:             sn,
-		bucketId:       0, // Default para broadcast (será atualizado se necessário)
-		maxBatchSize:   maxBatch,
+		bucketId:       0,
 		proposeEvery:   interval,
 		announce:       announce,
 		lastProposeAt:  time.Now(),
@@ -423,7 +419,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 
 // ==================== Propose / Tick ====================
 
-func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
+func (i *mpxInstance) ProposeIfDue(_ context.Context) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -485,8 +481,6 @@ func (i *mpxInstance) ProposeIfDue(ctx context.Context) {
 		} else {
 			fmt.Printf("[MPX][INST] sn=%d leader NOT in group\n", i.sn)
 		}
-
-		i.phase = phaseProposing
 	} else {
 		val = i.lastVal
 	}
@@ -602,30 +596,16 @@ func (i *mpxInstance) cutReqBatch() *request.Batch {
 	if i.seg == nil {
 		return nil
 	}
-	
-	// Batch agressivo: escolhe bucket com requests e corta imediatamente
 	bucketIDs := i.seg.Buckets().GetBucketIDs()
 	for _, bucketID := range bucketIDs {
 		if request.Buckets[bucketID].Len() > 0 {
-			size := i.seg.BatchSize()
-			// Timeout zero = corta imediatamente (anti-starvation)
-			batch := i.seg.Buckets().CutBatchFromBucket(bucketID, int(size), 0)
+			batch := i.seg.Buckets().CutBatchFromBucket(bucketID, int(i.seg.BatchSize()), 0)
 			if len(batch.Requests) > 0 {
 				return batch
 			}
 		}
 	}
 	return nil
-}
-
-func (i *mpxInstance) Close() {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.closed {
-		return
-	}
-	i.closed = true
-	// Instance closed
 }
 
 // SetMembers configures the group members for this instance and recalculates quorum
