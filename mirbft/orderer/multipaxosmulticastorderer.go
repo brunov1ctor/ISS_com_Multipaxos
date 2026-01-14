@@ -1,7 +1,6 @@
 package orderer
 
 import (
-	"fmt"
 	"sort"
 	"sync"
 
