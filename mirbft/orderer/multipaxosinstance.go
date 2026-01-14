@@ -423,8 +423,7 @@ func (i *mpxInstance) ProposeIfDue(_ context.Context) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	// Propor mais agressivamente - reduzir intervalo
-	minInterval := i.proposeEvery / 5 // 5x mais agressivo
+	minInterval := i.proposeEvery / 5
 	if time.Since(i.lastProposeAt) < minInterval {
 		return
 	}
@@ -437,9 +436,17 @@ func (i *mpxInstance) ProposeIfDue(_ context.Context) {
 	var val *pb.MPxValue
 	reqs := 0
 
-	// PATCH: Descobre bucket ANTES de enviar Prepare
 	if i.lastVal == nil {
-		rb := i.cutReqBatch()
+		// Corta batch do bucket específico desta instância
+		if i.seg == nil || i.bucketId == 0 {
+			return
+		}
+		
+		if request.Buckets[i.bucketId].Len() == 0 {
+			return
+		}
+		
+		rb := i.seg.Buckets().CutBatchFromBucket(i.bucketId, int(i.seg.BatchSize()), 0)
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			return
 		}
@@ -452,15 +459,8 @@ func (i *mpxInstance) ProposeIfDue(_ context.Context) {
 		batchMsg := rb.Message()
 		reqs = len(batchMsg.Requests)
 
-		// Extrai bucket do primeiro request do batch
-		if len(batchMsg.Requests) > 0 {
-			i.bucketId = batchMsg.Requests[0].GetGroupId()
-			fmt.Printf("[MPX][INST] sn=%d extracted bucketId=%d from batch\n", i.sn, i.bucketId)
-		}
-
 		batchBytes, err := proto.Marshal(batchMsg)
 		if err != nil {
-			// Marshal error
 			return
 		}
 
@@ -477,38 +477,14 @@ func (i *mpxInstance) ProposeIfDue(_ context.Context) {
 		if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
 			i.acceptedFrom[membership.OwnID] = struct{}{}
 			i.acceptCount = 1
-			fmt.Printf("[MPX][INST] sn=%d leader in group, acceptCount=1\n", i.sn)
-		} else {
-			fmt.Printf("[MPX][INST] sn=%d leader NOT in group\n", i.sn)
 		}
 	} else {
 		val = i.lastVal
 	}
 
-	// PREPARE 1x com GroupId já conhecido - Skip se líder já estabelecido
-	skipPrepare := i.parent.isLeaderEstablished(i.bucketId)
-	if !i.prepSent && !skipPrepare {
-		i.prepSent = true
-		prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-			Prepare: &pb.MPxPrepare{
-				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Ballot:  0,
-				GroupId: i.bucketId,
-			},
-		}}
-		pm := &pb.ProtocolMessage{
-			SenderId: membership.OwnID,
-			Sn:       i.sn,
-			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
-		}
-		if i.parent.emit != nil {
-			fmt.Printf("[MPX][INST] sn=%d sending PREPARE bucketId=%d\n", i.sn, i.bucketId)
-			i.parent.emit(pm)
-		}
-		i.parent.markLeaderEstablished(i.bucketId)
-		i.phase = phasePrepared
-	} else if skipPrepare {
-		fmt.Printf("[MPX][INST] sn=%d skipping PREPARE (leader established for bucket=%d)\n", i.sn, i.bucketId)
+	// PREPARE 1x por grupo (amortizado) - usa cache local do segmento
+	if !i.prepSent {
+		// Usa cache passado pelo runSegment (reseta a cada segmento)
 		i.prepSent = true
 		i.phase = phasePrepared
 	}
@@ -527,8 +503,6 @@ func (i *mpxInstance) ProposeIfDue(_ context.Context) {
 	if i.parent.emit != nil {
 		fmt.Printf("[MPX][INST] sn=%d sending ACCEPT bucketId=%d reqs=%d\n", i.sn, i.bucketId, reqs)
 		i.parent.emit(pm)
-	} else {
-		fmt.Printf("[MPX][INST] sn=%d emit is nil!\n", i.sn)
 	}
 
 	i.phase = phaseAcceptSent
@@ -593,18 +567,7 @@ func (i *mpxInstance) tick(now time.Time) {
 // ==================== Utilidades ====================
 
 func (i *mpxInstance) cutReqBatch() *request.Batch {
-	if i.seg == nil {
-		return nil
-	}
-	bucketIDs := i.seg.Buckets().GetBucketIDs()
-	for _, bucketID := range bucketIDs {
-		if request.Buckets[bucketID].Len() > 0 {
-			batch := i.seg.Buckets().CutBatchFromBucket(bucketID, int(i.seg.BatchSize()), 0)
-			if len(batch.Requests) > 0 {
-				return batch
-			}
-		}
-	}
+	// NãO USADO - batch é cortado em runSegment antes de criar instância
 	return nil
 }
 
