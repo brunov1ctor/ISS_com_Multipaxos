@@ -363,7 +363,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				
 				// === APENAS LÍDER PROPÕE ===
 				if isGroupLeader {
-					inst.ProposeIfDue(nil)
+					inst.ProposeIfDue()
 				}
 				
 				// Avança round-robin

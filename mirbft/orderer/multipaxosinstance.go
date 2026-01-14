@@ -419,7 +419,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 
 // ==================== Propose / Tick ====================
 
-func (i *mpxInstance) ProposeIfDue(nil) {
+func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
