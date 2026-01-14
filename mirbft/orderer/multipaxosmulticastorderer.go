@@ -1,7 +1,6 @@
 package orderer
 
 import (
-	"sort"
 	"sync"
 
 	"github.com/hyperledger-labs/mirbft/manager"
@@ -10,184 +9,166 @@ import (
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 )
 
-// MultiPaxosMulticastOrderer uses group-based communication
+// === MULTIPAXOS COM MULTICAST SELETIVO ===
+// Extensão do MultiPaxosOrderer que adiciona:
+// 1. Comunicação por grupo (multicast seletivo)
+// 2. Quorum baseado em membros do grupo, não cluster inteiro
+// 3. Roteamento de mensagens apenas para nós do grupo
+
 type MultiPaxosMulticastOrderer struct {
 	*MultiPaxosOrderer
-	am *AtomicMulticast
+	
+	// === PENDING GROUPS ===
 	// Guarda groupID para instâncias que ainda não existem
+	// Quando instância é criada, aplica membros do grupo
 	pendingGroups map[int32]uint32
 	mu            sync.RWMutex
 }
 
 func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
-	// Inicializa campos se não foram inicializados
 	if o.MultiPaxosOrderer == nil {
 		o.MultiPaxosOrderer = &MultiPaxosOrderer{}
-	}
-	if o.am == nil {
-		o.am = NewAtomicMulticast()
 	}
 	if o.pendingGroups == nil {
 		o.pendingGroups = make(map[int32]uint32)
 	}
 	
+	// Inicializa orderer base (cria o.MultiPaxosOrderer.am)
 	o.MultiPaxosOrderer.Init(mngr)
 	
-	// Configura hook para aplicar groupIDs pendentes
+	// === CALLBACK: APLICA GRUPOS PENDENTES ===
+	// Quando instância é criada, verifica se há groupID pendente
 	o.MultiPaxosOrderer.onInstanceCreated = func(sn int32) {
 		o.tryApplyPendingGroups(sn)
 	}
 
+	// === ROTEAMENTO POR GRUPO ===
+	// Intercepta emit() para enviar apenas para membros do grupo
+	// Extrai groupID da mensagem e roteia seletivamente
 	originalEmit := o.MultiPaxosOrderer.emit
 	o.MultiPaxosOrderer.emit = func(pm *pb.ProtocolMessage) {
 		mpx := pm.GetMultipaxos()
 		if mpx == nil {
+			// Não é mensagem MultiPaxos, usa broadcast padrão
 			originalEmit(pm)
 			return
 		}
 
-		var groupID GroupID = 0
+		// Extrai groupID da mensagem
+		var groupID uint32
 		switch msg := mpx.Type.(type) {
 		case *pb.MPxMsg_Prepare:
-			groupID = GroupID(msg.Prepare.GetGroupId())
-			if groupID == 0 {
-				groupID = o.determineGroupForSN(pm.Sn)
-			}
-			if groupID > 0 {
-				o.SetInstanceMembers(pm.Sn, uint32(groupID))
-			}
+			groupID = msg.Prepare.GetGroupId()
 		case *pb.MPxMsg_Promise:
-			groupID = GroupID(msg.Promise.GetGroupId())
-			if groupID == 0 {
-				groupID = o.determineGroupForSN(pm.Sn)
-			}
+			groupID = msg.Promise.GetGroupId()
 		case *pb.MPxMsg_Accept:
-			groupID = GroupID(msg.Accept.GetGroupId())
-			if groupID == 0 {
-				groupID = o.determineGroupForSN(pm.Sn)
-			}
-			if groupID > 0 {
-				o.SetInstanceMembers(pm.Sn, uint32(groupID))
-			}
+			groupID = msg.Accept.GetGroupId()
+		case *pb.MPxMsg_Accepted:
+			// Accepted não tem GroupId, busca via SN
+			o.mu.RLock()
+			groupID = o.pendingGroups[pm.Sn]
+			o.mu.RUnlock()
 		case *pb.MPxMsg_Commit:
-			groupID = GroupID(msg.Commit.GetGroupId())
-			if groupID == 0 {
-				groupID = o.determineGroupForSN(pm.Sn)
-			}
+			groupID = msg.Commit.GetGroupId()
 		}
 
-		// CRÍTICO: Realmente envia a mensagem
-		members := o.am.getGroupMembers(groupID)
+		if groupID == 0 {
+			// Grupo 0 = broadcast para todos
+			originalEmit(pm)
+			return
+		}
+
+		// === MULTICAST SELETIVO ===
+		// Envia apenas para membros do grupo
+		members := o.MultiPaxosOrderer.am.getGroupMembers(GroupID(groupID))
 		if len(members) == 0 {
-			// Fallback para broadcast
+			// Grupo não definido, fallback para broadcast
 			originalEmit(pm)
 		} else {
-			o.emitToMembers(pm, members)
+			for _, nodeID := range members {
+				if nodeID != membership.OwnID {
+					messenger.EnqueueMsg(pm, nodeID)
+				}
+			}
 		}
 	}
 }
 
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
-	// Captura groupID ANTES de processar no base
+	// === EXTRAI GROUPID DA MENSAGEM ===
+	// Identifica qual grupo esta mensagem pertence
 	mpx := pm.GetMultipaxos()
-	var groupID GroupID = 0
+	var groupID uint32
 	if mpx != nil {
 		switch msg := mpx.Type.(type) {
 		case *pb.MPxMsg_Prepare:
-			groupID = GroupID(msg.Prepare.GetGroupId())
-			if groupID == 0 {
-				groupID = o.determineGroupForSN(pm.Sn)
-			}
+			groupID = msg.Prepare.GetGroupId()
 		case *pb.MPxMsg_Promise:
-			groupID = GroupID(msg.Promise.GetGroupId())
-			if groupID == 0 {
-				groupID = o.determineGroupForSN(pm.Sn)
-			}
+			groupID = msg.Promise.GetGroupId()
 		case *pb.MPxMsg_Accept:
-			groupID = GroupID(msg.Accept.GetGroupId())
-			if groupID == 0 {
-				groupID = o.determineGroupForSN(pm.Sn)
-			}
+			groupID = msg.Accept.GetGroupId()
 		case *pb.MPxMsg_Commit:
-			groupID = GroupID(msg.Commit.GetGroupId())
-			if groupID == 0 {
-				groupID = o.determineGroupForSN(pm.Sn)
-			}
-		default:
-			groupID = o.determineGroupForSN(pm.Sn)
+			groupID = msg.Commit.GetGroupId()
 		}
 	}
 	
-	// Processa no base (pode criar instância ou ir para backlog)
+	// Processa mensagem normalmente
 	o.MultiPaxosOrderer.HandleMessage(pm)
 	
-	// Aplica groupID (imediatamente ou guarda para depois)
+	// === APLICA MEMBROS DO GRUPO NA INSTÂNCIA ===
+	// Se instância existe, configura quorum baseado no grupo
+	// Se não existe, guarda em pendingGroups
 	if groupID > 0 {
-		o.applyGroupID(pm.Sn, uint32(groupID))
+		o.applyGroupID(pm.Sn, groupID)
 	}
 }
 
-// emitToMembers sends message to specific group members using existing MIR infrastructure
-func (o *MultiPaxosMulticastOrderer) emitToMembers(pm *pb.ProtocolMessage, members []int32) {
-	// Multicast direto para o grupo (quorum já calculado corretamente na instância)
-	for _, nodeID := range members {
-		if nodeID == membership.OwnID {
-			continue
-		}
-		messenger.EnqueueMsg(pm, nodeID)
-	}
-}
-
-func (o *MultiPaxosMulticastOrderer) SetInstanceMembers(sn int32, bucketID uint32) bool {
-	if inst, ok := o.MultiPaxosOrderer.dispatcher.load(sn); ok && inst != nil {
-		members := o.am.getGroupMembers(GroupID(bucketID))
-		if len(members) > 0 {
-			inst.SetMembers(members)
-		} else {
-			inst.SetMembers(membership.AllNodeIDs())
-		}
-		return true
-	}
-	return false
-}
-
-func (o *MultiPaxosMulticastOrderer) determineGroupForSN(sn int32) GroupID {
-	groupIDs := make([]GroupID, 0)
-	for gid := range o.am.groups {
-		if gid > 0 {
-			groupIDs = append(groupIDs, gid)
-		}
-	}
-	if len(groupIDs) == 0 {
-		return 0
-	}
-	sort.Slice(groupIDs, func(i, j int) bool {
-		return groupIDs[i] < groupIDs[j]
-	})
-	return groupIDs[int(sn)%len(groupIDs)]
-}
-
-func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
-	return o.am.LoadGroupsFromYAML(filename)
-}
-
-// applyGroupID tenta aplicar groupID na instância ou guarda para quando ela existir
-func (o *MultiPaxosMulticastOrderer) applyGroupID(sn int32, groupID uint32) {
-	if o.SetInstanceMembers(sn, groupID) {
-		return // Aplicado com sucesso
+// === CONFIGURA MEMBROS DO GRUPO NA INSTÂNCIA ===
+// Define quorum baseado nos membros do grupo, não do cluster inteiro
+func (o *MultiPaxosMulticastOrderer) SetInstanceMembers(sn int32, groupID uint32) bool {
+	inst, ok := o.MultiPaxosOrderer.dispatcher.load(sn)
+	if !ok || inst == nil {
+		// Instância ainda não existe
+		return false
 	}
 	
-	// Instância não existe ainda, guarda para depois
-	o.mu.Lock()
-	if existing, exists := o.pendingGroups[sn]; exists && existing != groupID {
-		o.mu.Unlock()
+	members := o.MultiPaxosOrderer.am.getGroupMembers(GroupID(groupID))
+	if len(members) > 0 {
+		// Usa membros do grupo
+		inst.SetMembers(members)
+	} else {
+		// Fallback: usa todos os nós
+		inst.SetMembers(membership.AllNodeIDs())
+	}
+	return true
+}
+
+// === CARREGA GRUPOS DO YAML ===
+// Define quais nós pertencem a cada grupo
+func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
+	return o.MultiPaxosOrderer.am.LoadGroupsFromYAML(filename)
+}
+
+// === APLICA GROUPID (IMEDIATO OU PENDENTE) ===
+// Tenta aplicar membros do grupo na instância
+// Se instância não existe, guarda em pendingGroups
+func (o *MultiPaxosMulticastOrderer) applyGroupID(sn int32, groupID uint32) {
+	if o.SetInstanceMembers(sn, groupID) {
+		// Instância existe, membros aplicados
 		return
 	}
-	o.pendingGroups[sn] = groupID
+	
+	// Instância não existe, guarda para depois
+	o.mu.Lock()
+	if existing, exists := o.pendingGroups[sn]; !exists || existing == groupID {
+		o.pendingGroups[sn] = groupID
+	}
 	o.mu.Unlock()
 }
 
-// tryApplyPendingGroups aplica groupIDs pendentes quando instância é criada
+// === APLICA GRUPOS PENDENTES ===
+// Chamado quando instância é criada (via onInstanceCreated callback)
+// Aplica groupID que estava pendente
 func (o *MultiPaxosMulticastOrderer) tryApplyPendingGroups(sn int32) {
 	o.mu.Lock()
 	groupID, exists := o.pendingGroups[sn]
