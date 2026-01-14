@@ -71,7 +71,6 @@ func (am *AtomicMulticast) LoadGroupsFromYAML(filename string) error {
 	// Define groups from config
 	for gid, members := range config.Groups {
 		am.DefineGroup(gid, members...)
-		fmt.Printf("[MPX-MC][CONFIG] Loaded group %d: %v\n", gid, members)
 	}
 
 	return nil
