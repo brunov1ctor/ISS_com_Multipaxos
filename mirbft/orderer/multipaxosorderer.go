@@ -266,7 +266,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				
 				// === LIDERANÇA POR GRUPO (integrada com leader_policy) ===
 				segmentLeaders := seg.Leaders()
-				groupLeader := o.am.GetGroupLeader(bucketID, segmentLeaders)
+				groupLeader := o.am.GetGroupLeader(GroupID(bucketID), segmentLeaders)
 				isGroupLeader := (groupLeader == membership.OwnID)
 				
 				mu.Lock()
@@ -274,7 +274,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				
 				// === TODOS OS NÓS CRIAM INSTÂNCIA ===
 				if inst == nil || inst.isClosed() {
-					groupSN := o.am.NextSN(bucketID)
+					groupSN := o.am.NextSN(GroupID(bucketID))
 					
 					// === MAPEAMENTO SN GLOBAL ===
 					// globalSN = base + groupSN*numBuckets + bucketIndex
