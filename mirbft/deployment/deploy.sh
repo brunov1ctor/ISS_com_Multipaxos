@@ -77,7 +77,7 @@ ensure_local_binaries() {
   # =========================================================
   mkdir -p "$local_bin_dir"
 
-  log_info "Build forçado: recompilando binários em $repo_root"
+  log_info "Recompilando binários em $repo_root"
   log_info "Destino dos binários: $local_bin_dir"
 
   # Descoberta (se você aplicar build tags no Go, ajuste aqui também)
