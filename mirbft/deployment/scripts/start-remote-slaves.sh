@@ -365,7 +365,7 @@ copy_required_assets() {
 
   remote_check_assets "${ip}" || {
     err "[copy] ${ip}: FALHA na verificação de assets"
-    return 0
+    return 1
   }
   
   info "[copy] ${ip}: concluído"
@@ -384,7 +384,10 @@ start_remote_slave() {
 
   info "[slave] Iniciando ${instance_id} @ ${ctrl_ip} (tag=${tag})"
 
-  copy_required_assets "${ctrl_ip}"
+  copy_required_assets "${ctrl_ip}" || {
+    err "[slave] ${instance_id}: FALHA na cópia de assets"
+    return 1
+  }
 
   local _master_ip="${master_ip}"
 
@@ -418,7 +421,7 @@ matched=0    # Linhas com tag correspondente
 started=0    # Slaves efetivamente iniciados
 
 # Loop principal: lê instance-info e inicia slaves
-while read -r instance_id ctrl_ip data_ip role tag rest; do
+while read -r instance_id ctrl_ip data_ip role tag rest || [[ -n "${instance_id}" ]]; do
   # Pula linhas vazias e comentários
   [[ -z "${instance_id:-}" ]] && continue
   [[ "${instance_id}" =~ ^# ]] && continue
@@ -442,7 +445,10 @@ while read -r instance_id ctrl_ip data_ip role tag rest; do
     continue
   fi
 
-  start_remote_slave "${instance_id}" "${ctrl_ip}" "${data_ip}" "${role}" "${tag}"
+  start_remote_slave "${instance_id}" "${ctrl_ip}" "${data_ip}" "${role}" "${tag}" || {
+    err "[main] Falha ao iniciar ${instance_id}, abortando."
+    exit 1
+  }
   ((started++)) || true
 done < "${instance_info_file}"
 
