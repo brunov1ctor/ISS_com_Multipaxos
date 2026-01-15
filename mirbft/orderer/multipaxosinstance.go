@@ -30,7 +30,8 @@ type mpxInstance struct {
 
 	parent *MultiPaxosOrderer
 	sn     int32
-	bucketId uint32 // Bucket ID from user request
+	bucketId uint32 // GroupId lógico (1..N) para mensagens
+	bucketIndex int32 // Índice interno (0..N-1) para acessar request.Buckets[]
 
 	proposeEvery  time.Duration
 	announce      AnnounceFn
@@ -69,6 +70,7 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ 
 		parent:         parent,
 		sn:             sn,
 		bucketId:       0,
+		bucketIndex:    -1,
 		proposeEvery:   interval,
 		announce:       announce,
 		lastProposeAt:  time.Now(),
@@ -438,15 +440,15 @@ func (i *mpxInstance) ProposeIfDue() {
 
 	if i.lastVal == nil {
 		// Corta batch do bucket específico desta instância
-		if i.seg == nil || i.bucketId == 0 {
+		if i.seg == nil || i.bucketIndex < 0 {
 			return
 		}
 		
-		if request.Buckets[i.bucketId].Len() == 0 {
+		if request.Buckets[i.bucketIndex].Len() == 0 {
 			return
 		}
 		
-		rb := i.seg.Buckets().CutBatchFromBucket(int(i.bucketId), int(i.seg.BatchSize()), 0)
+		rb := i.seg.Buckets().CutBatchFromBucket(int(i.bucketIndex), int(i.seg.BatchSize()), 0)
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			return
 		}
@@ -493,7 +495,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot:  0,
 		Value:   val,
-		GroupId: i.bucketId,
+		GroupId: i.bucketId, // Usa groupId lógico (1..N)
 	}}}
 	pm := &pb.ProtocolMessage{
 		SenderId: membership.OwnID,
@@ -501,7 +503,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accept},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[MPX][INST] sn=%d sending ACCEPT bucketId=%d reqs=%d\n", i.sn, i.bucketId, reqs)
+		fmt.Printf("[MPX][INST] sn=%d sending ACCEPT groupId=%d reqs=%d\n", i.sn, i.bucketId, reqs)
 		i.parent.emit(pm)
 	}
 
@@ -638,6 +640,13 @@ func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
 			return false
 		}
 	}
+	
+	if firstGroupId != i.bucketId {
+		fmt.Printf("[MPX][INST] sn=%d groupId mismatch: batch=%d expected=%d, returning requests\n", i.sn, firstGroupId, i.bucketId)
+		batch.Resurrect()
+		return false
+	}
+	
 	return true
 }
 
