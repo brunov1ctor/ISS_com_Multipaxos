@@ -355,28 +355,10 @@ copy_required_assets() {
 
   remote_kill_bins "${ip}"
 
-  # -------------------------------------------------------------------------
-  # FIX: evitar sobrescrita concorrente em FS compartilhado (NFS)
-  # -------------------------------------------------------------------------
-  # Em testbeds como Emulab, /users/<user>/go/bin é NFS compartilhado.
-  # Copiar binários enquanto outros nodes os executam causa SIGBUS.
-  # Solução: se remote_bin_dir == /users/.../go/bin, assume que binários
-  # já estão instalados e pula a cópia (a menos que FORCE_COPY_BINS=true).
-
-  force_copy_bins="${FORCE_COPY_BINS:-false}"
-  shared_go_bin=false
-  if [[ "${remote_bin_dir}" == "/users/${remote_user}/go/bin" ]]; then
-    shared_go_bin=true
-  fi
-
-  if [[ "${force_copy_bins}" == "true" || "${shared_go_bin}" == "false" ]]; then
-    # NÃO copiar discoverymaster para slaves (evita overwrite no master)
-    copy_bin_atomic "${ip}" discoveryslave
-    copy_bin_atomic "${ip}" orderingpeer
-    copy_bin_atomic "${ip}" orderingclient
-  else
-    info "[copy] ${ip}: pulando binários (FS compartilhado)"
-  fi
+  # Copia binários para o slave (NÃO copiar discoverymaster)
+  copy_bin_atomic "${ip}" discoveryslave
+  copy_bin_atomic "${ip}" orderingpeer
+  copy_bin_atomic "${ip}" orderingclient
 
   copy_tls_assets "${ip}"
   copy_experiment_configs "${ip}"
