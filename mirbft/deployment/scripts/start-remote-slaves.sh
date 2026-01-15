@@ -8,11 +8,11 @@
 #   Copia assets necessários (scripts, binários, TLS, configs) e dispara start-slave.sh.
 #
 # Uso:
-#   start-remote-slaves.sh <exp_data_dir> <desired_count> <wanted_tag> <instance_info_file>
+#   start-remote-slaves.sh <exp_data_dir> <max_slaves> <wanted_tag> <instance_info_file>
 #
 # Parâmetros:
 #   exp_data_dir        - Diretório local com dados do experimento (contém config/)
-#   desired_count       - Número de slaves a iniciar (0 = ilimitado)
+#   max_slaves          - Número máximo de slaves a iniciar (0 = todos)
 #   wanted_tag          - Tag das instâncias a iniciar (ex: "peer", "client")
 #   instance_info_file  - Arquivo com info das instâncias (id ctrl_ip data_ip role tag)
 #
@@ -59,7 +59,7 @@ fi
 
 # Argumentos do script
 exp_data_dir="$1"        # Diretório local com dados do experimento
-desired_count="$2"       # Número de slaves a iniciar (0 = todos)
+max_slaves="$2"          # Número máximo de slaves a iniciar (0 = todos)
 wanted_tag="$3"          # Tag das instâncias a filtrar (ex: "peer", "client")
 instance_info_file="$4"  # Arquivo com info das instâncias
 
@@ -174,7 +174,7 @@ info "==== [start-remote-slaves] Iniciando ====="
 info "  exp_data_dir       = ${exp_data_dir}"
 info "  instance_info_file = ${instance_info_file}"
 info "  wanted_tag         = ${wanted_tag}"
-info "  desired_count      = ${desired_count}"
+info "  max_slaves         = ${max_slaves} (0=ilimitado)"
 info "  remote_user        = ${remote_user}"
 info "  remote_work_dir    = ${remote_work_dir}"
 info "  remote_base_dir    = ${remote_base_dir}"
@@ -436,7 +436,7 @@ while read -r instance_id ctrl_ip data_ip role tag rest || [[ -n "${instance_id}
   ((matched++)) || true
 
   # Limita número de slaves iniciados (0 = ilimitado)
-  if [[ "${desired_count}" -ne 0 && "${started}" -ge "${desired_count}" ]]; then
+  if [[ "${max_slaves}" -ne 0 && "${started}" -ge "${max_slaves}" ]]; then
     continue
   fi
 
