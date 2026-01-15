@@ -80,6 +80,12 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 			continue
 		}
 
+		// Verifica se este peer deve responder
+		if e.ShouldRespond != nil && !*e.ShouldRespond {
+			fmt.Printf("[RESPONDER][SKIP] sn=%d shouldRespond=false — pulando respostas\n", e.Sn)
+			continue
+		}
+
 		nReq := len(e.Batch.Requests)
 		fmt.Printf("[RESPONDER][ENTRY] sn=%d nreq=%d\n", e.Sn, nReq)
 

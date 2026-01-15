@@ -149,7 +149,17 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d unmarshal: %v\n", sn, err)
 			return
 		}
-		entry := &mirlog.Entry{Sn: sn, Batch: &b}
+		
+		// === EVITA FAN-OUT: Apenas o primeiro peer do cluster responde ===
+		// Isso garante que cada request gere apenas 1 evento REQ_FINISHED
+		// independente de quantos peers commitaram o batch
+		shouldRespond := (membership.OwnID == membership.AllNodeIDs()[0])
+		
+		entry := &mirlog.Entry{
+			Sn:             sn,
+			Batch:          &b,
+			ShouldRespond:  &shouldRespond,
+		}
 		announcer.Announce(entry)
 
 		fmt.Printf("SB-DELIVER sn=%d size=%d\n", sn, len(b.Requests))
@@ -262,19 +272,20 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			// Tenta propor para cada bucket, começando do último
 			for offset := 0; offset < len(bucketIDs); offset++ {
 				idx := (lastBucketIdx + offset) % len(bucketIDs)
-				bucketID := uint32(bucketIDs[idx])
+				bucketIndex := bucketIDs[idx] // 0..N-1 (índice interno)
+				groupId := uint32(bucketIndex + 1) // 1..N (ID lógico do grupo)
 				
 				// === LIDERANÇA POR GRUPO (integrada com leader_policy) ===
 				segmentLeaders := seg.Leaders()
-				groupLeader := o.am.GetGroupLeader(GroupID(bucketID), segmentLeaders)
+				groupLeader := o.am.GetGroupLeader(GroupID(groupId), segmentLeaders)
 				isGroupLeader := (groupLeader == membership.OwnID)
 				
 				mu.Lock()
-				inst := activeInstances[bucketID]
+				inst := activeInstances[groupId]
 				
 				// === TODOS OS NÓS CRIAM INSTÂNCIA ===
 				if inst == nil || inst.isClosed() {
-					groupSN := o.am.NextSN(GroupID(bucketID))
+					groupSN := o.am.NextSN(GroupID(groupId))
 					
 					// === MAPEAMENTO SN GLOBAL ===
 					// globalSN = base + groupSN*numBuckets + bucketIndex
@@ -296,30 +307,31 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					
 					inst = o.ensureInstance(globalSN)
 					inst.setSegment(seg)
-					inst.bucketId = bucketID
+					inst.bucketId = groupId
+					inst.bucketIndex = int32(bucketIndex)
 					
 					// === CONFIGURA MEMBROS DO GRUPO ===
-					members := o.am.GetGroupMembers(bucketID)
+					members := o.am.GetGroupMembers(groupId)
 					inst.SetMembers(members)
 					
 					// Log diferenciado: multicast seletivo vs broadcast
 					if len(members) < len(membership.AllNodeIDs()) {
-						fmt.Printf("[MPX][MULTICAST] sn=%d bucketId=%d SELECTIVE members=%v quorum=%d\n", 
-							globalSN, bucketID, members, len(members)/2+1)
+						fmt.Printf("[MPX][MULTICAST] sn=%d groupId=%d SELECTIVE members=%v quorum=%d\n", 
+							globalSN, groupId, members, len(members)/2+1)
 					} else {
-						fmt.Printf("[MPX][BROADCAST] sn=%d bucketId=%d ALL_NODES members=%v quorum=%d\n", 
-							globalSN, bucketID, members, len(members)/2+1)
+						fmt.Printf("[MPX][BROADCAST] sn=%d groupId=%d ALL_NODES members=%v quorum=%d\n", 
+							globalSN, groupId, members, len(members)/2+1)
 					}
 					
 					// === PHASE 1 AMORTIZADA (cache local por segmento) ===
-					if isGroupLeader && !localGroupPrepared[bucketID] {
-						localGroupPrepared[bucketID] = true
+					if isGroupLeader && !localGroupPrepared[groupId] {
+						localGroupPrepared[groupId] = true
 						
 						prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
 							Prepare: &pb.MPxPrepare{
 								Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
 								Ballot:  0,
-								GroupId: bucketID,
+								GroupId: groupId,
 							},
 						}}
 						pm := &pb.ProtocolMessage{
@@ -340,7 +352,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst.startWorkers(&o.stopWg)
 					o.backlog.drainTo(globalSN, inst.enqueue)
 					
-					activeInstances[bucketID] = inst
+					activeInstances[groupId] = inst
 					
 					// Rastreia instância para cleanup correto
 					if existing, loaded := o.segmentInstances.LoadOrStore(seg.SegID(), []*mpxInstance{inst}); loaded {
