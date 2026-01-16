@@ -86,6 +86,16 @@ type MultiPaxosOrderer struct {
 	am *AtomicMulticast // Gerenciador de grupos
 	
 	segmentInstances sync.Map // Rastreia instâncias por segmento
+	
+	// CSMR: Barreira global para atomic global order
+	lastGlobalSN     int32 // Último SN decidido no bucket 0 (global)
+	observedGlobalSN int32 // Último SN global já entregue localmente
+	globalPending    bool  // Flag: existe global pendente (freeze propostas locais)
+	globalMu         sync.RWMutex
+	
+	// CSMR: Contador de instâncias locais em voo por grupo (para drenagem)
+	inflightLocal map[uint32]int32 // groupId -> contador de instâncias ativas
+	inflightMu    sync.RWMutex
 }
 
 // Init inicializa o orderer Multi-Paxos
@@ -103,6 +113,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	
 	// Inicializa atomic multicast
 	o.am = NewAtomicMulticast()
+	o.inflightLocal = make(map[uint32]int32)
 
 	// Função emit padrão: broadcast para todos os nós
 	o.emit = func(pm *pb.ProtocolMessage) {
@@ -119,11 +130,10 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	// Função announce padrão: entrega batch commitado à aplicação
 	o.announce = func(sn int32, batchBytes []byte, _ []byte) {
 		if len(batchBytes) == 0 {
-			fmt.Printf("[MPX][NIL] DELIVER ⊥ sn=%d\n", sn)
-			// Cria entrada vazia no log para não travar checkpoint/GC
+			// CSMR: NÃO entrega NIL para nós não-membros
+			// Apenas cria entrada vazia no log para checkpoint/GC
+			fmt.Printf("[MPX][SKIP] sn=%d (empty batch, não entrega)\n", sn)
 			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
-			// f+1 peers respondem (cliente espera >= f+1 respostas)
-			// Ordenação determinística para garantir mesmo conjunto em todos os nós
 			allNodes := append([]int32(nil), membership.AllNodeIDs()...)
 			sort.Slice(allNodes, func(i, j int) bool { return allNodes[i] < allNodes[j] })
 			n := len(allNodes)
@@ -135,7 +145,6 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			if q > n {
 				q = n
 			}
-			// Seleção determinística: primeiros q NodeIDs ordenados
 			shouldRespond := false
 			for i := 0; i < q; i++ {
 				if membership.OwnID == allNodes[i] {
@@ -151,10 +160,66 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			announcer.Announce(entry)
 			return
 		}
+		
 		var b pb.Batch
 		if err := proto.Unmarshal(batchBytes, &b); err != nil {
 			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d unmarshal: %v\n", sn, err)
 			return
+		}
+		
+		// CSMR: Atualiza barreira global se for bucket 0
+		// Bucket 0 = operações multi-grupo (atomic global order)
+		if len(b.Requests) > 0 && b.Requests[0].GetGroupId() == 0 {
+			o.globalMu.Lock()
+			if sn > o.lastGlobalSN {
+				o.lastGlobalSN = sn
+				o.globalPending = true // Congela propostas locais
+				fmt.Printf("[CSMR][BARRIER] Global barrier updated: sn=%d (freeze local)\n", sn)
+			}
+			// CSMR: Só atualiza observedGlobalSN se não há locais em voo
+			o.inflightMu.RLock()
+			totalInflight := int32(0)
+			for _, count := range o.inflightLocal {
+				totalInflight += count
+			}
+			o.inflightMu.RUnlock()
+			
+			if totalInflight == 0 && sn > o.observedGlobalSN {
+				o.observedGlobalSN = sn
+				o.globalPending = false // Descongela
+				fmt.Printf("[CSMR][BARRIER] Global observed: sn=%d (unfreeze)\n", sn)
+			} else if totalInflight > 0 {
+				fmt.Printf("[CSMR][DRAIN] Waiting for %d inflight local instances\n", totalInflight)
+			}
+			o.globalMu.Unlock()
+		} else {
+			// CSMR: Decrementa contador de inflight para grupos locais
+			if len(b.Requests) > 0 {
+				groupId := b.Requests[0].GetGroupId()
+				if groupId != 0 {
+					o.inflightMu.Lock()
+					if o.inflightLocal[groupId] > 0 {
+						o.inflightLocal[groupId]--
+					}
+					// CSMR: Reavaliar se pode descongelar (drain completo)
+					totalInflight := int32(0)
+					for _, count := range o.inflightLocal {
+						totalInflight += count
+					}
+					o.inflightMu.Unlock()
+					
+					// Se drenagem completa e global pendente, descongela
+					if totalInflight == 0 {
+						o.globalMu.Lock()
+						if o.globalPending {
+							o.observedGlobalSN = o.lastGlobalSN
+							o.globalPending = false
+							fmt.Printf("[CSMR][UNFREEZE] Drain complete, unfreeze (observed=%d)\n", o.observedGlobalSN)
+						}
+						o.globalMu.Unlock()
+					}
+				}
+			}
 		}
 		
 		// f+1 peers respondem para garantir quorum no cliente (>= f+1 respostas)
@@ -184,6 +249,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			Batch:          &b,
 			ShouldRespond:  &shouldRespond,
 		}
+		
 		announcer.Announce(entry)
 
 		fmt.Printf("SB-DELIVER sn=%d size=%d\n", sn, len(b.Requests))
@@ -308,6 +374,16 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		for range t.C {
 			now := time.Now()
 			
+			// CSMR: Freeze antecipado se bucket 0 tem requests pendentes
+			if len(request.Buckets) > 0 && request.Buckets[0].Len() > 0 {
+				o.globalMu.Lock()
+				if !o.globalPending {
+					o.globalPending = true
+					fmt.Printf("[CSMR][FREEZE] Bucket 0 has pending requests, freeze local proposals\n")
+				}
+				o.globalMu.Unlock()
+			}
+			
 			for offset := 0; offset < len(groupIDs); offset++ {
 				idx := (lastGroupIdx + offset) % len(groupIDs)
 				groupId := groupIDs[idx]
@@ -336,39 +412,28 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						}
 					}
 					
-					// Nó não é membro: skip direto sem criar instância ativa
+					// CSMR: Nó não é membro - NÃO entrega NIL
+					// Apenas skip (não participa, não entrega)
 					if !isMember {
-						// Calcula próximo globalSN deste grupo de forma determinística
-						// Usa mirlog para verificar se já foi processado (não dispatcher)
-						
-						// Encontra o próximo globalSN não processado deste grupo
-						var nextGlobalSN int32 = -1
-						for candidateSN := seg.FirstSN(); candidateSN <= seg.LastSN(); candidateSN++ {
-							// Verifica se este globalSN pertence a este grupo
-							offset := candidateSN - seg.FirstSN()
-							if offset >= 0 && offset%numGroups == groupPos[groupId] {
-								// Verifica se já foi commitado no log (fonte de verdade)
-								if mirlog.GetEntry(candidateSN) == nil {
-									nextGlobalSN = candidateSN
-									break
-								}
-							}
-						}
-						
-						if nextGlobalSN >= 0 {
-							// Entrega NIL diretamente (sem instância ativa)
-							go func(sn int32) {
-								o.announce(sn, []byte{}, []byte{})
-							}(nextGlobalSN)
-							fmt.Printf("[MPX][SKIP] sn=%d groupId=%d (nó não é membro)\n", nextGlobalSN, groupId)
-						}
 						mu.Unlock()
+						fmt.Printf("[CSMR][SKIP] groupId=%d: nó não é membro, não entrega\n", groupId)
 						continue
 					}
 					
 					if !isGroupLeader {
 						mu.Unlock()
 						continue
+					}
+					
+					// CSMR: Não propor local se global pendente (freeze)
+					if groupId != 0 {
+						o.globalMu.RLock()
+						pending := o.globalPending
+						o.globalMu.RUnlock()
+						if pending {
+							mu.Unlock()
+							continue // Aguarda drenagem do global
+						}
 					}
 					
 					// Calcula próximo globalSN deste grupo por varredura (sem contador global)
@@ -395,6 +460,14 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst.setSegment(seg)
 					inst.bucketId = groupId
 					inst.bucketIndex = groupPos[groupId]
+					
+					// CSMR: Incrementa contador de inflight para grupos locais
+					if groupId != 0 {
+						o.inflightMu.Lock()
+						o.inflightLocal[groupId]++
+						o.inflightMu.Unlock()
+						inst.countedInflight = true // Marca para evitar dupla contagem
+					}
 					
 					// FAIL-FAST: configuração inválida = abort segment
 					if int(inst.bucketIndex) >= len(request.Buckets) {
@@ -453,6 +526,21 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					}
 				}
 				mu.Unlock()
+				
+				// CSMR: Verifica barreira global antes de processar grupo local
+				if groupId != 0 { // Não é bucket global
+					o.globalMu.RLock()
+					lastGlobal := o.lastGlobalSN
+					observedGlobal := o.observedGlobalSN
+					o.globalMu.RUnlock()
+					
+					if observedGlobal < lastGlobal {
+						// Espera barreira global ser observada
+						fmt.Printf("[CSMR][WAIT] groupId=%d aguarda barreira global (observed=%d < last=%d)\n", 
+							groupId, observedGlobal, lastGlobal)
+						continue
+					}
+				}
 				
 				inst.tick(now)
 				
