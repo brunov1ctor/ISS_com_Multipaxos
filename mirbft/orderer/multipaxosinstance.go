@@ -246,8 +246,7 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 			Id:             &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 			Ballot:         ballot,
 			Ok:             true,
-			AcceptedBallot: i.acceptedBallot,
-			AcceptedValue:  promiseValue,
+			Value:          promiseValue,
 			GroupId:        groupId,
 			Members:        membersUint32,
 		},
@@ -294,8 +293,8 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	i.promisedFrom[from] = struct{}{}
 	i.promiseCount++
 	
-	if promise.GetAcceptedValue() != nil {
-		promiseValue := promise.GetAcceptedValue()
+	if promise.GetValue() != nil {
+		promiseValue := promise.GetValue()
 		i.acceptedValue = promiseValue
 		i.lastVal = promiseValue
 		fmt.Printf("[MPX][INST] sn=%d adopted value from promise\n", i.sn)

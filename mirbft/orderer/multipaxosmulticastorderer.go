@@ -119,7 +119,6 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		switch msg := mpx.Type.(type) {
 		case *pb.MPxMsg_Prepare:
 			groupID = msg.Prepare.GetGroupId()
-			members = msg.Prepare.Members
 		case *pb.MPxMsg_Promise:
 			groupID = msg.Promise.GetGroupId()
 			members = msg.Promise.Members
