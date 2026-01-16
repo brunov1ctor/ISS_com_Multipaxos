@@ -24,9 +24,12 @@ var (
 	randomRequestPayload []byte
 )
 
-// Need more than one third of the peers to respond.
+// Need at least f+1 responses (where f = (N-1)/3)
+// This ensures consistency with server-side responder selection
 func enoughResponses(n int) bool {
-	return n > membership.NumNodes()/3
+	N := membership.NumNodes()
+	f := (N - 1) / 3
+	return n >= f+1
 }
 
 func main() {

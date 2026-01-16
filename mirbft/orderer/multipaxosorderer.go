@@ -2,6 +2,7 @@ package orderer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -120,10 +121,29 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.announce = func(sn int32, batchBytes []byte, _ []byte) {
 		if len(batchBytes) == 0 {
 			fmt.Printf("[MPX][NIL] DELIVER ⊥ sn=%d\n", sn)
-			tracing.MainTrace.Event(tracing.COMMIT, int64(sn), 0)
 			// Cria entrada vazia no log para não travar checkpoint/GC
 			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
+			// f+1 peers respondem (cliente espera >= f+1 respostas)
+			// Ordenação determinística para garantir mesmo conjunto em todos os nós
+			allNodes := append([]int32(nil), membership.AllNodeIDs()...)
+			sort.Slice(allNodes, func(i, j int) bool { return allNodes[i] < allNodes[j] })
+			n := len(allNodes)
+			f := (n - 1) / 3
+			q := f + 1
+			if q < 1 {
+				q = 1
+			}
+			if q > n {
+				q = n
+			}
+			// Seleção determinística: primeiros q NodeIDs ordenados
 			shouldRespond := false
+			for i := 0; i < q; i++ {
+				if membership.OwnID == allNodes[i] {
+					shouldRespond = true
+					break
+				}
+			}
 			entry := &mirlog.Entry{
 				Sn:            sn,
 				Batch:         emptyBatch,
@@ -138,8 +158,27 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			return
 		}
 		
-		// Apenas o primeiro peer responde para evitar fan-out
-		shouldRespond := (membership.OwnID == membership.AllNodeIDs()[0])
+		// f+1 peers respondem para garantir quorum no cliente (>= f+1 respostas)
+		// Ordenação determinística para garantir mesmo conjunto em todos os nós
+		allNodes := append([]int32(nil), membership.AllNodeIDs()...)
+		sort.Slice(allNodes, func(i, j int) bool { return allNodes[i] < allNodes[j] })
+		n := len(allNodes)
+		f := (n - 1) / 3
+		q := f + 1
+		if q < 1 {
+			q = 1
+		}
+		if q > n {
+			q = n
+		}
+		// Seleção determinística: primeiros q NodeIDs ordenados
+		shouldRespond := false
+		for i := 0; i < q; i++ {
+			if membership.OwnID == allNodes[i] {
+				shouldRespond = true
+				break
+			}
+		}
 		
 		entry := &mirlog.Entry{
 			Sn:             sn,
@@ -151,8 +190,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		fmt.Printf("SB-DELIVER sn=%d size=%d\n", sn, len(b.Requests))
 		fmt.Printf("COMMIT sn=%d size=%d\n", sn, len(b.Requests))
 		fmt.Printf("DELIVER sn=%d delivered=%d\n", sn, len(b.Requests))
-
-		tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(len(b.Requests)))
+		// Nota: tracing.COMMIT é registrado por mirlog.CommitEntry(), não duplicar aqui
 	}
 
 	fmt.Printf("[MPX] Init ok; cfg: batchSize=%d batchTimeout=%s leaderPolicy=%s\n",
@@ -334,26 +372,29 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						continue
 					}
 					
-					groupSN := o.am.NextSN(GroupID(groupId))
-					if groupSN < 0 {
+					// Calcula próximo globalSN deste grupo por varredura (sem contador global)
+					// Isso garante que cada segmento começa do zero, sem pular SNs
+					var nextGlobalSN int32 = -1
+					for candidateSN := seg.FirstSN(); candidateSN <= seg.LastSN(); candidateSN++ {
+						offset := candidateSN - seg.FirstSN()
+						if offset >= 0 && offset%numGroups == groupPos[groupId] {
+							if mirlog.GetEntry(candidateSN) == nil {
+								nextGlobalSN = candidateSN
+								break
+							}
+						}
+					}
+					
+					if nextGlobalSN < 0 {
 						mu.Unlock()
-						fmt.Printf("[MPX][SEG] groupId=%d: contador não inicializado, pulando\n", groupId)
+						fmt.Printf("[MPX][SEG] groupId=%d: todos SNs já processados\n", groupId)
 						continue
 					}
 					
-					// Usa índice do grupo (não groupId cru) para evitar pulos de SN
-					globalSN := seg.FirstSN() + groupSN*numGroups + groupPos[groupId]
-					
-					if globalSN > seg.LastSN() {
-						mu.Unlock()
-						fmt.Printf("[MPX][SEG] sn=%d exceeds segment LastSN=%d, skipping\n", globalSN, seg.LastSN())
-						continue
-					}
-					
+					globalSN := nextGlobalSN
 					inst = o.ensureInstance(globalSN)
 					inst.setSegment(seg)
 					inst.bucketId = groupId
-					// bucketIndex usa posição ordenada (não groupId cru)
 					inst.bucketIndex = groupPos[groupId]
 					
 					// FAIL-FAST: configuração inválida = abort segment
