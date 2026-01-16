@@ -417,7 +417,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				inst.tick(now)
 				
 				if isGroupLeader {
-					inst.ProposeIfDue()
+					// Só propõe se houver requests pendentes no bucket
+					if request.Buckets[inst.bucketIndex].Len() > 0 {
+						inst.ProposeIfDue()
+					}
 				}
 				
 				lastGroupIdx = (idx + 1) % len(groupIDs)
