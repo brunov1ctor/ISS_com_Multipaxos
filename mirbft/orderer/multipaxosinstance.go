@@ -214,10 +214,8 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	i.promisedBallot = ballot
 	
 	var promiseValue *pb.MPxValue
-	var promiseBallot uint64
 	if i.acceptedValue != nil {
 		promiseValue = i.acceptedValue
-		promiseBallot = i.acceptedBallot
 	}
 
 	// Usa GroupId do Prepare recebido
@@ -242,8 +240,7 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 			Id:             &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 			Ballot:         ballot,
 			Ok:             true,
-			AcceptedBallot: promiseBallot,
-			AcceptedValue:  promiseValue,
+			Value:          promiseValue,
 			GroupId:        groupId,
 			Members:        members,
 		},
@@ -281,16 +278,13 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	i.promisedFrom[from] = struct{}{}
 	i.promiseCount++
 	
-	if promise.GetAcceptedValue() != nil {
-		promiseValue := promise.GetAcceptedValue()
-		promiseBallot := promise.GetAcceptedBallot()
+	if promise.GetValue() != nil {
+		promiseValue := promise.GetValue()
 		
-		if promiseBallot > i.acceptedBallot {
-			i.acceptedBallot = promiseBallot
-			i.acceptedValue = promiseValue
-			i.lastVal = promiseValue
-			fmt.Printf("[MPX][INST] sn=%d adopted value from promise ballot=%d\n", i.sn, promiseBallot)
-		}
+		// Since there's no ballot info in the new proto, just adopt the value
+		i.acceptedValue = promiseValue
+		i.lastVal = promiseValue
+		fmt.Printf("[MPX][INST] sn=%d adopted value from promise\n", i.sn)
 	}
 	
 	fmt.Printf("[MPX][INST] sn=%d promise from=%d counted, promiseCount=%d/%d\n", i.sn, from, i.promiseCount, i.quorum)

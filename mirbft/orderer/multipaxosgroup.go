@@ -99,8 +99,8 @@ func ValidateAndRouteRequest(req *pb.ClientRequest) uint32 {
 		return GROUP_GLOBAL
 	}
 	
-	tg := req.GetTouchedGroups()
-	if len(tg) > 0 {
+	if len(req.TouchedGroups) > 0 {
+		tg := req.TouchedGroups
 		var g uint32
 		seen := make(map[uint32]struct{})
 		for _, x := range tg {
