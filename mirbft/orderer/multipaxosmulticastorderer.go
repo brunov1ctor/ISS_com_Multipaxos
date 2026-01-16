@@ -114,15 +114,15 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	// Extrai groupID e members da mensagem recebida
 	mpx := pm.GetMultipaxos()
 	var groupID uint32
-	var members []int32
+	var members []uint32
 	if mpx != nil {
 		switch msg := mpx.Type.(type) {
 		case *pb.MPxMsg_Prepare:
 			groupID = msg.Prepare.GetGroupId()
-			members = msg.Prepare.GetMembers()
+			members = msg.Prepare.Members
 		case *pb.MPxMsg_Promise:
 			groupID = msg.Promise.GetGroupId()
-			members = msg.Promise.GetMembers()
+			members = msg.Promise.Members
 		case *pb.MPxMsg_Accept:
 			groupID = msg.Accept.GetGroupId()
 		case *pb.MPxMsg_Commit:
@@ -134,8 +134,14 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	if groupID > 0 {
 		// Se members veio na mensagem, aprende sem depender do YAML
 		if len(members) > 0 {
+			// Converte uint32 para int32
+			membersInt32 := make([]int32, len(members))
+			for idx, m := range members {
+				membersInt32[idx] = int32(m)
+			}
+			
 			if inst, ok := o.MultiPaxosOrderer.dispatcher.load(pm.Sn); ok && inst != nil {
-				inst.SetMembers(members)
+				inst.SetMembers(membersInt32)
 				inst.bucketId = groupID
 			} else {
 				// Instância ainda não existe, guarda para aplicar depois

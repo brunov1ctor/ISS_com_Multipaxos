@@ -387,7 +387,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 							Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
 							Ballot:  uint64(inst.currentBallot),
 							GroupId: groupId,
-							Members: members,
 						},
 					}}
 					pm := &pb.ProtocolMessage{
