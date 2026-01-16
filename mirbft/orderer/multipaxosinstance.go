@@ -199,21 +199,8 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 
 	ballot := uint64(prepare.GetBallot())
 	
-	// Aprende members do Prepare (follower não depende do YAML)
-	if len(prepare.GetMembers()) > 0 {
-		members := make([]int32, len(prepare.Members))
-		for idx, m := range prepare.Members {
-			members[idx] = m
-		}
-		i.members = members
-		n := int32(len(i.members))
-		if n < 1 {
-			n = 1
-		}
-		i.quorum = n/2 + 1
-		i.bucketId = prepare.GetGroupId()
-		fmt.Printf("[MPX][INST] sn=%d learned members from PREPARE: %v quorum=%d groupId=%d\n", i.sn, members, i.quorum, i.bucketId)
-	}
+	// GroupId sempre vem no Prepare
+	i.bucketId = prepare.GetGroupId()
 	
 	if int64(ballot) > i.currentBallot && i.leader == membership.OwnID {
 		seenCounter := ballot >> 32
@@ -247,15 +234,22 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	} else {
 		members = append([]int32{}, membership.AllNodeIDs()...)
 	}
+	
+	// Converte int32 para uint32 para o protobuf
+	membersUint32 := make([]uint32, len(members))
+	for idx, m := range members {
+		membersUint32[idx] = uint32(m)
+	}
 
 	promise := &pb.MPxMsg{Type: &pb.MPxMsg_Promise{
 		Promise: &pb.MPxPromise{
 			Id:             &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 			Ballot:         ballot,
 			Ok:             true,
-			Value:          promiseValue,
+			AcceptedBallot: i.acceptedBallot,
+			AcceptedValue:  promiseValue,
 			GroupId:        groupId,
-			Members:        members,
+			Members:        membersUint32,
 		},
 	}}
 
@@ -300,8 +294,8 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	i.promisedFrom[from] = struct{}{}
 	i.promiseCount++
 	
-	if promise.GetValue() != nil {
-		promiseValue := promise.GetValue()
+	if promise.GetAcceptedValue() != nil {
+		promiseValue := promise.GetAcceptedValue()
 		i.acceptedValue = promiseValue
 		i.lastVal = promiseValue
 		fmt.Printf("[MPX][INST] sn=%d adopted value from promise\n", i.sn)
