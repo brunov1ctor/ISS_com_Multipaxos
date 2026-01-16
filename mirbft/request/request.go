@@ -170,14 +170,23 @@ type Request struct {
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
+	// CSMR: Validação crítica de TouchedGroups para atomic global order
+	// Operações multi-grupo SEM TouchedGroups violam linearizability (Figura 2 CSMR)
+	if reqMsg.GetGroupId() == 0 && len(reqMsg.TouchedGroups) <= 1 {
+		logger.Fatal().
+			Int32("clId", reqMsg.RequestId.ClientId).
+			Int32("clSn", reqMsg.RequestId.ClientSn).
+			Msg("[CSMR] FATAL: GroupId=0 but TouchedGroups not set. Multi-group ops MUST set TouchedGroups!")
+	}
+	
 	return Add(&Request{
 		Msg:      reqMsg,
 		Digest:   Digest(reqMsg),
 		Buffer:   getBuffer(reqMsg.RequestId.ClientId),
 		Bucket:   getBucket(reqMsg),
-		Verified: false, // signature has not yet been verified
-		InFlight: false, // request has not yet been proposed (an identical one might have been, though, in which case we discard this request object)
-		Next:     nil,   // This request object is not part of a bucket list.
+		Verified: false,
+		InFlight: false,
+		Next:     nil,
 		Prev:     nil,
 	})
 }

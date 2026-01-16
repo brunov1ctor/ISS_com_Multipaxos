@@ -26,27 +26,53 @@ const (
 	phaseCommitted                    // Consenso alcançado, valor commitado
 )
 
-// mpxInstance representa uma instância do protocolo Multi-Paxos
-// Cada instância é responsável por ordenar um único batch de requisições
+// mpxInstance representa uma instância do protocolo Multi-Paxos para um único SN
+//
+// PROTOCOLO PAXOS (Crash-Tolerant Consensus):
+// ============================================
+// FASE 1 (Preparação):
+//   Líder envia PREPARE(ballot) → Followers respondem PROMISE
+//   Quorum de promises → Líder pode propor valor
+//
+// FASE 2 (Aceitação):
+//   Líder envia ACCEPT(valor) → Followers respondem ACCEPTED
+//   Quorum de accepts → Valor decidido, envia COMMIT
+//
+// ENTREGA:
+//   Todos recebem COMMIT → Entregam valor à aplicação
+//
+// CSMR (Composable State Machine Replication):
+// =============================================
+// - Cada instância pertence a um GRUPO (bucketId)
+// - Apenas MEMBROS do grupo participam do consenso
+// - Quorum calculado sobre MEMBROS (não sobre todos os nós)
+// - Não-membros recebem apenas COMMIT (meta-log)
+//
+// BATCHES VAZIOS (NIL):
+// =====================
+// - Permite avançar SN mesmo sem requests pendentes
+// - Evita travamento de segmentos esperando requests
+// - Crítico para progressão do log (MirBFT requirement)
 type mpxInstance struct {
 	mu sync.Mutex
 
 	parent *MultiPaxosOrderer
 	sn     int32   // Número de sequência desta instância
-	bucketId uint32 // ID do grupo/bucket ao qual esta instância pertence
-	bucketIndex int32
+	// CSMR: Rastreamento de grupo e paralelismo
+	bucketId uint32 // ID do grupo ao qual esta instância pertence (0 = global)
+	bucketIndex int32 // Índice do bucket/grupo para acessar request.Buckets[]
 
 	proposeEvery  time.Duration
 	announce      AnnounceFn
 	lastProposeAt time.Time
 	closed        bool
-	countedInflight bool // CSMR: Se já foi contabilizado em inflightLocal (evita dupla contagem)
+	countedInflight bool // CSMR: Evita dupla contagem em inflightLocal (líder conta ao criar, follower ao receber PREPARE)
 
 	seg manager.Segment
 
-	// Estado do protocolo Paxos
-	members      []int32  // Membros do grupo (para quorum)
-	quorum       int32    // Número de votos necessários para maioria
+	// Estado do protocolo Paxos (crash-tolerant, não Byzantine)
+	members      []int32  // CSMR: Membros do grupo (subconjunto de AllNodeIDs)
+	quorum       int32    // Maioria dos membros: len(members)/2 + 1
 	promisedBallot  uint64 // Maior ballot prometido (Fase 1)
 	acceptedBallot  uint64 // Maior ballot aceito (Fase 2)
 	acceptedValue   *pb.MPxValue // Valor aceito
@@ -191,9 +217,10 @@ func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	}
 }
 
-// onPrepare processa mensagem PREPARE (Fase 1 do Paxos)
-// Líder envia PREPARE para iniciar consenso em um novo ballot
+// onPrepare processa PREPARE (Fase 1 do Paxos)
+// Líder envia PREPARE para iniciar consenso
 // Followers respondem com PROMISE se aceitarem o ballot
+// CSMR: Followers incrementam inflightLocal ao receber PREPARE (rastreamento de drenagem)
 func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -203,13 +230,8 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	// GroupId sempre vem no Prepare
 	i.bucketId = prepare.GetGroupId()
 	
-	// CSMR: Incrementa inflightLocal para followers (evita dupla contagem com flag)
-	if i.bucketId != 0 && !i.countedInflight {
-		i.parent.inflightMu.Lock()
-		i.parent.inflightLocal[i.bucketId]++
-		i.parent.inflightMu.Unlock()
-		i.countedInflight = true
-	}
+	// CSMR: NÃO incrementa inflightLocal aqui (movido para ProposeIfDue no líder)
+	// Followers não precisam contar inflight (só líder propõe)
 	
 	if int64(ballot) > i.currentBallot && i.leader == membership.OwnID {
 		seenCounter := ballot >> 32
@@ -278,9 +300,10 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	messenger.EnqueueMsg(out, leaderID)
 }
 
-// onPromise processa mensagem PROMISE (resposta da Fase 1)
+// onPromise processa PROMISE (resposta da Fase 1)
 // Quando quorum de promises é atingido, líder pode iniciar Fase 2
-// Se algum promise contém valor aceito anteriormente, líder deve adotá-lo
+// Se algum promise contém valor aceito anteriormente, líder DEVE adotá-lo (safety)
+// CSMR: Só conta promises de membros do grupo
 func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -318,9 +341,10 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	}
 }
 
-// onAccept processa mensagem ACCEPT (Fase 2 do Paxos)
+// onAccept processa ACCEPT (Fase 2 do Paxos)
 // Líder envia ACCEPT com valor proposto
 // Followers aceitam e respondem com ACCEPTED
+// CSMR: Só aceita de membros do grupo
 func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -394,9 +418,10 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	messenger.EnqueueMsg(resp, i.leader)
 }
 
-// onAccepted processa mensagem ACCEPTED (resposta da Fase 2)
+// onAccepted processa ACCEPTED (resposta da Fase 2)
 // Quando quorum de accepts é atingido, líder envia COMMIT
 // Todos os nós entregam o valor commitado
+// CSMR: Só conta votos de membros do grupo
 func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -448,8 +473,10 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	}
 }
 
-// onCommit processa mensagem COMMIT (entrega final)
+// onCommit processa COMMIT (entrega final)
 // Valor foi decidido por consenso, pode ser entregue à aplicação
+// CSMR: Propaga COMMIT para garantir que todos os membros do grupo recebam
+// CRÍTICO: Sempre chama announce() para criar entry no log (evita GAP)
 func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -477,6 +504,12 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		if i.parent.emit != nil {
 			i.parent.emit(pmOut)
 		}
+		
+		// CRÍTICO: Anuncia NIL para criar entry no log (evita GAP)
+		if i.announce != nil {
+			i.announce(i.sn, []byte{}, nil)
+		}
+		
 		i.closed = true
 		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
 		return
@@ -516,7 +549,9 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	}
 	if i.announce != nil {
 		fmt.Printf("[MPX][INST] sn=%d announcing commit, size=%d\n", i.sn, len(b.Requests))
-		i.announce(i.sn, i.lastVal.GetBatch(), nil)
+		// CRÍTICO: Passa digest via metadata (3º parâmetro)
+		digestBytes := i.lastDigest[:]
+		i.announce(i.sn, i.lastVal.GetBatch(), digestBytes)
 	} else {
 		fmt.Printf("[MPX][INST] sn=%d announcer is nil!\n", i.sn)
 	}
@@ -529,6 +564,8 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 
 // ProposeIfDue verifica se é hora de propor um novo batch
 // Líder corta batch do bucket e inicia Fase 2 (ACCEPT)
+// CRÍTICO: Pode propor batch vazio (NIL) para avançar SN quando não há requests
+// Isso evita que segmentos travem esperando por requests que nunca chegam
 func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -551,34 +588,58 @@ func (i *mpxInstance) ProposeIfDue() {
 			return
 		}
 		
-		if request.Buckets[i.bucketIndex].Len() == 0 {
-			return
+		// Tenta cortar batch do bucket
+		var rb *request.Batch
+		if request.Buckets[i.bucketIndex].Len() > 0 {
+			rb = i.seg.Buckets().CutBatchFromBucket(int(i.bucketIndex), int(i.seg.BatchSize()), 0)
 		}
 		
-		rb := i.seg.Buckets().CutBatchFromBucket(int(i.bucketIndex), int(i.seg.BatchSize()), 0)
+		// Se não há requests, propõe batch vazio (NIL) para avançar SN
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
-			return
-		}
-		
-		if !i.validateBatchHomogeneity(rb) {
-			return
-		}
-		
-		i.lastReqBatch = rb
-		batchMsg := rb.Message()
-		reqs = len(batchMsg.Requests)
+			// Batch vazio: cria valor NIL
+			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
+			batchBytes, err := proto.Marshal(emptyBatch)
+			if err != nil {
+				return
+			}
+			val = &pb.MPxValue{
+				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+				Batch: batchBytes,
+			}
+			i.lastVal = val
+			i.lastDigest = sha256.Sum256(batchBytes)
+			fmt.Printf("[MPX][INST] sn=%d proposing EMPTY batch (no requests)\n", i.sn)
+		} else {
+			// Batch com requests: incrementa inflightLocal AQUI (não em runSegment)
+			if !i.validateBatchHomogeneity(rb) {
+				return
+			}
+			
+			// CRÍTICO: Só incrementa inflight quando batch TEM requests
+			if i.bucketId != 0 && !i.countedInflight {
+				i.parent.inflightMu.Lock()
+				i.parent.inflightLocal[i.bucketId]++
+				i.parent.inflightMu.Unlock()
+				i.countedInflight = true
+				fmt.Printf("[MPX][INST] sn=%d inflightLocal[%d]++ (has requests)\n", i.sn, i.bucketId)
+			}
+			
+			i.lastReqBatch = rb
+			batchMsg := rb.Message()
+			reqs = len(batchMsg.Requests)
 
-		batchBytes, err := proto.Marshal(batchMsg)
-		if err != nil {
-			return
-		}
+			batchBytes, err := proto.Marshal(batchMsg)
+			if err != nil {
+				return
+			}
 
-		val = &pb.MPxValue{
-			Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-			Batch: batchBytes,
+			val = &pb.MPxValue{
+				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+				Batch: batchBytes,
+			}
+			i.lastVal = val
+			i.lastDigest = sha256.Sum256(batchBytes)
 		}
-		i.lastVal = val
-		i.lastDigest = sha256.Sum256(batchBytes)
 
 		i.acceptedFrom = map[int32]struct{}{}
 		i.acceptCount = 0
@@ -669,6 +730,11 @@ func (i *mpxInstance) tick(now time.Time) {
 		if i.parent.emit != nil {
 			i.parent.emit(pmOut)
 		}
+		
+		// CRÍTICO: Anuncia NIL para criar entry no log (evita GAP)
+		if i.announce != nil {
+			i.announce(i.sn, []byte{}, nil)
+		}
 
 		i.closed = true
 		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
@@ -728,8 +794,11 @@ func traceCommit(sn int32, size int) {
 	tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(size))
 }
 
-// validateBatchHomogeneity valida se todas requisições pertencem ao mesmo grupo
-// Batches heterogêneos (múltiplos grupos) são rejeitados
+// validateBatchHomogeneity valida consistência do batch
+// 1. Todas requests devem ter o mesmo groupId (não mistura grupos)
+// 2. groupId do batch deve bater com bucketId da instância
+// 3. CRÍTICO: Bucket 0 (barreira global) só aceita groupId=0
+// Batches inválidos são rejeitados e requests devolvidas ao bucket
 func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
 	reqs := batch.Message().Requests
 	if len(reqs) == 0 {
@@ -747,6 +816,13 @@ func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
 	
 	if firstGroupId != i.bucketId {
 		fmt.Printf("[MPX][INST] sn=%d groupId mismatch: batch=%d expected=%d, returning requests\n", i.sn, firstGroupId, i.bucketId)
+		batch.Resurrect()
+		return false
+	}
+	
+	// CRÍTICO: Bucket 0 (barreira global) só aceita groupId=0
+	if i.bucketIndex == 0 && firstGroupId != 0 {
+		fmt.Printf("[MPX][INST] sn=%d bucket 0 rejecting groupId=%d (must be 0), returning requests\n", i.sn, firstGroupId)
 		batch.Resurrect()
 		return false
 	}

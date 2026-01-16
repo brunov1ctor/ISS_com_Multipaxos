@@ -16,10 +16,34 @@ const (
 type GroupID uint32
 
 // AtomicMulticast gerencia grupos de nós para comunicação seletiva.
-// Implementa CSMR (Composable State Machine Replication):
-//   - Nós membros executam batch real
-//   - Nós não-membros entregam NIL no mesmo SN
-//   - Estado diverge entre nós (by design)
+//
+// CSMR (Composable State Machine Replication):
+// =============================================
+// CONCEITO:
+//   - Sistema particionado em GRUPOS independentes
+//   - Cada grupo executa consenso em paralelo
+//   - Reduz tráfego de rede e aumenta throughput
+//
+// TIPOS DE OPERAÇÕES:
+//   1. SINGLE-GROUP (groupId > 0):
+//      - Operação afeta apenas 1 grupo (ex: PUT key1)
+//      - Multicast seletivo: apenas membros do grupo
+//      - Paralelismo total entre grupos
+//
+//   2. MULTI-GROUP (groupId = 0, len(TouchedGroups) > 1):
+//      - Operação afeta múltiplos grupos (ex: range query em 2 partições)
+//      - Broadcast global: TODOS os nós participam
+//      - Barreira global: congela propostas locais (atomic global order)
+//
+// MEMBROS vs NÃO-MEMBROS:
+//   - Membros: executam consenso completo + batch
+//   - Não-membros: recebem apenas Commit (digest) para checkpoint
+//   - Estado diverge entre nós (by design, não é bug!)
+//
+// DETERMINISMO CRÍTICO:
+//   - groups.yml DEVE ser idêntico em todos os nós
+//   - Ordem dos grupos afeta cálculo de globalSN (round-robin)
+//   - Divergência = consenso quebrado (FAIL-FAST)
 type AtomicMulticast struct {
 	mu         sync.RWMutex
 	groups     map[GroupID][]int32  // grupo -> lista de nós membros
@@ -123,24 +147,51 @@ func (am *AtomicMulticast) NextSN(g GroupID) int32 {
 	return result
 }
 
-// GetGroupLeader retorna líder do grupo via round-robin
+// GetGroupLeader retorna líder do grupo via round-robin ENTRE MEMBROS DO GRUPO
+// CRÍTICO: Só escolhe líder que seja membro (interseção segmentLeaders ∩ members)
+// Round-robin por segmento para balancear carga entre líderes elegíveis
 func (am *AtomicMulticast) GetGroupLeader(g GroupID, segmentLeaders []int32) int32 {
 	if len(segmentLeaders) == 0 {
 		return -1
 	}
-	idx := int(g) % len(segmentLeaders)
-	return segmentLeaders[idx]
+	
+	// Obtém membros do grupo
+	members := am.GetGroupMembers(uint32(g))
+	if members == nil || len(members) == 0 {
+		return -1
+	}
+	
+	// Interseção: segmentLeaders ∩ members
+	eligible := make([]int32, 0)
+	for _, leader := range segmentLeaders {
+		for _, member := range members {
+			if leader == member {
+				eligible = append(eligible, leader)
+				break
+			}
+		}
+	}
+	
+	if len(eligible) == 0 {
+		// FAIL-FAST: configuração inválida (nenhum líder é membro)
+		panic(fmt.Sprintf("FATAL: grupo %d não tem líderes elegíveis (segmentLeaders ∩ members = ∅)", g))
+	}
+	
+	// Round-robin com groupID para balancear carga entre segmentos
+	idx := int(g) % len(eligible)
+	return eligible[idx]
 }
 
 // GetAvailableGroups retorna grupos não-globais para cliente distribuir requests
+// FAIL-FAST: Se groups.yml não existe, retorna erro (alinhado com LoadGroupsFromYAML)
 func GetAvailableGroups() []uint32 {
 	data, err := ioutil.ReadFile("config/groups.yml")
 	if err != nil {
-		return []uint32{1, 2, 3, 4} // fallback
+		panic(fmt.Sprintf("FATAL: config/groups.yml é obrigatório. Erro: %v", err))
 	}
 	var config GroupConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return []uint32{1, 2, 3, 4}
+		panic(fmt.Sprintf("FATAL: Falha ao parsear config/groups.yml: %v", err))
 	}
 	groups := make([]uint32, 0, len(config.Groups))
 	for gid := range config.Groups {
@@ -155,6 +206,9 @@ func GetAvailableGroups() []uint32 {
 				groups[i], groups[j] = groups[j], groups[i]
 			}
 		}
+	}
+	if len(groups) == 0 {
+		panic("FATAL: config/groups.yml não define nenhum grupo (além de 0)")
 	}
 	return groups
 }

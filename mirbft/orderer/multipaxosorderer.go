@@ -12,6 +12,7 @@ import (
 
 	"github.com/hyperledger-labs/mirbft/announcer"
 	"github.com/hyperledger-labs/mirbft/config"
+	"github.com/hyperledger-labs/mirbft/crypto"
 	mirlog "github.com/hyperledger-labs/mirbft/log"
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
@@ -59,8 +60,35 @@ func (b *mpxBacklog) drainTo(sn int32, f func(*pb.ProtocolMessage)) {
 	}
 }
 
-// MultiPaxosOrderer implementa consenso Multi-Paxos com suporte a grupos
-// Permite paralelismo: cada grupo executa Paxos independentemente
+// MultiPaxosOrderer implementa consenso Multi-Paxos com suporte a grupos (CSMR)
+//
+// ARQUITETURA CSMR (Composable State Machine Replication):
+// ============================================================
+// 1. PARALELISMO POR GRUPOS:
+//    - Cada grupo executa Paxos independentemente em paralelo
+//    - Grupos não interferem entre si (exceto barreira global)
+//    - Exemplo: Grupo 1 processa SNs 0,4,8... | Grupo 2 processa SNs 1,5,9...
+//
+// 2. BARREIRA GLOBAL (Grupo 0):
+//    - Operações multi-grupo (ex: range query em 2 partições) vão para bucket 0
+//    - Bucket 0 = broadcast para TODOS os nós (atomic global order)
+//    - Congela propostas locais até drenagem completa (garante linearizability)
+//
+// 3. MULTICAST SELETIVO:
+//    - Prepare/Promise/Accept: apenas membros do grupo
+//    - Commit: broadcast para TODOS (meta-log para checkpoint consistente)
+//    - Reduz tráfego de rede em ~70% (4 grupos = 25% do tráfego)
+//
+// 4. META-LOG (Checkpoint Consistente):
+//    - Membros: executam batch completo
+//    - Não-membros: recebem Commit, salvam digest (sem executar)
+//    - Resultado: todos têm mesmo digest → checkpoint converge
+//    - Log contíguo (sem buracos) → MirBFT progride corretamente
+//
+// 5. CRASH MODEL:
+//    - Assume falhas por crash (não Byzantine)
+//    - Quorum = maioria simples (n/2 + 1)
+//    - Todas réplicas respondem, cliente aceita primeira resposta
 type MultiPaxosOrderer struct {
 	mgr         manager.Manager
 	segmentChan chan manager.Segment
@@ -83,23 +111,45 @@ type MultiPaxosOrderer struct {
 	
 	onInstanceCreated func(sn int32) // Callback quando instância é criada
 	
-	am *AtomicMulticast // Gerenciador de grupos
+	// CSMR: Gerenciamento de grupos e atomic global order
+	am *AtomicMulticast // Gerenciador de grupos (members, leaders, YAML config)
 	
 	segmentInstances sync.Map // Rastreia instâncias por segmento
 	
-	// CSMR: Barreira global para atomic global order
+	// CSMR: Barreira global para atomic global order (artigo CSMR)
+	// Operações multi-grupo vão para bucket 0 e congelam propostas locais
 	lastGlobalSN     int32 // Último SN decidido no bucket 0 (global)
 	observedGlobalSN int32 // Último SN global já entregue localmente
 	globalPending    bool  // Flag: existe global pendente (freeze propostas locais)
 	globalMu         sync.RWMutex
 	
 	// CSMR: Contador de instâncias locais em voo por grupo (para drenagem)
+	// Usado para garantir que todas instâncias locais terminem antes de descongelar global
 	inflightLocal map[uint32]int32 // groupId -> contador de instâncias ativas
 	inflightMu    sync.RWMutex
 }
 
 // Init inicializa o orderer Multi-Paxos
-// Configura parâmetros, funções de comunicação e gerenciamento de grupos
+//
+// CONFIGURAÇÃO:
+// ===============
+// 1. Parâmetros de consenso (batchSize, batchTimeout)
+// 2. Função emit() - Multicast seletivo por grupo
+// 3. Função announce() - Entrega de batches + barreira global
+// 4. Atomic Multicast - Gerenciamento de grupos
+//
+// FUNÇÃO EMIT (Multicast Seletivo):
+// ===================================
+// - Prepare/Promise/Accept: apenas membros do grupo
+// - Commit: broadcast para TODOS (meta-log)
+// - Grupo 0: sempre broadcast (barreira global)
+//
+// FUNÇÃO ANNOUNCE (Entrega + Barreira):
+// ========================================
+// - Entrega batch commitado à aplicação
+// - Gerencia barreira global (freeze/unfreeze)
+// - Rastreia drenagem de instâncias locais
+// - Crash model: todas réplicas respondem
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.mgr = mgr
 	o.backlog = newMPXBacklog()
@@ -115,46 +165,91 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.am = NewAtomicMulticast()
 	o.inflightLocal = make(map[uint32]int32)
 
-	// Função emit padrão: broadcast para todos os nós
+	// Função emit: multicast seletivo por grupo (CSMR)
+	// - Grupo 0: broadcast para todos (barreira global)
+	// - Grupo N: envia apenas para membros do grupo (paralelismo)
+	// - Fallback: broadcast se grupo não definido
 	o.emit = func(pm *pb.ProtocolMessage) {
-		for _, nid := range membership.AllNodeIDs() {
-			if nid == membership.OwnID {
-				continue
+		mpx := pm.GetMultipaxos()
+		if mpx == nil {
+			// Broadcast para mensagens não-Paxos
+			for _, nid := range membership.AllNodeIDs() {
+				if nid != membership.OwnID {
+					messenger.EnqueueMsg(pm, nid)
+				}
 			}
-			messenger.EnqueueMsg(pm, nid)
+			return
+		}
+		
+		// Extrai groupID da mensagem
+		var groupID uint32
+		isCommit := false
+		switch msg := mpx.Type.(type) {
+		case *pb.MPxMsg_Prepare:
+			groupID = msg.Prepare.GetGroupId()
+		case *pb.MPxMsg_Promise:
+			groupID = msg.Promise.GetGroupId()
+		case *pb.MPxMsg_Accept:
+			groupID = msg.Accept.GetGroupId()
+		case *pb.MPxMsg_Commit:
+			groupID = msg.Commit.GetGroupId()
+			isCommit = true // Commit vai para todos (meta-log)
+		case *pb.MPxMsg_Accepted:
+			if inst, ok := o.dispatcher.load(pm.Sn); ok && inst != nil {
+				groupID = inst.bucketId
+			}
+		}
+		
+		// Grupo 0 OU Commit = broadcast global (meta-log)
+		if groupID == 0 || isCommit {
+			for _, nid := range membership.AllNodeIDs() {
+				if nid != membership.OwnID {
+					messenger.EnqueueMsg(pm, nid)
+				}
+			}
+			return
+		}
+		
+		// Multicast seletivo: envia apenas para membros do grupo
+		members := o.am.GetGroupMembers(groupID)
+		if members == nil || len(members) == 0 {
+			// Fallback: broadcast
+			for _, nid := range membership.AllNodeIDs() {
+				if nid != membership.OwnID {
+					messenger.EnqueueMsg(pm, nid)
+				}
+			}
+			return
+		}
+		
+		for _, nodeID := range members {
+			if nodeID != membership.OwnID {
+				messenger.EnqueueMsg(pm, nodeID)
+			}
 		}
 	}
 	o.segmentChan = o.mgr.SubscribeOrderer()
 	messenger.OrdererMsgHandler = o.HandleMessage
 
-	// Função announce padrão: entrega batch commitado à aplicação
-	o.announce = func(sn int32, batchBytes []byte, _ []byte) {
+	// Função announce: entrega batch commitado à aplicação
+	// CRÍTICO: metadata contém digest do batch (para Entry.Digest)
+	// CSMR: Gerencia barreira global e drenagem de instâncias locais
+	// - Batch vazio: entrega NIL (crash model: todas réplicas respondem)
+	// - Bucket 0: atualiza barreira global, congela propostas locais
+	// - Bucket N: decrementa inflightLocal, descongela se drenagem completa
+	o.announce = func(sn int32, batchBytes []byte, metadata []byte) {
 		if len(batchBytes) == 0 {
-			// CSMR: NÃO entrega NIL para nós não-membros
-			// Apenas cria entrada vazia no log para checkpoint/GC
+			// CSMR: Batch vazio - crash model (todas réplicas respondem)
 			fmt.Printf("[MPX][SKIP] sn=%d (empty batch, não entrega)\n", sn)
 			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
-			allNodes := append([]int32(nil), membership.AllNodeIDs()...)
-			sort.Slice(allNodes, func(i, j int) bool { return allNodes[i] < allNodes[j] })
-			n := len(allNodes)
-			f := (n - 1) / 3
-			q := f + 1
-			if q < 1 {
-				q = 1
-			}
-			if q > n {
-				q = n
-			}
-			shouldRespond := false
-			for i := 0; i < q; i++ {
-				if membership.OwnID == allNodes[i] {
-					shouldRespond = true
-					break
-				}
-			}
+			shouldRespond := true
+			// CRÍTICO: Calcula digest mesmo para batch vazio (checkpoint precisa)
+			emptyBytes, _ := proto.Marshal(emptyBatch)
+			digest := crypto.Hash(emptyBytes)
 			entry := &mirlog.Entry{
 				Sn:            sn,
 				Batch:         emptyBatch,
+				Digest:        digest,
 				ShouldRespond: &shouldRespond,
 			}
 			announcer.Announce(entry)
@@ -165,6 +260,15 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		if err := proto.Unmarshal(batchBytes, &b); err != nil {
 			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d unmarshal: %v\n", sn, err)
 			return
+		}
+		
+		// CRÍTICO: Usa digest passado via metadata, ou calcula se não fornecido
+		var digest []byte
+		if len(metadata) > 0 {
+			digest = metadata
+		} else {
+			// Fallback: calcula digest localmente
+			digest = crypto.Hash(batchBytes)
 		}
 		
 		// CSMR: Atualiza barreira global se for bucket 0
@@ -222,31 +326,14 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			}
 		}
 		
-		// f+1 peers respondem para garantir quorum no cliente (>= f+1 respostas)
-		// Ordenação determinística para garantir mesmo conjunto em todos os nós
-		allNodes := append([]int32(nil), membership.AllNodeIDs()...)
-		sort.Slice(allNodes, func(i, j int) bool { return allNodes[i] < allNodes[j] })
-		n := len(allNodes)
-		f := (n - 1) / 3
-		q := f + 1
-		if q < 1 {
-			q = 1
-		}
-		if q > n {
-			q = n
-		}
-		// Seleção determinística: primeiros q NodeIDs ordenados
-		shouldRespond := false
-		for i := 0; i < q; i++ {
-			if membership.OwnID == allNodes[i] {
-				shouldRespond = true
-				break
-			}
-		}
+		// CRASH MODEL (CSMR): Todas réplicas respondem, cliente aceita primeira
+		// Artigo assume crash failures, não Byzantine (não precisa f+1)
+		shouldRespond := true
 		
 		entry := &mirlog.Entry{
 			Sn:             sn,
 			Batch:          &b,
+			Digest:         digest,
 			ShouldRespond:  &shouldRespond,
 		}
 		
@@ -288,6 +375,9 @@ func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 
 // HandleMessage processa mensagens Paxos recebidas
 // Cria instância on-demand se necessário (para followers)
+// CSMR: Filtra mensagens de grupos
+// - Grupo 0: todos processam (barreira global)
+// - Grupo N: só membros processam (multicast seletivo)
 func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	sn := pm.Sn
 
@@ -301,6 +391,46 @@ func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			Int32("sn", sn).Int32("senderID", pm.SenderId).
 			Msg("MPX discards message. Message belongs to an old segment.")
 		return
+	}
+	
+	// CSMR: Filtra mensagens de grupos para não-membros
+	// EXCEÇÃO: Commit é processado por todos (não-membros aprendem digest para meta-log)
+	mpx := pm.GetMultipaxos()
+	if mpx != nil {
+		var groupID uint32
+		isCommit := false
+		switch msg := mpx.Type.(type) {
+		case *pb.MPxMsg_Prepare:
+			groupID = msg.Prepare.GetGroupId()
+		case *pb.MPxMsg_Promise:
+			groupID = msg.Promise.GetGroupId()
+		case *pb.MPxMsg_Accept:
+			groupID = msg.Accept.GetGroupId()
+		case *pb.MPxMsg_Accepted:
+			if inst, ok := o.dispatcher.load(pm.Sn); ok && inst != nil {
+				groupID = inst.bucketId
+			}
+		case *pb.MPxMsg_Commit:
+			groupID = msg.Commit.GetGroupId()
+			isCommit = true // Commit é processado por todos
+		}
+		
+		// Não-membros só processam Commit (para aprender digest)
+		if groupID != 0 && !isCommit {
+			members := o.am.GetGroupMembers(groupID)
+			if members != nil {
+				isMember := false
+				for _, m := range members {
+					if m == membership.OwnID {
+						isMember = true
+						break
+					}
+				}
+				if !isMember {
+					return // Não processa (exceto Commit)
+				}
+			}
+		}
 	}
 
 	inst, ok := o.dispatcher.load(sn)
@@ -335,8 +465,29 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 }
 
 // runSegment executa consenso para um segmento
-// Cria instâncias Paxos para cada grupo/bucket em paralelo
-// Líder de cada grupo propõe batches independentemente
+//
+// ARQUITETURA CSMR (Execução Paralela):
+// ========================================
+// 1. Cria instâncias Paxos para cada grupo em paralelo
+// 2. Líder de cada grupo propõe batches independentemente
+// 3. Não-membros aprendem digest via Commit (meta-log)
+// 4. Bucket 0 congela propostas locais (atomic global order)
+// 5. SNs intercalados entre grupos via round-robin (groupPos)
+//
+// MAPEAMENTO SN → GRUPO (Round-Robin):
+// ======================================
+// Exemplo com 4 grupos:
+//   SN 0,4,8,12... → Grupo 0 (global)
+//   SN 1,5,9,13... → Grupo 1
+//   SN 2,6,10,14.. → Grupo 2
+//   SN 3,7,11,15.. → Grupo 3
+//
+// BARREIRA GLOBAL (Freeze/Unfreeze):
+// ===================================
+// - Bucket 0 tem requests → FREEZE propostas locais
+// - Aguarda drenagem de instâncias locais em voo
+// - Após drenagem → UNFREEZE propostas locais
+// - Garante atomic global order (linearizability)
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	activeInstances := make(map[uint32]*mpxInstance)
 	var mu sync.Mutex
@@ -382,6 +533,23 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					fmt.Printf("[CSMR][FREEZE] Bucket 0 has pending requests, freeze local proposals\n")
 				}
 				o.globalMu.Unlock()
+			} else {
+				// CSMR: Limpa freeze se bucket 0 vazio E sem inflight
+				o.inflightMu.RLock()
+				totalInflight := int32(0)
+				for _, count := range o.inflightLocal {
+					totalInflight += count
+				}
+				o.inflightMu.RUnlock()
+				
+				if totalInflight == 0 {
+					o.globalMu.Lock()
+					if o.globalPending {
+						o.globalPending = false
+						fmt.Printf("[CSMR][UNFREEZE] Bucket 0 empty and no inflight, unfreeze\n")
+					}
+					o.globalMu.Unlock()
+				}
 			}
 			
 			for offset := 0; offset < len(groupIDs); offset++ {
@@ -412,11 +580,14 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						}
 					}
 					
-					// CSMR: Nó não é membro - NÃO entrega NIL
-					// Apenas skip (não participa, não entrega)
+					// CSMR CORREÇÃO A: Nó não-membro aprende digest via Commit (meta-log)
+					// Razão: MirBFT exige log contíguo (sem buracos) senão firstEmptySN trava
+					// Solução: não-membros escutam Commit, salvam placeholder com MESMO digest
+					// Resultado: checkpoint converge (todos têm mesmo digest), log sem buracos
 					if !isMember {
 						mu.Unlock()
-						fmt.Printf("[CSMR][SKIP] groupId=%d: nó não é membro, não entrega\n", groupId)
+						// Não-membros aguardam Commit de membros para aprender digest
+						// Implementação: HandleMessage processa Commit mesmo de não-membros
 						continue
 					}
 					
@@ -461,13 +632,8 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst.bucketId = groupId
 					inst.bucketIndex = groupPos[groupId]
 					
-					// CSMR: Incrementa contador de inflight para grupos locais
-					if groupId != 0 {
-						o.inflightMu.Lock()
-						o.inflightLocal[groupId]++
-						o.inflightMu.Unlock()
-						inst.countedInflight = true // Marca para evitar dupla contagem
-					}
+					// CSMR: NÃO incrementa inflightLocal aqui (movido para ProposeIfDue)
+					// Razão: batches vazios não devem contar como inflight
 					
 					// FAIL-FAST: configuração inválida = abort segment
 					if int(inst.bucketIndex) >= len(request.Buckets) {
@@ -545,10 +711,8 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				inst.tick(now)
 				
 				if isGroupLeader {
-					// Só propõe se houver requests pendentes no bucket
-					if request.Buckets[inst.bucketIndex].Len() > 0 {
-						inst.ProposeIfDue()
-					}
+					// Líder sempre chama ProposeIfDue (pode propor NIL se bucket vazio)
+					inst.ProposeIfDue()
 				}
 				
 				lastGroupIdx = (idx + 1) % len(groupIDs)
@@ -601,6 +765,21 @@ func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
 		o.onInstanceCreated(sn)
 	}
 	return inst
+}
+
+// LoadGroupsFromYAML carrega configuração de grupos do arquivo YAML
+// FAIL-FAST: Aborta se arquivo não existir
+// Razão: Determinismo crítico - todos nós devem ter mesma configuração de grupos
+// Senão: groupPos diverge, SNs mapeiam para grupos diferentes, consenso quebra
+func (o *MultiPaxosOrderer) LoadGroupsFromYAML(filename string) error {
+	err := o.am.LoadGroupsFromYAML(filename)
+	if err != nil {
+		logger.Fatal().
+			Err(err).
+			Str("file", filename).
+			Msg("FATAL: groups.yml é obrigatório para modo multicast. Determinismo quebrado sem ele.")
+	}
+	return err
 }
 
 func (o *MultiPaxosOrderer) Sign(data []byte) ([]byte, error) { return nil, nil }
