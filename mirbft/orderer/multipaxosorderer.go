@@ -2,7 +2,6 @@ package orderer
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
