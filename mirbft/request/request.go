@@ -172,7 +172,8 @@ type Request struct {
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 	// CSMR: Validação crítica de TouchedGroups para atomic global order
 	// Operações multi-grupo SEM TouchedGroups violam linearizability (Figura 2 CSMR)
-	if reqMsg.GetGroupId() == 0 && len(reqMsg.TouchedGroups) <= 1 {
+	// CORREÇÃO: aceita len==1 (single-group válido), só rejeita len==0 com GroupId==0
+	if reqMsg.GetGroupId() == 0 && len(reqMsg.TouchedGroups) == 0 {
 		logger.Fatal().
 			Int32("clId", reqMsg.RequestId.ClientId).
 			Int32("clSn", reqMsg.RequestId.ClientSn).
