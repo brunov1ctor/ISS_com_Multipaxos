@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
-	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/membership"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 )
@@ -53,14 +52,41 @@ func (am *AtomicMulticast) DefineGroup(g GroupID, members ...int32) {
 }
 
 // GetGroupMembers retorna os nós que pertencem a um grupo
-// Se o grupo não existe, retorna todos os nós (grupo 0)
+// Retorna nil se o grupo não existe (strict mode - sem fallback silencioso)
 func (am *AtomicMulticast) GetGroupMembers(groupID uint32) []int32 {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
 	if members, exists := am.groups[GroupID(groupID)]; exists {
 		return append([]int32{}, members...)
 	}
-	return am.groups[0]
+	return nil // Grupo não existe - caller deve tratar
+}
+
+// GroupExists verifica se um grupo foi definido
+func (am *AtomicMulticast) GroupExists(groupID uint32) bool {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	_, exists := am.groups[GroupID(groupID)]
+	return exists
+}
+
+// GetDefinedGroups retorna lista ordenada de todos os grupos definidos
+func (am *AtomicMulticast) GetDefinedGroups() []uint32 {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	groups := make([]uint32, 0, len(am.groups))
+	for gid := range am.groups {
+		groups = append(groups, uint32(gid))
+	}
+	// Ordena para garantir determinismo
+	for i := 0; i < len(groups); i++ {
+		for j := i + 1; j < len(groups); j++ {
+			if groups[i] > groups[j] {
+				groups[i], groups[j] = groups[j], groups[i]
+			}
+		}
+	}
+	return groups
 }
 
 // LoadGroupsFromYAML carrega configuração de grupos de um arquivo YAML
@@ -110,13 +136,9 @@ func ValidateAndRouteRequest(req *pb.ClientRequest) uint32 {
 	
 	// Se a requisição especifica grupos tocados, valida se é apenas um
 	if len(req.TouchedGroups) > 0 {
-		tg := req.TouchedGroups
 		var g uint32
 		seen := make(map[uint32]struct{})
-		for _, x := range tg {
-			if x >= uint32(config.Config.NumBuckets) {
-				return GROUP_GLOBAL // Grupo inválido -> broadcast
-			}
+		for _, x := range req.TouchedGroups {
 			seen[x] = struct{}{}
 			g = x
 			if len(seen) > 1 {
@@ -126,10 +148,6 @@ func ValidateAndRouteRequest(req *pb.ClientRequest) uint32 {
 		return g // Toca apenas um grupo
 	}
 	
-	// Usa o groupId especificado na requisição
-	groupId := req.GetGroupId()
-	if groupId >= uint32(config.Config.NumBuckets) {
-		return GROUP_GLOBAL // Grupo inválido -> broadcast
-	}
-	return groupId
+	// Usa o groupId especificado na requisição (sem validação)
+	return req.GetGroupId()
 }
