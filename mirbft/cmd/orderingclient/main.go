@@ -10,6 +10,7 @@ import (
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/profiling"
+	"github.com/hyperledger-labs/mirbft/request"
 )
 
 var (
@@ -68,6 +69,9 @@ func main() {
 
 	// Initialize membership module
 	membership.Init()
+
+	// Initialize request module (needed for bucket calculation)
+	request.Init()
 
 	// Start profiler if necessary
 	if len(os.Args) > 4 {
