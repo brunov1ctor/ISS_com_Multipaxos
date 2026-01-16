@@ -16,21 +16,24 @@ import (
 	"github.com/hyperledger-labs/mirbft/tracing"
 )
 
+// Fases do protocolo Paxos para uma instância
 type instPhase int
 
 const (
-	phaseInit instPhase = iota
-	phasePrepared
-	phaseAcceptSent
-	phaseCommitted
+	phaseInit instPhase = iota       // Fase inicial, aguardando preparação
+	phasePrepared                     // Fase 1 completa (quorum de promises)
+	phaseAcceptSent                   // Fase 2 iniciada (accept enviado)
+	phaseCommitted                    // Consenso alcançado, valor commitado
 )
 
+// mpxInstance representa uma instância do protocolo Multi-Paxos
+// Cada instância é responsável por ordenar um único batch de requisições
 type mpxInstance struct {
 	mu sync.Mutex
 
 	parent *MultiPaxosOrderer
-	sn     int32
-	bucketId uint32
+	sn     int32   // Número de sequência desta instância
+	bucketId uint32 // ID do grupo/bucket ao qual esta instância pertence
 	bucketIndex int32
 
 	proposeEvery  time.Duration
@@ -40,34 +43,33 @@ type mpxInstance struct {
 
 	seg manager.Segment
 
-	// Paxos state
-	members      []int32
-	quorum       int32
-	promisedBallot  uint64
-	acceptedBallot  uint64
-	acceptedValue   *pb.MPxValue
-	prepared        bool
-	promiseCount    int32
-	promisedFrom    map[int32]struct{}
-
-	lastVal      *pb.MPxValue
-	lastDigest   [32]byte
-	acceptCount  int32
-	acceptedFrom map[int32]struct{}
+	// Estado do protocolo Paxos
+	members      []int32  // Membros do grupo (para quorum)
+	quorum       int32    // Número de votos necessários para maioria
+	promisedBallot  uint64 // Maior ballot prometido (Fase 1)
+	acceptedBallot  uint64 // Maior ballot aceito (Fase 2)
+	acceptedValue   *pb.MPxValue // Valor aceito
+	prepared        bool   // Se Fase 1 foi completada
+	promiseCount    int32  // Contador de promises recebidos
+	promisedFrom    map[int32]struct{} // Nós que enviaram promise
 
 	lastReqBatch *request.Batch
 	phase        instPhase
+	lastVal      *pb.MPxValue // Último valor proposto
+	lastDigest   [32]byte     // Hash do valor para validação
+	acceptCount  int32        // Contador de accepts recebidos
+	acceptedFrom map[int32]struct{} // Nós que enviaram accepted
 
-	acceptRtxEvery   time.Duration
+	acceptRtxEvery   time.Duration // Intervalo para retransmissão
 	lastAcceptAt     time.Time
 	enableNilDeliver bool
 	sbNilAfter       time.Duration
 
 	prepSent bool
-	leader   int32
+	leader   int32 // Líder atual desta instância
 	currentBallot int64
 
-	// Async processing
+	// Processamento assíncrono de mensagens
 	msgCh  chan *pb.ProtocolMessage
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -188,6 +190,9 @@ func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	}
 }
 
+// onPrepare processa mensagem PREPARE (Fase 1 do Paxos)
+// Líder envia PREPARE para iniciar consenso em um novo ballot
+// Followers respondem com PROMISE se aceitarem o ballot
 func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -218,17 +223,14 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		promiseValue = i.acceptedValue
 	}
 
-	// Usa GroupId do Prepare recebido
 	groupId := prepare.GetGroupId()
 	members := make([]uint32, 0)
 	
 	if len(i.members) > 0 {
-		// Usa membros do grupo já configurados
 		for _, id := range i.members {
 			members = append(members, uint32(id))
 		}
 	} else {
-		// Fallback para todos os nós
 		all := membership.AllNodeIDs()
 		for _, id := range all {
 			members = append(members, uint32(id))
@@ -257,6 +259,9 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	}
 }
 
+// onPromise processa mensagem PROMISE (resposta da Fase 1)
+// Quando quorum de promises é atingido, líder pode iniciar Fase 2
+// Se algum promise contém valor aceito anteriormente, líder deve adotá-lo
 func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -280,8 +285,6 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	
 	if promise.GetValue() != nil {
 		promiseValue := promise.GetValue()
-		
-		// Since there's no ballot info in the new proto, just adopt the value
 		i.acceptedValue = promiseValue
 		i.lastVal = promiseValue
 		fmt.Printf("[MPX][INST] sn=%d adopted value from promise\n", i.sn)
@@ -296,6 +299,9 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	}
 }
 
+// onAccept processa mensagem ACCEPT (Fase 2 do Paxos)
+// Líder envia ACCEPT com valor proposto
+// Followers aceitam e respondem com ACCEPTED
 func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -340,18 +346,15 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		i.acceptedFrom = make(map[int32]struct{})
 	}
 	
-	// Só conta voto próprio se estiver no grupo
-	if _, ok := i.acceptedFrom[membership.OwnID]; !ok {
-		if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
-			i.acceptedFrom[membership.OwnID] = struct{}{}
-			i.acceptCount++
-			fmt.Printf("[MPX][INST] sn=%d self-vote counted, acceptCount=%d/%d\n", i.sn, i.acceptCount, i.quorum)
-		} else {
-			fmt.Printf("[MPX][INST] sn=%d self-vote skipped (not in group)\n", i.sn)
-		}
+	if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
+		i.acceptedFrom[membership.OwnID] = struct{}{}
+		i.acceptCount++
+		fmt.Printf("[MPX][INST] sn=%d self-vote counted, acceptCount=%d/%d\n", i.sn, i.acceptCount, i.quorum)
+	} else {
+		fmt.Printf("[MPX][INST] sn=%d self-vote skipped (not in group)\n", i.sn)
 	}
 
-	// Envia ACCEPTED UNICAST para o líder
+	// Envia ACCEPTED para o líder
 	accepted := &pb.MPxMsg{Type: &pb.MPxMsg_Accepted{Accepted: &pb.MPxAccepted{
 		Id:     &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot: ballot,
@@ -363,7 +366,6 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accepted},
 	}
 
-	// Unicast para o líder (primeiro Accept recebido)
 	if i.leader == membership.OwnID {
 		fmt.Printf("[MPX][INST] sn=%d skip ACCEPTED to self\n", i.sn)
 		return
@@ -373,6 +375,9 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	messenger.EnqueueMsg(resp, i.leader)
 }
 
+// onAccepted processa mensagem ACCEPTED (resposta da Fase 2)
+// Quando quorum de accepts é atingido, líder envia COMMIT
+// Todos os nós entregam o valor commitado
 func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -385,7 +390,6 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 			return
 		}
 		
-		// Só conta voto se sender estiver no grupo
 		if len(i.members) == 0 || i.isInGroup(pm.SenderId) {
 			i.acceptedFrom[pm.SenderId] = struct{}{}
 			i.acceptCount++
@@ -398,14 +402,12 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 		i.acceptCount++
 	}
 
-	// líder decide commit quando atingir maioria
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
-		// Majority reached - sending Commit
 		commit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
 			Commit: &pb.MPxCommit{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 				Value:   i.lastVal,
-				GroupId: i.bucketId, // Usa bucket do usuário
+				GroupId: i.bucketId,
 			},
 		}}
 		pmOut := &pb.ProtocolMessage{
@@ -415,11 +417,10 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 		}
 		if i.parent.emit != nil {
 			fmt.Printf("[MPX][INST] sn=%d QUORUM reached (%d/%d), sending COMMIT\n", i.sn, i.acceptCount, i.quorum)
-			i.parent.emit(pmOut) // roteador do orderer decide grupo
+			i.parent.emit(pmOut)
 		}
 	}
 
-	// entrega local (idempotente)
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
 		val := i.lastVal
 		i.mu.Unlock()
@@ -428,6 +429,8 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	}
 }
 
+// onCommit processa mensagem COMMIT (entrega final)
+// Valor foi decidido por consenso, pode ser entregue à aplicação
 func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -480,7 +483,6 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: commit},
 	}
 	if i.parent.emit != nil {
-		// Gossip Commit
 		i.parent.emit(pmOut)
 	}
 
@@ -491,7 +493,6 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 
 	var b pb.Batch
 	if err := proto.Unmarshal(i.lastVal.GetBatch(), &b); err != nil {
-		// Unmarshal error
 		return
 	}
 	if i.announce != nil {
@@ -507,6 +508,8 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 
 // ==================== Propose / Tick ====================
 
+// ProposeIfDue verifica se é hora de propor um novo batch
+// Líder corta batch do bucket e inicia Fase 2 (ACCEPT)
 func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -525,7 +528,6 @@ func (i *mpxInstance) ProposeIfDue() {
 	reqs := 0
 
 	if i.lastVal == nil {
-		// Corta batch do bucket específico desta instância
 		if i.seg == nil || i.bucketIndex < 0 {
 			return
 		}
@@ -570,7 +572,6 @@ func (i *mpxInstance) ProposeIfDue() {
 		val = i.lastVal
 	}
 
-	// PREPARE 1x por grupo (amortizado) - usa cache local do segmento
 	if !i.prepared {
 		if i.promiseCount < i.quorum {
 			fmt.Printf("[MPX][INST] sn=%d aguardando quorum de promises (%d/%d)\n", i.sn, i.promiseCount, i.quorum)
@@ -616,7 +617,7 @@ func (i *mpxInstance) tick(now time.Time) {
 							Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 							Ballot:  uint64(i.currentBallot),
 							Value:   i.lastVal,
-							GroupId: i.bucketId, // Usa bucket do usuário
+							GroupId: i.bucketId,
 						},
 					}},
 				},
@@ -638,7 +639,7 @@ func (i *mpxInstance) tick(now time.Time) {
 			Commit: &pb.MPxCommit{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 				Value:   nil,
-				GroupId: i.bucketId, // Usa bucket do usuário
+				GroupId: i.bucketId,
 			},
 		}}
 		pmOut := &pb.ProtocolMessage{
@@ -657,12 +658,9 @@ func (i *mpxInstance) tick(now time.Time) {
 
 // ==================== Utilidades ====================
 
-func (i *mpxInstance) cutReqBatch() *request.Batch {
-	// NãO USADO - batch é cortado em runSegment antes de criar instância
-	return nil
-}
-
 // SetMembers configura membros do grupo e recalcula quorum
+// Quorum = maioria dos membros do grupo (n/2 + 1)
+// Reajusta contadores de votos para considerar apenas membros do grupo
 func (i *mpxInstance) SetMembers(members []int32) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -670,7 +668,6 @@ func (i *mpxInstance) SetMembers(members []int32) {
 	i.members = make([]int32, len(members))
 	copy(i.members, members)
 	
-	// Recalcula quorum baseado no grupo
 	n := int32(len(i.members))
 	if n < 1 {
 		n = 1
@@ -678,12 +675,10 @@ func (i *mpxInstance) SetMembers(members []int32) {
 	i.quorum = n/2 + 1
 	fmt.Printf("[MPX][INST] sn=%d SetMembers: members=%v quorum=%d\n", i.sn, members, i.quorum)
 	
-	// CRÍTICO: Reajusta acceptCount para só contar membros do grupo
 	if i.acceptedFrom != nil {
 		newAcceptedFrom := make(map[int32]struct{})
 		newCount := int32(0)
 		
-		// Só mantém votos de membros do grupo
 		for nodeID := range i.acceptedFrom {
 			if i.isInGroup(nodeID) {
 				newAcceptedFrom[nodeID] = struct{}{}
@@ -697,7 +692,7 @@ func (i *mpxInstance) SetMembers(members []int32) {
 	}
 }
 
-// isInGroup verifica se um nó está no grupo
+// isInGroup verifica se um nó pertence ao grupo desta instância
 func (i *mpxInstance) isInGroup(nodeID int32) bool {
 	for _, member := range i.members {
 		if member == nodeID {
@@ -714,7 +709,8 @@ func traceCommit(sn int32, size int) {
 	tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(size))
 }
 
-// validateBatchHomogeneity valida se todos requests têm mesmo GroupId
+// validateBatchHomogeneity valida se todas requisições pertencem ao mesmo grupo
+// Batches heterogêneos (múltiplos grupos) são rejeitados
 func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
 	reqs := batch.Message().Requests
 	if len(reqs) == 0 {
@@ -738,4 +734,3 @@ func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
 	
 	return true
 }
-
