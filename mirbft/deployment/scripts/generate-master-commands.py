@@ -18,9 +18,14 @@ BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
     f"/users/{os.environ.get('USER', 'user')}/iss",
 )
+
+# CORREÇÃO: usar remote_work_dir consistente com start-slave.sh
+_DEFAULT_USER = os.environ.get("USER", "user")
+REMOTE_WORK_DIR_DEFAULT = f"/tmp/iss-{_DEFAULT_USER}"
+
 EXPERIMENT_OUTPUT_DIR = os.environ.get(
     "ISS_EXPERIMENT_OUTPUT_DIR",
-    "/tmp/deployment-data/experiment-output",
+    f"{os.environ.get('ISS_REMOTE_WORK_DIR', REMOTE_WORK_DIR_DEFAULT)}/experiment-output",
 )
 
 MASTER_CONFIG_DIR = f"{BASE_DIR}/experiment-config"
@@ -41,9 +46,8 @@ BEST_EFFORT_SCP_WAIT_MS = 180000
 FETCH_CONFIG_WAIT_MS = 180000   # era 60000
 VERIFY_CONFIG_WAIT_MS = 60000   # era 2000
 
-# Defaults sem usuário hardcoded
-_DEFAULT_USER = os.environ.get("USER", "user")
-REMOTE_WORK_DIR = os.environ.get("ISS_REMOTE_WORK_DIR", f"/tmp/iss-{_DEFAULT_USER}")
+# REMOTE_WORK_DIR já definido acima para EXPERIMENT_OUTPUT_DIR
+REMOTE_WORK_DIR = os.environ.get("ISS_REMOTE_WORK_DIR", REMOTE_WORK_DIR_DEFAULT)
 REMOTE_USER = os.environ.get("ISS_REMOTE_USER", _DEFAULT_USER)
 
 REMOTE_BIN_DIR = os.environ.get("ISS_REMOTE_BIN_DIR", f"/users/{REMOTE_USER}/go/bin")
