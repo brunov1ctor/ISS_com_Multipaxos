@@ -30,8 +30,8 @@ type mpxInstance struct {
 
 	parent *MultiPaxosOrderer
 	sn     int32
-	bucketId uint32 // GroupId lógico (1..N) para mensagens
-	bucketIndex int32 // Índice interno (0..N-1) para acessar request.Buckets[]
+	bucketId uint32
+	bucketIndex int32
 
 	proposeEvery  time.Duration
 	announce      AnnounceFn
@@ -40,9 +40,16 @@ type mpxInstance struct {
 
 	seg manager.Segment
 
-	// Group-aware quorum calculation
-	members      []int32 // Members of this instance's group
+	// Paxos state
+	members      []int32
 	quorum       int32
+	promisedBallot  uint64
+	acceptedBallot  uint64
+	acceptedValue   *pb.MPxValue
+	prepared        bool
+	promiseCount    int32
+	promisedFrom    map[int32]struct{}
+
 	lastVal      *pb.MPxValue
 	lastDigest   [32]byte
 	acceptCount  int32
@@ -56,10 +63,11 @@ type mpxInstance struct {
 	enableNilDeliver bool
 	sbNilAfter       time.Duration
 
-	prepSent bool // líder já enviou PREPARE?
-	leader   int32 // líder observado para este SN (primeiro Accept recebido)
+	prepSent bool
+	leader   int32
+	currentBallot int64
 
-	// processamento assíncrono
+	// Async processing
 	msgCh  chan *pb.ProtocolMessage
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -79,6 +87,9 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ 
 		sbNilAfter:     interval * 3,
 		msgCh:          make(chan *pb.ProtocolMessage, 8192),
 		stopCh:         make(chan struct{}),
+		promisedBallot: 0,
+		acceptedBallot: 0,
+		currentBallot:  int64(uint64(membership.OwnID)),
 	}
 	fmt.Printf("[MPX][INST] sn=%d created\n", sn)
 	return inst
@@ -162,7 +173,7 @@ func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 		i.onPrepare(t.Prepare)
 	case *pb.MPxMsg_Promise:
 		fmt.Printf("[MPX][INST] sn=%d PROMISE from=%d\n", i.sn, pm.GetSenderId())
-		i.phase = phasePrepared
+		i.onPromise(pm.GetSenderId(), t.Promise)
 	case *pb.MPxMsg_Accept:
 		fmt.Printf("[MPX][INST] sn=%d ACCEPT from=%d\n", i.sn, pm.GetSenderId())
 		i.onAccept(pm.GetSenderId(), t.Accept)
@@ -181,10 +192,33 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if i.phase >= phasePrepared {
+	ballot := uint64(prepare.GetBallot())
+	
+	if int64(ballot) > i.currentBallot && i.leader == membership.OwnID {
+		seenCounter := ballot >> 32
+		i.currentBallot = int64((seenCounter + 1) << 32 | uint64(membership.OwnID))
+		fmt.Printf("[MPX][INST] sn=%d ABORTING leadership, bumping ballot to %d\n", i.sn, i.currentBallot)
+		i.leader = 0
+		i.phase = phaseInit
+		i.prepared = false
+		i.prepSent = false
+		i.promiseCount = 0
+		i.promisedFrom = make(map[int32]struct{})
+	}
+	
+	if ballot < i.promisedBallot {
+		fmt.Printf("[MPX][INST] sn=%d rejecting PREPARE ballot=%d < promised=%d\n", i.sn, ballot, i.promisedBallot)
 		return
 	}
-	i.phase = phasePrepared
+	
+	i.promisedBallot = ballot
+	
+	var promiseValue *pb.MPxValue
+	var promiseBallot uint64
+	if i.acceptedValue != nil {
+		promiseValue = i.acceptedValue
+		promiseBallot = i.acceptedBallot
+	}
 
 	// Usa GroupId do Prepare recebido
 	groupId := prepare.GetGroupId()
@@ -205,11 +239,13 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 
 	promise := &pb.MPxMsg{Type: &pb.MPxMsg_Promise{
 		Promise: &pb.MPxPromise{
-			Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-			Ballot:  0,
-			Ok:      true,
-			GroupId: groupId, // Usa GroupId do Prepare
-			Members: members, // Membros do grupo ou fallback
+			Id:             &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+			Ballot:         ballot,
+			Ok:             true,
+			AcceptedBallot: promiseBallot,
+			AcceptedValue:  promiseValue,
+			GroupId:        groupId,
+			Members:        members,
 		},
 	}}
 
@@ -219,8 +255,50 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: promise},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[MPX][INST] sn=%d sending PROMISE groupId=%d\n", i.sn, groupId)
+		fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d\n", i.sn, ballot, groupId)
 		i.parent.emit(out)
+	}
+}
+
+func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	
+	if i.promisedFrom == nil {
+		i.promisedFrom = make(map[int32]struct{})
+	}
+	
+	if _, ok := i.promisedFrom[from]; ok {
+		return // Já contado
+	}
+	
+	// Só conta se estiver no grupo
+	if len(i.members) > 0 && !i.isInGroup(from) {
+		fmt.Printf("[MPX][INST] sn=%d promise from=%d skipped (not in group)\n", i.sn, from)
+		return
+	}
+	
+	i.promisedFrom[from] = struct{}{}
+	i.promiseCount++
+	
+	if promise.GetAcceptedValue() != nil {
+		promiseValue := promise.GetAcceptedValue()
+		promiseBallot := promise.GetAcceptedBallot()
+		
+		if promiseBallot > i.acceptedBallot {
+			i.acceptedBallot = promiseBallot
+			i.acceptedValue = promiseValue
+			i.lastVal = promiseValue
+			fmt.Printf("[MPX][INST] sn=%d adopted value from promise ballot=%d\n", i.sn, promiseBallot)
+		}
+	}
+	
+	fmt.Printf("[MPX][INST] sn=%d promise from=%d counted, promiseCount=%d/%d\n", i.sn, from, i.promiseCount, i.quorum)
+	
+	if i.promiseCount >= i.quorum && !i.prepared {
+		i.prepared = true
+		i.phase = phasePrepared
+		fmt.Printf("[MPX][INST] sn=%d QUORUM de promises atingido, entrando em steady-state\n", i.sn)
 	}
 }
 
@@ -228,10 +306,24 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	// Garante estabilidade do líder: aceita primeiro, ignora demais
-	if i.leader == 0 {
+	ballot := uint64(a.GetBallot())
+	
+	if ballot < i.promisedBallot {
+		fmt.Printf("[MPX][INST] sn=%d rejecting ACCEPT ballot=%d < promised=%d\n", i.sn, ballot, i.promisedBallot)
+		return
+	}
+	
+	if ballot >= i.acceptedBallot {
+		i.acceptedBallot = ballot
+		if a.GetValue() != nil {
+			i.acceptedValue = a.GetValue()
+		}
+	}
+
+	if ballot >= i.promisedBallot || i.leader == 0 {
 		i.leader = from
-		fmt.Printf("[MPX][INST] sn=%d leader set to %d\n", i.sn, from)
+		i.promisedBallot = ballot
+		fmt.Printf("[MPX][INST] sn=%d leader set to %d (ballot=%d)\n", i.sn, from, ballot)
 	} else if i.leader != from {
 		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT from=%d (leader=%d)\n", i.sn, from, i.leader)
 		return
@@ -268,7 +360,7 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	// Envia ACCEPTED UNICAST para o líder
 	accepted := &pb.MPxMsg{Type: &pb.MPxMsg_Accepted{Accepted: &pb.MPxAccepted{
 		Id:     &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-		Ballot: 0,
+		Ballot: ballot,
 		Ok:     true,
 	}}}
 	resp := &pb.ProtocolMessage{
@@ -485,17 +577,20 @@ func (i *mpxInstance) ProposeIfDue() {
 	}
 
 	// PREPARE 1x por grupo (amortizado) - usa cache local do segmento
-	if !i.prepSent {
-		// Usa cache passado pelo runSegment (reseta a cada segmento)
-		i.prepSent = true
+	if !i.prepared {
+		if i.promiseCount < i.quorum {
+			fmt.Printf("[MPX][INST] sn=%d aguardando quorum de promises (%d/%d)\n", i.sn, i.promiseCount, i.quorum)
+			return
+		}
+		i.prepared = true
 		i.phase = phasePrepared
 	}
 
 	accept := &pb.MPxMsg{Type: &pb.MPxMsg_Accept{Accept: &pb.MPxAccept{
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-		Ballot:  0,
+		Ballot:  uint64(i.currentBallot),
 		Value:   val,
-		GroupId: i.bucketId, // Usa groupId lógico (1..N)
+		GroupId: i.bucketId,
 	}}}
 	pm := &pb.ProtocolMessage{
 		SenderId: membership.OwnID,
@@ -525,7 +620,7 @@ func (i *mpxInstance) tick(now time.Time) {
 					Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Accept{
 						Accept: &pb.MPxAccept{
 							Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-							Ballot:  0,
+							Ballot:  uint64(i.currentBallot),
 							Value:   i.lastVal,
 							GroupId: i.bucketId, // Usa bucket do usuário
 						},
@@ -573,7 +668,7 @@ func (i *mpxInstance) cutReqBatch() *request.Batch {
 	return nil
 }
 
-// SetMembers configures the group members for this instance and recalculates quorum
+// SetMembers configura membros do grupo e recalcula quorum
 func (i *mpxInstance) SetMembers(members []int32) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -608,7 +703,7 @@ func (i *mpxInstance) SetMembers(members []int32) {
 	}
 }
 
-// isInGroup verifica se um nó está nos membros do grupo desta instância
+// isInGroup verifica se um nó está no grupo
 func (i *mpxInstance) isInGroup(nodeID int32) bool {
 	for _, member := range i.members {
 		if member == nodeID {
@@ -625,7 +720,7 @@ func traceCommit(sn int32, size int) {
 	tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(size))
 }
 
-// validateBatchHomogeneity checks if all requests in batch have same GroupId
+// validateBatchHomogeneity valida se todos requests têm mesmo GroupId
 func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
 	reqs := batch.Message().Requests
 	if len(reqs) == 0 {

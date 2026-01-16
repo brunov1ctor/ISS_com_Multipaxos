@@ -4,42 +4,37 @@ option go_package = "github.com/hyperledger-labs/mirbft/protobufs;protobufs";
 
 package protobufs;
 
-// Importa Batch / Request já definidos no projeto (NÃO redefinir aqui!)
-
-// =========================
-// Mensagens Multi-Paxos
-// =========================
-
 message MPxInstanceId {
-  int32  sn   = 1;   // sequence number (slot)
-  uint64 lead = 2;   // líder corrente (informativo)
+  int32  sn   = 1;
+  uint64 lead = 2;
 }
 
 message MPxValue {
   MPxInstanceId id    = 1;
-  bytes         batch = 2;   // bytes do protobufs.Batch (serializado)
+  bytes         batch = 2;
 }
 
 message MPxPrepare {
   MPxInstanceId id     = 1;
   uint64        ballot = 2;
-  uint32        group_id = 3;         // grupo do batch (bucket)
+  uint32        group_id = 3;
 }
 
 message MPxPromise {
   MPxInstanceId id      = 1;
   uint64        ballot  = 2;
   bool          ok      = 3;
-  MPxValue      value   = 4;          // valor previamente aceito (se houver)
-  uint32        group_id = 5;         // 0 = “all”/desconhecido
-  repeated uint32 members = 6;        // nós sugeridos por este seguidor
+  uint64        accepted_ballot = 4;
+  MPxValue      accepted_value  = 5;
+  uint32        group_id = 6;
+  repeated uint32 members = 7;
 }
 
 message MPxAccept {
   MPxInstanceId id     = 1;
   uint64        ballot = 2;
   MPxValue      value  = 3;
-  uint32        group_id = 4;         // grupo decidido pelo líder (informativo)
+  uint32        group_id = 4;
 }
 
 message MPxAccepted {
@@ -50,8 +45,8 @@ message MPxAccepted {
 
 message MPxCommit {
   MPxInstanceId id     = 1;
-  MPxValue      value  = 2;           // ausente => NIL (⊥)
-  uint32        group_id = 3;         // informativo
+  MPxValue      value  = 2;
+  uint32        group_id = 3;
 }
 
 message MPxMsg {
