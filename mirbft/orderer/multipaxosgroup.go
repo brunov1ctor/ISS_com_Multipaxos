@@ -115,7 +115,7 @@ func ValidateAndRouteRequest(req *pb.ClientRequest) uint32 {
 		seen := make(map[uint32]struct{})
 		for _, x := range tg {
 			if x >= uint32(config.Config.NumBuckets) {
-				return GROUP_GLOBAL
+				return GROUP_GLOBAL // Grupo inválido -> broadcast
 			}
 			seen[x] = struct{}{}
 			g = x
@@ -123,13 +123,13 @@ func ValidateAndRouteRequest(req *pb.ClientRequest) uint32 {
 				return GROUP_GLOBAL // Toca múltiplos grupos -> broadcast
 			}
 		}
-		return g
+		return g // Toca apenas um grupo
 	}
 	
 	// Usa o groupId especificado na requisição
 	groupId := req.GetGroupId()
 	if groupId >= uint32(config.Config.NumBuckets) {
-		return GROUP_GLOBAL
+		return GROUP_GLOBAL // Grupo inválido -> broadcast
 	}
 	return groupId
 }

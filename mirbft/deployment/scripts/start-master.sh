@@ -31,7 +31,7 @@ export RSYNC_RSH
 #   1: remote_user
 #   2: master_ip
 #   3: remote_work_dir          (pesado, /tmp/iss-<user>)
-#   4: remote_bin_dir           (/users/<user>/go/bin)
+#   4: remote_bin_dir           (/tmp/iss-<user>/bin - LOCAL para evitar SIGBUS)
 #   5: exp_data_dir (LOCAL)     (deployment-data/remote-000X)
 #   6: local_master_cmd (LOCAL) (deployment-data/remote-000X/master-commands.cmd)
 # -----------------------------------------------------------------------------

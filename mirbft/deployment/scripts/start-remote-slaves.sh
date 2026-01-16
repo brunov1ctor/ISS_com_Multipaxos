@@ -22,11 +22,10 @@
 #      a. Cria diretórios remotos
 #      b. Copia scripts de inicialização
 #      c. Mata processos antigos
-#      d. Copia binários (atomic, evita SIGBUS em NFS)
-#      e. Copia certificados TLS
-#      f. Copia configs do experimento
-#      g. Verifica integridade dos assets
-#      h. Dispara start-slave.sh via nohup
+#      d. Copia certificados TLS
+#      e. Copia configs do experimento
+#      f. Verifica integridade dos assets
+#      g. Dispara start-slave.sh via nohup
 #
 # Variáveis de ambiente importantes:
 #   REMOTE_USER         - Usuário SSH remoto (default: $USER)
@@ -34,11 +33,9 @@
 #   FORCE_COPY_BINS     - Força cópia de binários mesmo em NFS (default: false)
 #   remote_work_dir     - Diretório de trabalho remoto (default: /tmp/iss-$USER)
 #   remote_base_dir     - Diretório base remoto (default: /users/$USER/iss)
-#   remote_bin_dir      - Diretório de binários remoto (default: /users/$USER/go/bin)
 #
 # Notas:
-#   - NÃO copia discoverymaster para slaves (evita overwrite no master)
-#   - Detecta NFS compartilhado e pula cópia de binários para evitar SIGBUS
+#   - Binários já foram copiados por deploy-remote.sh para /tmp/iss-user/bin
 #   - Usa cópia atômica (via .tmp) para evitar corrupção durante execução
 #   - Logs remotos ficam em ${remote_work_dir}/logs/start-slave-${instance_id}.log
 #
@@ -83,11 +80,11 @@ SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
 # Diretórios remotos:
 # - remote_work_dir: diretório temporário de trabalho (/tmp/iss-$USER)
 # - remote_base_dir: diretório base persistente (/users/$USER/iss)
-# - remote_bin_dir: diretório de binários (/users/$USER/go/bin)
+# - remote_bin_dir: diretório de binários LOCAL (/tmp/iss-$USER/bin) - evita SIGBUS em NFS
 # - remote_exp_dir: diretório do experimento (usa remote_work_dir como root)
 remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
 remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
-remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
+remote_bin_dir="${remote_work_dir}/bin"
 local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"
 remote_exp_dir="${remote_work_dir}"
 
@@ -216,31 +213,6 @@ remote_kill_bins() {
   " </dev/null || true
 }
 
-# Copia binário de forma atômica (via .tmp) para evitar corrupção durante execução
-copy_bin_atomic() {
-  local ip="$1"
-  local bin="$2"
-
-  local local_path="${local_bin_dir}/${bin}"
-  local remote_path="${remote_bin_dir}/${bin}"
-  local remote_tmp="${remote_bin_dir}/.${bin}.tmp"
-
-  if [[ ! -x "${local_path}" ]]; then
-    err "[bin] binário obrigatório NÃO encontrado: ${local_path}"
-    return 1
-  fi
-
-  ssh ${ssh_options} "${remote_user}@${ip}" "rm -f '${remote_tmp}'" </dev/null || true
-
-  scp_with_retry "${scp_retries}" \
-    "${local_path}" \
-    "${remote_user}@${ip}:${remote_tmp}"
-
-  ssh ${ssh_options} "${remote_user}@${ip}" "\
-    mv -f '${remote_tmp}' '${remote_path}' && chmod +x '${remote_path}'
-  " </dev/null
-}
-
 # Copia certificados TLS para o slave remoto
 copy_tls_assets() {
   local ip="$1"
@@ -330,9 +302,9 @@ remote_check_assets() {
 
 # Copia todos os assets necessários para o slave remoto:
 # - Scripts de inicialização (start-slave.sh, global-vars.sh)
-# - Binários (discoveryslave, orderingpeer, orderingclient)
 # - Certificados TLS (ca.pem, auth.pem, auth.key, etc)
 # - Configs do experimento (membership, 1client, etc)
+# Nota: binários já foram copiados por deploy-remote.sh
 copy_required_assets() {
   local ip="$1"
   
@@ -354,11 +326,6 @@ copy_required_assets() {
   " </dev/null || true
 
   remote_kill_bins "${ip}"
-
-  # Copia binários para o slave (NÃO copiar discoverymaster)
-  copy_bin_atomic "${ip}" discoveryslave
-  copy_bin_atomic "${ip}" orderingpeer
-  copy_bin_atomic "${ip}" orderingclient
 
   copy_tls_assets "${ip}"
   copy_experiment_configs "${ip}"

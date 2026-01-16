@@ -33,7 +33,7 @@ remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
 # Diretório leve (configs/TLS) permanece em /users/<user>/iss.
 remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
 
-remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
+remote_bin_dir="${remote_bin_dir:-${remote_work_dir}/bin}"
 
 ssh_options="${ssh_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
 scp_options="${scp_options:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o ControlPersist=no}"
@@ -175,10 +175,11 @@ tc qdisc del dev eth0 root tbf rate 1gbit burst 320kbit latency 400ms 2>/dev/nul
 killall -9 discoverymaster discoveryslave orderingpeer orderingclient 2>/dev/null || true
 rm -rf '${remote_work_dir}'
 
-# pesado: /tmp (logs, status, experiment-output)
+# pesado: /tmp (logs, status, experiment-output, binários)
 mkdir -p '${remote_work_dir}' \
          '${remote_work_dir}/logs' \
          '${remote_work_dir}/scripts' \
+         '${remote_work_dir}/bin' \
          '${remote_work_dir}/experiment-output' \
          '${remote_work_dir}/raw-results'
 
@@ -209,6 +210,28 @@ if [[ -f "${groups_yml_src}" ]]; then
 else
   log_w "groups.yml não encontrado em ${groups_yml_src}, rodando sem grupos (broadcast mode)."
 fi
+
+# === COPIA BINÁRIOS PARA DISCO LOCAL (evita SIGBUS em NFS) ===
+log_i "Copiando binários para ${remote_bin_dir} em todos os nós..."
+local_bin_dir="${GOBIN:-${HOME}/go/bin}"
+for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
+  if [[ ! -x "${local_bin_dir}/${bin}" ]]; then
+    log_e "Binário ${bin} não encontrado em ${local_bin_dir}"
+    exit 1
+  fi
+done
+
+for ip in $(awk '{print $2}' "$instance_info_file"); do
+  (
+    for bin in discoverymaster discoveryslave orderingpeer orderingclient; do
+      scp $scp_options "${local_bin_dir}/${bin}" "${remote_user}@${ip}:${remote_bin_dir}/${bin}.tmp" \
+        && ssh $ssh_options "${remote_user}@${ip}" "mv -f '${remote_bin_dir}/${bin}.tmp' '${remote_bin_dir}/${bin}' && chmod +x '${remote_bin_dir}/${bin}'" \
+        || { log_e "Falha ao copiar ${bin} para ${ip}"; exit 1; }
+    done
+  ) &
+done
+wait
+log_i "Binários copiados para todos os nós."
 
 log_i "Iniciando master em $master_ip..."
 scripts/start-master.sh \
