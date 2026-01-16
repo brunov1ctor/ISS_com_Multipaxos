@@ -40,6 +40,7 @@ type mpxInstance struct {
 	announce      AnnounceFn
 	lastProposeAt time.Time
 	closed        bool
+	countedInflight bool // CSMR: Se já foi contabilizado em inflightLocal (evita dupla contagem)
 
 	seg manager.Segment
 
@@ -201,6 +202,14 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	
 	// GroupId sempre vem no Prepare
 	i.bucketId = prepare.GetGroupId()
+	
+	// CSMR: Incrementa inflightLocal para followers (evita dupla contagem com flag)
+	if i.bucketId != 0 && !i.countedInflight {
+		i.parent.inflightMu.Lock()
+		i.parent.inflightLocal[i.bucketId]++
+		i.parent.inflightMu.Unlock()
+		i.countedInflight = true
+	}
 	
 	if int64(ballot) > i.currentBallot && i.leader == membership.OwnID {
 		seenCounter := ballot >> 32
