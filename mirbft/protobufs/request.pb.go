@@ -28,6 +28,7 @@ type ClientRequest struct {
 	Pubkey        []byte                 `protobuf:"bytes,3,opt,name=pubkey,proto3" json:"pubkey,omitempty"`
 	Signature     []byte                 `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
 	GroupId       uint32                 `protobuf:"varint,5,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	TouchedGroups []uint32               `protobuf:"varint,6,rep,packed,name=touched_groups,json=touchedGroups,proto3" json:"touched_groups,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -95,6 +96,13 @@ func (x *ClientRequest) GetGroupId() uint32 {
 		return x.GroupId
 	}
 	return 0
+}
+
+func (x *ClientRequest) GetTouchedGroups() []uint32 {
+	if x != nil {
+		return x.TouchedGroups
+	}
+	return nil
 }
 
 type ClientResponse struct {
