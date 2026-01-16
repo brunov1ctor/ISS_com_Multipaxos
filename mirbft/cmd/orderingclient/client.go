@@ -128,6 +128,9 @@ type client struct {
 	// For each epoch, for each received assignment, save number of peers it was received from
 	bucketAssignmentCounts map[int32]map[string]int
 
+	// Synchronization channel: closed when first bucket assignment is installed
+	bucketAssignmentReady chan struct{}
+
 	// Logger used by this client.
 	// Each client's log goes in a separate file, even if multiple clients are running from within the same process.
 	log     zerolog.Logger
@@ -155,6 +158,7 @@ func newClient(dServAddr string, numRequests int) *client {
 		epoch:                  -1,
 		bucketAssignments:      make(map[string]*pb.BucketAssignment),
 		bucketAssignmentCounts: make(map[int32]map[string]int),
+		bucketAssignmentReady:  make(chan struct{}),
 		// currentBucketAssignment will be initialized later (needs to be checked for nil when accessing)
 		trace: &tracing.BufferedTrace{
 			Sampling:              config.Config.ClientTraceSampling,
@@ -238,27 +242,9 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		Signature: nil,
 	}
 
-	// Obtém grupos definidos do orderer (via YAML)
-	groupIDs := orderer.GetAvailableGroups()
-	if len(groupIDs) == 0 {
-		groupIDs = []uint32{0} // Fallback: grupo global
-	}
-	
-	// Distribui requests entre grupos disponíveis (round-robin)
-	idx := int(seqNr) % len(groupIDs)
-	gid := groupIDs[idx]
-	req.GroupId = gid
-	req.TouchedGroups = []uint32{gid}
-	
-	// Log de roteamento a cada 500 requests para debug
-	if seqNr%500 == 0 {
-		logger.Info().
-			Int32("clSn", seqNr).
-			Uint32("reqGroupId", req.GroupId).
-			Interface("touchedGroups", req.TouchedGroups).
-			Uint32("routedTo", req.GroupId).
-			Msg("[ROUTE] Request routing decision")
-	}
+	// Roteamento por hash (padrão MirBFT)
+	// bucketID = (clientId + clientSn) % NumBuckets
+	// Cliente não precisa setar GroupId - servidor calcula
 	
 	var err error
 	if config.Config.SignRequests {
@@ -317,6 +303,10 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		}
 
 		c.log.Info().Int("numRequests", c.numRequests).Msg("Starting to submit requests.")
+
+		// Wait for first bucket assignment before submitting
+		<-c.bucketAssignmentReady
+		c.log.Info().Msg("Bucket assignment ready, starting submissions.")
 
 		timeBetweenRequests := int64(1000000 / config.Config.RequestRate)
 		nextSubmitTime := time.Now().UnixNano() / 1000 // Submit first request immediately
@@ -647,6 +637,14 @@ func (c *client) registerBucketAssignment(assignment *pb.BucketAssignment) {
 		}
 		c.epoch = newAssignment.Epoch
 
+		// Signal that first bucket assignment is ready
+		select {
+		case <-c.bucketAssignmentReady:
+			// Already closed
+		default:
+			close(c.bucketAssignmentReady)
+		}
+
 		// ===== MINIMAL FIX =====
 		// Allow resubmissions during drain (stop=1), only block them during teardown (closing=1).
 		if atomic.LoadInt32(&c.closing) != 0 {
@@ -717,21 +715,19 @@ func (c *client) newBucketsReady(epoch int32) *pb.BucketAssignment {
 }
 
 func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
-	guess := make([]int32, reqFanout, reqFanout)
-	b := int(req.GetGroupId())
-	if b < 0 || b > c.maxBucketID {
-		b = 0
+	// Calcula bucketID da mesma forma que o servidor (hash-based)
+	// CRÍTICO: Deve usar mesma lógica de request.GetBucketNr()
+	b := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(config.Config.NumBuckets))
+	
+	// Valida presença no mapa em vez de usar maxBucketID
+	owner, ok := c.currentBucketAssignment[b]
+	if !ok {
+		// Fallback: tenta bucket 0 se o bucket calculado não existe
+		owner = c.currentBucketAssignment[0]
 	}
 
-	for i := 0; i < reqFanout; i++ {
-		guess[i] = c.currentBucketAssignment[b]
-		if b > 0 {
-			b--
-		} else {
-			b = c.maxBucketID
-		}
-	}
-	return guess
+	// Envia apenas para o dono do bucket calculado
+	return []int32{owner}
 }
 
 // Creates a string representation of a bucket assignment for the purpose of using it as a map key.
