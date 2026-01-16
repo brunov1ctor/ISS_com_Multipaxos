@@ -25,12 +25,9 @@ var (
 	randomRequestPayload []byte
 )
 
-// Need at least f+1 responses (where f = (N-1)/3)
-// This ensures consistency with server-side responder selection
+// CRASH MODEL (CSMR): Aceita primeira resposta (não BFT)
 func enoughResponses(n int) bool {
-	N := membership.NumNodes()
-	f := (N - 1) / 3
-	return n >= f+1
+	return n >= 1
 }
 
 func main() {

@@ -245,11 +245,15 @@ func (c *SigningCheckpointer) GetPendingCheckpoints() []*pb.CheckpointMsg {
 }
 
 func makeSignedCheckpoint(sn, last int32) (*pb.ProtocolMessage, error) {
-	// Checkpoint digest is the Merkle tree root of the digests of the batches from the previous checkpoint sequence
-	// number (excluding) up until (including) the current checkpoint sequence number.
+	// CSMR: Checkpoint requer log contíguo (sem buracos)
+	// Se houver buraco, retorna erro e adia checkpoint até commits chegarem
 	batchDigests := make([][]byte, 0, 0)
 	for i := last + 1; i <= sn; i++ {
 		entry := log.GetEntry(i)
+		if entry == nil {
+			// Log não contíguo: adia checkpoint
+			return nil, fmt.Errorf("cannot create checkpoint: log has gap at sn=%d", i)
+		}
 		batchDigests = append(batchDigests, entry.Digest)
 	}
 	digest := crypto.MerkleHashDigests(batchDigests)

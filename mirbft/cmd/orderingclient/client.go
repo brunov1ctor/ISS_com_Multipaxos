@@ -241,9 +241,12 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		Signature: nil,
 	}
 
-	// Roteamento por hash (padrão MirBFT)
-	// bucketID = (clientId + clientSn) % NumBuckets
-	// Cliente não precisa setar GroupId - servidor calcula
+	// REPLICA MAPPER (CSMR): Roteia por hash para grupo específico
+	groupId := uint32((c.ownClientID + seqNr) % int32(config.Config.NumBuckets))
+	if groupId == 0 {
+		groupId = 1
+	}
+	req.GroupId = groupId
 	
 	var err error
 	if config.Config.SignRequests {
