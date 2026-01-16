@@ -6,8 +6,6 @@ import (
 	"sync"
 
 	"github.com/hyperledger-labs/mirbft/manager"
-	"github.com/hyperledger-labs/mirbft/membership"
-	pb "github.com/hyperledger-labs/mirbft/protobufs"
 )
 
 // MultiPaxosMulticastOrderer estende MultiPaxosOrderer com suporte a grupos
