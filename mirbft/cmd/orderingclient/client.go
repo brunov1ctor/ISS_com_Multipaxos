@@ -240,6 +240,16 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 
 	req.GroupId = orderer.ValidateAndRouteRequest(req)
 	
+	// Log de roteamento a cada 500 requests para debug
+	if seqNr%500 == 0 {
+		logger.Info().
+			Int32("clSn", seqNr).
+			Uint32("reqGroupId", req.GroupId).
+			Interface("touchedGroups", req.TouchedGroups).
+			Uint32("routedTo", req.GroupId).
+			Msg("[ROUTE] Request routing decision")
+	}
+	
 	var err error
 	if config.Config.SignRequests {
 		req.Signature, err = crypto.Sign(request.Digest(req), c.privKey)
