@@ -18,5 +18,8 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 }
 
 func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
+	if o.MultiPaxosOrderer == nil {
+		o.MultiPaxosOrderer = &MultiPaxosOrderer{}
+	}
 	return o.MultiPaxosOrderer.LoadGroupsFromYAML(filename)
 }

@@ -771,6 +771,9 @@ func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
 // Razão: Determinismo crítico - todos nós devem ter mesma configuração de grupos
 // Senão: groupPos diverge, SNs mapeiam para grupos diferentes, consenso quebra
 func (o *MultiPaxosOrderer) LoadGroupsFromYAML(filename string) error {
+	if o.am == nil {
+		o.am = NewAtomicMulticast()
+	}
 	err := o.am.LoadGroupsFromYAML(filename)
 	if err != nil {
 		logger.Fatal().
