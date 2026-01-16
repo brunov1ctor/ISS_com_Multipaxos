@@ -225,38 +225,37 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 // Cria instâncias Paxos para cada grupo/bucket em paralelo
 // Líder de cada grupo propõe batches independentemente
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
-	// Paralelismo por grupo: cada bucket tem instância ativa independente
-	// Bucket 0 = GROUP_GLOBAL (serializa multi-grupo)
-	// Buckets 1..N = Grupos 1..N (paralelo)
 	activeInstances := make(map[uint32]*mpxInstance)
 	var mu sync.Mutex
 	
-	bucketIDs := seg.Buckets().GetBucketIDs()
-	numBuckets := int32(len(bucketIDs))
-	if numBuckets == 0 {
-		numBuckets = 1
+	// Obtém grupos definidos (do YAML ou padrão)
+	groupIDs := o.am.GetDefinedGroups()
+	if len(groupIDs) == 0 {
+		groupIDs = []uint32{0} // Fallback: só grupo global
+	}
+	
+	numGroups := int32(len(groupIDs))
+	
+	// Mapa groupId -> índice na lista ordenada (para cálculo correto do globalSN)
+	groupPos := make(map[uint32]int32)
+	for i, gid := range groupIDs {
+		groupPos[gid] = int32(i)
 	}
 	
 	go func() {
 		t := time.NewTicker(o.proposeEvery)
 		defer t.Stop()
 		
-		// Round-robin para fairness entre buckets
-		lastBucketIdx := 0
-		
-		// Cache de Phase 1 por segmento
+		lastGroupIdx := 0
 		localGroupPrepared := make(map[uint32]bool)
 		
 		for range t.C {
 			now := time.Now()
 			
-			// Bucket 0 = GLOBAL, Buckets 1..N = Grupos
-			for offset := 0; offset < len(bucketIDs); offset++ {
-				idx := (lastBucketIdx + offset) % len(bucketIDs)
-				bucketIndex := bucketIDs[idx]
-				groupId := uint32(bucketIndex)
+			for offset := 0; offset < len(groupIDs); offset++ {
+				idx := (lastGroupIdx + offset) % len(groupIDs)
+				groupId := groupIDs[idx]
 				
-				// 1 líder por grupo
 				segmentLeaders := seg.Leaders()
 				groupLeader := o.am.GetGroupLeader(GroupID(groupId), segmentLeaders)
 				isGroupLeader := (groupLeader == membership.OwnID)
@@ -264,7 +263,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				mu.Lock()
 				inst := activeInstances[groupId]
 				
-				// Apenas líder cria instância, followers criam on-demand
 				if inst == nil || inst.isClosed() {
 					if !isGroupLeader {
 						mu.Unlock()
@@ -272,7 +270,14 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					}
 					
 					groupSN := o.am.NextSN(GroupID(groupId))
-					globalSN := seg.FirstSN() + groupSN*numBuckets + int32(bucketIndex)
+					if groupSN < 0 {
+						mu.Unlock()
+						fmt.Printf("[MPX][SEG] groupId=%d: contador não inicializado, pulando\n", groupId)
+						continue
+					}
+					
+					// Usa índice do grupo (não groupId cru) para evitar pulos de SN
+					globalSN := seg.FirstSN() + groupSN*numGroups + groupPos[groupId]
 					
 					if globalSN > seg.LastSN() {
 						mu.Unlock()
@@ -283,13 +288,16 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst = o.ensureInstance(globalSN)
 					inst.setSegment(seg)
 					inst.bucketId = groupId
-					inst.bucketIndex = int32(bucketIndex)
+					inst.bucketIndex = int32(groupId)
 					
-					// Configura membros do grupo
 					members := o.am.GetGroupMembers(groupId)
+					if members == nil {
+						mu.Unlock()
+						fmt.Printf("[MPX][SEG] groupId=%d não existe, pulando\n", groupId)
+						continue
+					}
 					inst.SetMembers(members)
 					
-					// Log diferenciado: multicast seletivo vs broadcast
 					if len(members) < len(membership.AllNodeIDs()) {
 						fmt.Printf("[MPX][MULTICAST] sn=%d groupId=%d SELECTIVE members=%v quorum=%d\n", 
 							globalSN, groupId, members, len(members)/2+1)
@@ -298,7 +306,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 							globalSN, groupId, members, len(members)/2+1)
 					}
 					
-					// Phase 1: envia Prepare se ainda não enviado para este grupo
 					if !localGroupPrepared[groupId] {
 						localGroupPrepared[groupId] = true
 					}
@@ -320,11 +327,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					}
 					
 					inst.prepSent = true
-					
 					inst.enableNilDeliver = o.enableNilDeliver
 					inst.sbNilAfter = o.sbNilAfter
 					
-					// Registra instância
 					o.dispatcher.store(globalSN, inst)
 					inst.startWorkers(&o.stopWg)
 					o.backlog.drainTo(globalSN, inst.enqueue)
@@ -337,15 +342,13 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				}
 				mu.Unlock()
 				
-				// Tick em todos os nós
 				inst.tick(now)
 				
-				// Apenas líder propõe
 				if isGroupLeader {
 					inst.ProposeIfDue()
 				}
 				
-				lastBucketIdx = (idx + 1) % len(bucketIDs)
+				lastGroupIdx = (idx + 1) % len(groupIDs)
 				break
 			}
 		}

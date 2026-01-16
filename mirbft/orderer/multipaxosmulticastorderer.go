@@ -95,17 +95,18 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 			return
 		}
 
-		// Envia apenas para membros do grupo (multicast seletivo)
-		members := o.MultiPaxosOrderer.am.GetGroupMembers(groupID)
-		if len(members) == 0 {
-			originalEmit(pm)
-		} else {
-			for _, nodeID := range members {
-				if nodeID != membership.OwnID {
-					messenger.EnqueueMsg(pm, nodeID)
-				}
+	// Envia apenas para membros do grupo (multicast seletivo)
+	members := o.MultiPaxosOrderer.am.GetGroupMembers(groupID)
+	if members == nil || len(members) == 0 {
+		// Grupo não existe - usa broadcast como fallback
+		originalEmit(pm)
+	} else {
+		for _, nodeID := range members {
+			if nodeID != membership.OwnID {
+				messenger.EnqueueMsg(pm, nodeID)
 			}
 		}
+	}
 	}
 }
 
