@@ -305,11 +305,47 @@ func getBucket(req *pb.ClientRequest) *Bucket {
 }
 
 func GetBucketNr(req *pb.ClientRequest) int {
-	groupId := int(req.GetGroupId())
-	if groupId >= 0 && groupId < config.Config.NumBuckets {
-		return groupId
+	// ATOMIC GLOBAL ORDER (artigo CSMR):
+	// Requests multi-grupo (len(TouchedGroups) > 1) precisam de coordenação global
+	// para garantir linearizability (ex: range query em 2 partições).
+	// Solução: rotear para GROUP_GLOBAL (bucket 0) = broadcast total order.
+	// Limitação: perde paralelismo (todos nós processam), mas garante atomicidade.
+	// Alternativa completa: implementar barreiras/coordenação entre grupos.
+	if len(req.TouchedGroups) > 1 {
+		logger.Debug().
+			Int32("clId", req.RequestId.ClientId).
+			Int32("clSn", req.RequestId.ClientSn).
+			Int("numGroups", len(req.TouchedGroups)).
+			Msg("Multi-group request routed to GROUP_GLOBAL for atomic order")
+		return 0 // Multi-grupo → bucket 0 (GROUP_GLOBAL)
 	}
-	return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(config.Config.NumBuckets))
+	if len(req.TouchedGroups) == 1 {
+		groupId := int(req.TouchedGroups[0])
+		// GroupId deve estar no range válido de buckets
+		if groupId >= 0 && groupId < len(Buckets) {
+			return groupId
+		}
+		// Se fora do range, usa grupo 0 (global)
+		return 0
+	}
+	
+	// Usa GroupId se especificado
+	groupId := int(req.GetGroupId())
+	if groupId > 0 {
+		if groupId < len(Buckets) {
+			return groupId
+		}
+		// Se fora do range, usa grupo 0 (global)
+		return 0
+	}
+	
+	// Fallback: hash-based
+	return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(len(Buckets)))
+}
+
+// IsMultiGroupRequest verifica se request toca múltiplos grupos (precisa atomic global order)
+func IsMultiGroupRequest(req *pb.ClientRequest) bool {
+	return len(req.TouchedGroups) > 1
 }
 
 // Returns the request buffer associated with a client ID.

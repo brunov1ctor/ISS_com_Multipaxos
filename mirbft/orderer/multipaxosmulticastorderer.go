@@ -111,15 +111,18 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 }
 
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
-	// Extrai groupID da mensagem recebida
+	// Extrai groupID e members da mensagem recebida
 	mpx := pm.GetMultipaxos()
 	var groupID uint32
+	var members []int32
 	if mpx != nil {
 		switch msg := mpx.Type.(type) {
 		case *pb.MPxMsg_Prepare:
 			groupID = msg.Prepare.GetGroupId()
+			members = msg.Prepare.GetMembers()
 		case *pb.MPxMsg_Promise:
 			groupID = msg.Promise.GetGroupId()
+			members = msg.Promise.GetMembers()
 		case *pb.MPxMsg_Accept:
 			groupID = msg.Accept.GetGroupId()
 		case *pb.MPxMsg_Commit:
@@ -127,13 +130,31 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		}
 	}
 	
+	// Aplica groupID ANTES de processar (para Promise sair com groupId correto)
+	if groupID > 0 {
+		// Se members veio na mensagem, aprende sem depender do YAML
+		if len(members) > 0 {
+			if inst, ok := o.MultiPaxosOrderer.dispatcher.load(pm.Sn); ok && inst != nil {
+				inst.SetMembers(members)
+				inst.bucketId = groupID
+			} else {
+				// Instância ainda não existe, guarda para aplicar depois
+				o.mu.Lock()
+				o.pendingGroups[pm.Sn] = groupID
+				o.mu.Unlock()
+			}
+		} else {
+			// Fallback: usa YAML
+			o.applyGroupID(pm.Sn, groupID)
+		}
+		// Garante bucketId na instância
+		if inst, ok := o.MultiPaxosOrderer.dispatcher.load(pm.Sn); ok && inst != nil && inst.bucketId == 0 {
+			inst.bucketId = groupID
+		}
+	}
+	
 	// Processa mensagem normalmente
 	o.MultiPaxosOrderer.HandleMessage(pm)
-	
-	// Aplica membros do grupo na instância (se existir) ou guarda para depois
-	if groupID > 0 {
-		o.applyGroupID(pm.Sn, groupID)
-	}
 }
 
 // SetInstanceMembers configura quorum baseado nos membros do grupo, não do cluster inteiro
@@ -147,6 +168,7 @@ func (o *MultiPaxosMulticastOrderer) SetInstanceMembers(sn int32, groupID uint32
 	members := o.MultiPaxosOrderer.am.GetGroupMembers(groupID)
 	if len(members) > 0 {
 		inst.SetMembers(members)
+		inst.bucketId = groupID
 	} else {
 		inst.SetMembers(membership.AllNodeIDs())
 	}
