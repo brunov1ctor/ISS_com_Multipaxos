@@ -9,7 +9,8 @@ message ClientRequest {
     bytes payload = 2;
     bytes pubkey = 3;
     bytes signature = 4;
-    uint32 group_id = 5;  // User-defined logical key for routing
+    uint32 group_id = 5;
+    repeated uint32 touched_groups = 6;
 }
 
 message ClientResponse {

@@ -301,13 +301,15 @@ func AdvanceWatermarks(entries []interface{}) { //expected type is []*log.Entry
 
 // Returns a bucket to which the request message belongs.
 func getBucket(req *pb.ClientRequest) *Bucket {
-	return Buckets[GetBucketNr(req.RequestId.ClientId, req.RequestId.ClientSn)]
+	return Buckets[GetBucketNr(req)]
 }
 
-// This is the hash function that computes the bucket number of a request.
-// This implementation assigns requests from the same client to buckets in a round-robin way.
-func GetBucketNr(clID int32, clSN int32) int {
-	return int((clID + clSN) % int32(config.Config.NumBuckets))
+func GetBucketNr(req *pb.ClientRequest) int {
+	groupId := int(req.GetGroupId())
+	if groupId >= 0 && groupId < config.Config.NumBuckets {
+		return groupId
+	}
+	return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(config.Config.NumBuckets))
 }
 
 // Returns the request buffer associated with a client ID.

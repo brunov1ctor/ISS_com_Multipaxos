@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
+	"github.com/hyperledger-labs/mirbft/orderer"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/request"
 	"github.com/hyperledger-labs/mirbft/tracing"
@@ -229,7 +229,6 @@ func (c *client) discoverPeers(dServAddr string) {
 
 func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 
-	// Create request message.
 	req := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
 			ClientId: c.ownClientID,
@@ -237,10 +236,10 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		},
 		Payload:   randomRequestPayload,
 		Signature: nil,
-		GroupId:   parseGroupId(), // User-defined group
 	}
 
-	// Sign request message.
+	req.GroupId = orderer.ValidateAndRouteRequest(req)
+	
 	var err error
 	if config.Config.SignRequests {
 		req.Signature, err = crypto.Sign(request.Digest(req), c.privKey)
@@ -697,10 +696,12 @@ func (c *client) newBucketsReady(epoch int32) *pb.BucketAssignment {
 	return nil
 }
 
-// Client must be locked when calling this function.
 func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 	guess := make([]int32, reqFanout, reqFanout)
-	b := request.GetBucketNr(req.RequestId.ClientId, req.RequestId.ClientSn)
+	b := int(req.GetGroupId())
+	if b < 0 || b > c.maxBucketID {
+		b = 0
+	}
 
 	for i := 0; i < reqFanout; i++ {
 		guess[i] = c.currentBucketAssignment[b]
@@ -735,15 +736,4 @@ func bucketAssignmentToString(assignment *pb.BucketAssignment) string {
 	return result
 }
 
-// parseGroupId parses MIR_GROUP_ID environment variable
-func parseGroupId() uint32 {
-	groupStr := os.Getenv("MIR_GROUP_ID")
-	if groupStr == "" {
-		return 0 // Default group
-	}
-	if groupId, err := strconv.ParseUint(groupStr, 10, 32); err == nil {
-		return uint32(groupId)
-	}
-	return 0
-}
 

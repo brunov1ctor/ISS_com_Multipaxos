@@ -86,18 +86,11 @@ type MultiPaxosOrderer struct {
 	
 	onInstanceCreated func(sn int32)
 	
-	// === PARALELISMO POR GRUPO ===
-	// Atomic multicast: cada grupo tem contador de SN independente
+	// Paralelismo por grupo: cada grupo tem contador de SN independente
 	am *AtomicMulticast
 	
-	// === PHASE 1 AMORTIZADA ===
-	// REMOVIDO: cache global substituído por cache local por segmento em runSegment
-	// Reseta automaticamente a cada novo segmento (troca de líder)
-	// groupPrepared sync.Map // DEPRECATED
-	
-	// === CLEANUP CORRETO ===
-	// Rastreia instâncias criadas por cada segmento para fechar corretamente
-	segmentInstances sync.Map // map[int][]*mpxInstance
+	// Rastreia instâncias por segmento para cleanup correto
+	segmentInstances sync.Map
 }
 
 func isSegmentLeader(seg manager.Segment, ownID int32, view int32) bool {
@@ -122,7 +115,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.sbNilAfter = o.proposeEvery * 3
 	o.enableNilDeliver = true
 	
-	// Inicializa atomic multicast com contadores por grupo
+	// Inicializa atomic multicast
 	o.am = NewAtomicMulticast()
 
 	// emit padrão - broadcast simples
@@ -150,9 +143,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			return
 		}
 		
-		// === EVITA FAN-OUT: Apenas o primeiro peer do cluster responde ===
-		// Isso garante que cada request gere apenas 1 evento REQ_FINISHED
-		// independente de quantos peers commitaram o batch
+		// Apenas o primeiro peer responde para evitar fan-out
 		shouldRespond := (membership.OwnID == membership.AllNodeIDs()[0])
 		
 		entry := &mirlog.Entry{
@@ -212,9 +203,7 @@ func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 
 	inst, ok := o.dispatcher.load(sn)
 	if !ok || inst == nil {
-		// === CRIAÇÃO ON-DEMAND ===
-		// Se instância não existe, tenta criar (follower sem requests locais)
-		// Isso garante que followers recebam mensagens mesmo sem requests
+		// Criação on-demand: followers criam instância ao receber mensagens
 		inst = o.ensureInstance(sn)
 		o.dispatcher.store(sn, inst)
 		inst.startWorkers(&o.stopWg)
@@ -244,9 +233,9 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 }
 
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
-	// === PARALELISMO POR GRUPO ===
-	// Cada bucket (grupo) tem sua própria instância ativa
-	// Permite múltiplos grupos processarem em paralelo
+	// Paralelismo por grupo: cada bucket tem instância ativa independente
+	// Bucket 0 = GROUP_GLOBAL (serializa multi-grupo)
+	// Buckets 1..N = Grupos 1..N (paralelo)
 	activeInstances := make(map[uint32]*mpxInstance)
 	var mu sync.Mutex
 	
@@ -260,22 +249,22 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		t := time.NewTicker(o.proposeEvery)
 		defer t.Stop()
 		
-		// Round-robin anti-starvation: garante fairness entre buckets
+		// Round-robin para fairness entre buckets
 		lastBucketIdx := 0
 		
-		// Cache local de Phase 1 por segmento (reseta a cada segmento)
+		// Cache de Phase 1 por segmento
 		localGroupPrepared := make(map[uint32]bool)
 		
 		for range t.C {
 			now := time.Now()
 			
-			// Tenta propor para cada bucket, começando do último
+			// Bucket 0 = GLOBAL, Buckets 1..N = Grupos
 			for offset := 0; offset < len(bucketIDs); offset++ {
 				idx := (lastBucketIdx + offset) % len(bucketIDs)
-				bucketIndex := bucketIDs[idx] // 0..N-1 (índice interno)
-				groupId := uint32(bucketIndex + 1) // 1..N (ID lógico do grupo)
+				bucketIndex := bucketIDs[idx]
+				groupId := uint32(bucketIndex)
 				
-				// === LIDERANÇA POR GRUPO (integrada com leader_policy) ===
+				// 1 líder por grupo
 				segmentLeaders := seg.Leaders()
 				groupLeader := o.am.GetGroupLeader(GroupID(groupId), segmentLeaders)
 				isGroupLeader := (groupLeader == membership.OwnID)
@@ -283,22 +272,16 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				mu.Lock()
 				inst := activeInstances[groupId]
 				
-				// === TODOS OS NÓS CRIAM INSTÂNCIA ===
+				// Apenas líder cria instância, followers criam on-demand
 				if inst == nil || inst.isClosed() {
+					if !isGroupLeader {
+						mu.Unlock()
+						continue
+					}
+					
 					groupSN := o.am.NextSN(GroupID(groupId))
+					globalSN := seg.FirstSN() + groupSN*numBuckets + int32(bucketIndex)
 					
-					// === MAPEAMENTO SN GLOBAL ===
-					// globalSN = base + groupSN*numBuckets + bucketIndex
-					// Garante SNs únicos entre grupos sem colisão
-					// Ex: 3 buckets, base=0
-					//   bucket[0]: 0, 3, 6, 9...
-					//   bucket[1]: 1, 4, 7, 10...
-					//   bucket[2]: 2, 5, 8, 11...
-					// NOTA: Segmento deve ser grande o suficiente para acomodar
-					//       groupSN avançando sem ultrapassar LastSN
-					globalSN := seg.FirstSN() + groupSN*numBuckets + int32(idx)
-					
-					// === GUARD: NÃO ULTRAPASSAR LASTSN ===
 					if globalSN > seg.LastSN() {
 						mu.Unlock()
 						fmt.Printf("[MPX][SEG] sn=%d exceeds segment LastSN=%d, skipping\n", globalSN, seg.LastSN())
@@ -310,7 +293,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst.bucketId = groupId
 					inst.bucketIndex = int32(bucketIndex)
 					
-					// === CONFIGURA MEMBROS DO GRUPO ===
+					// Configura membros do grupo
 					members := o.am.GetGroupMembers(groupId)
 					inst.SetMembers(members)
 					
@@ -323,31 +306,33 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 							globalSN, groupId, members, len(members)/2+1)
 					}
 					
-					// === PHASE 1 AMORTIZADA (cache local por segmento) ===
-					if isGroupLeader && !localGroupPrepared[groupId] {
+					// Phase 1: envia Prepare se ainda não enviado para este grupo
+					if !localGroupPrepared[groupId] {
 						localGroupPrepared[groupId] = true
-						
-						prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-							Prepare: &pb.MPxPrepare{
-								Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
-								Ballot:  0,
-								GroupId: groupId,
-							},
-						}}
-						pm := &pb.ProtocolMessage{
-							SenderId: membership.OwnID,
-							Sn:       globalSN,
-							Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
-						}
-						if o.emit != nil {
-							o.emit(pm)
-						}
 					}
+					
+					prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
+						Prepare: &pb.MPxPrepare{
+							Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
+							Ballot:  uint64(inst.currentBallot),
+							GroupId: groupId,
+						},
+					}}
+					pm := &pb.ProtocolMessage{
+						SenderId: membership.OwnID,
+						Sn:       globalSN,
+						Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
+					}
+					if o.emit != nil {
+						o.emit(pm)
+					}
+					
+					inst.prepSent = true
 					
 					inst.enableNilDeliver = o.enableNilDeliver
 					inst.sbNilAfter = o.sbNilAfter
 					
-					// Registra no dispatcher com SN global único
+					// Registra instância
 					o.dispatcher.store(globalSN, inst)
 					inst.startWorkers(&o.stopWg)
 					o.backlog.drainTo(globalSN, inst.enqueue)
@@ -365,29 +350,25 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				// Tick em todos os nós
 				inst.tick(now)
 				
-				// === APENAS LÍDER PROPÕE ===
+				// Apenas líder propõe
 				if isGroupLeader {
 					inst.ProposeIfDue()
 				}
 				
-				// Avança round-robin
 				lastBucketIdx = (idx + 1) % len(bucketIDs)
-				break // 1 bucket por tick
+				break
 			}
 		}
 	}()
 	
-	// === CLEANUP CORRETO ===
-	// Fecha apenas instâncias criadas por este segmento
+	// Cleanup: fecha instâncias quando segmento termina
 	go func() {
-		// Aguarda checkpoint do último SN do segmento
 		checkpoints := mirlog.Checkpoints()
 		currentCheckpoint := mirlog.GetCheckpoint()
 		for currentCheckpoint == nil || currentCheckpoint.Sn < seg.LastSN() {
 			currentCheckpoint = <-checkpoints
 		}
 		
-		// Fecha instâncias criadas por este segmento
 		if val, ok := o.segmentInstances.Load(seg.SegID()); ok {
 			instList := val.([]*mpxInstance)
 			for _, inst := range instList {
@@ -402,8 +383,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 }
 
 func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
-	// Cleanup já é feito por runSegment via segmentInstances
-	// Este método mantido para compatibilidade com Manager
 	checkpoints := mirlog.Checkpoints()
 	currentCheckpoint := mirlog.GetCheckpoint()
 	for currentCheckpoint == nil || currentCheckpoint.Sn < seg.LastSN() {
@@ -434,7 +413,7 @@ func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
 		inst = newMPXInstance(o, sn, o.announce, o.maxBatchSize, o.proposeEvery)
 		o.instances[sn] = inst
 		
-		// Notifica callback se configurado
+		// Notifica callback
 		if o.onInstanceCreated != nil {
 			o.onInstanceCreated(sn)
 		}

@@ -83,6 +83,12 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 					groupID = inst.bucketId
 				}
 			}
+			// Limpa pendingGroups após uso
+			if groupID > 0 {
+				o.mu.Lock()
+				delete(o.pendingGroups, pm.Sn)
+				o.mu.Unlock()
+			}
 		case *pb.MPxMsg_Commit:
 			groupID = msg.Commit.GetGroupId()
 		}
@@ -149,6 +155,12 @@ func (o *MultiPaxosMulticastOrderer) SetInstanceMembers(sn int32, groupID uint32
 	} else {
 		inst.SetMembers(membership.AllNodeIDs())
 	}
+	
+	// Limpa pendingGroups após aplicar
+	o.mu.Lock()
+	delete(o.pendingGroups, sn)
+	o.mu.Unlock()
+	
 	return true
 }
 
