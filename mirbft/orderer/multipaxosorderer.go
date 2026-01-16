@@ -15,6 +15,7 @@ import (
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
+	"github.com/hyperledger-labs/mirbft/request"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/tracing"
 	logger "github.com/rs/zerolog/log"
@@ -120,6 +121,15 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		if len(batchBytes) == 0 {
 			fmt.Printf("[MPX][NIL] DELIVER ⊥ sn=%d\n", sn)
 			tracing.MainTrace.Event(tracing.COMMIT, int64(sn), 0)
+			// Cria entrada vazia no log para não travar checkpoint/GC
+			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
+			shouldRespond := false
+			entry := &mirlog.Entry{
+				Sn:            sn,
+				Batch:         emptyBatch,
+				ShouldRespond: &shouldRespond,
+			}
+			announcer.Announce(entry)
 			return
 		}
 		var b pb.Batch
@@ -234,6 +244,15 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		groupIDs = []uint32{0} // Fallback: só grupo global
 	}
 	
+	// FAIL-FAST: valida configuração antes de iniciar segmento
+	if len(groupIDs) > len(request.Buckets) {
+		logger.Fatal().
+			Int("numGroups", len(groupIDs)).
+			Int("numBuckets", len(request.Buckets)).
+			Msg("FATAL: numGroups > NumBuckets. Increase config.NumBuckets or reduce groups in groups.yml")
+		return
+	}
+	
 	numGroups := int32(len(groupIDs))
 	
 	// Mapa groupId -> índice na lista ordenada (para cálculo correto do globalSN)
@@ -264,6 +283,52 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				inst := activeInstances[groupId]
 				
 				if inst == nil || inst.isClosed() {
+					// Verifica se este nó é membro do grupo
+					members := o.am.GetGroupMembers(groupId)
+					if members == nil {
+						mu.Unlock()
+						fmt.Printf("[MPX][SEG] groupId=%d não existe, pulando\n", groupId)
+						continue
+					}
+					
+					isMember := false
+					for _, m := range members {
+						if m == membership.OwnID {
+							isMember = true
+							break
+						}
+					}
+					
+					// Nó não é membro: skip direto sem criar instância ativa
+					if !isMember {
+						// Calcula próximo globalSN deste grupo de forma determinística
+						// Usa mirlog para verificar se já foi processado (não dispatcher)
+						
+						// Encontra o próximo globalSN não processado deste grupo
+						var nextGlobalSN int32 = -1
+						for candidateSN := seg.FirstSN(); candidateSN <= seg.LastSN(); candidateSN++ {
+							// Verifica se este globalSN pertence a este grupo
+							offset := candidateSN - seg.FirstSN()
+							if offset >= 0 && offset%numGroups == groupPos[groupId] {
+								// Verifica se já foi commitado no log (fonte de verdade)
+								if mirlog.GetEntry(candidateSN) == nil {
+									nextGlobalSN = candidateSN
+									break
+								}
+							}
+						}
+						
+						if nextGlobalSN >= 0 {
+							// Entrega NIL diretamente (sem instância ativa)
+							go func(sn int32) {
+								o.announce(sn, []byte{}, []byte{})
+							}(nextGlobalSN)
+							fmt.Printf("[MPX][SKIP] sn=%d groupId=%d (nó não é membro)\n", nextGlobalSN, groupId)
+						}
+						mu.Unlock()
+						continue
+					}
+					
 					if !isGroupLeader {
 						mu.Unlock()
 						continue
@@ -288,14 +353,21 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst = o.ensureInstance(globalSN)
 					inst.setSegment(seg)
 					inst.bucketId = groupId
-					inst.bucketIndex = int32(groupId)
+					// bucketIndex usa posição ordenada (não groupId cru)
+					inst.bucketIndex = groupPos[groupId]
 					
-					members := o.am.GetGroupMembers(groupId)
-					if members == nil {
+					// FAIL-FAST: configuração inválida = abort segment
+					if int(inst.bucketIndex) >= len(request.Buckets) {
 						mu.Unlock()
-						fmt.Printf("[MPX][SEG] groupId=%d não existe, pulando\n", groupId)
-						continue
+						logger.Fatal().
+							Int32("bucketIndex", inst.bucketIndex).
+							Int("numBuckets", len(request.Buckets)).
+							Uint32("groupId", groupId).
+							Int("numGroups", len(groupIDs)).
+							Msg("FATAL: bucketIndex >= NumBuckets. Fix groups.yml or config.NumBuckets")
+						return
 					}
+					
 					inst.SetMembers(members)
 					
 					if len(members) < len(membership.AllNodeIDs()) {
@@ -315,6 +387,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 							Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
 							Ballot:  uint64(inst.currentBallot),
 							GroupId: groupId,
+							Members: members,
 						},
 					}}
 					pm := &pb.ProtocolMessage{

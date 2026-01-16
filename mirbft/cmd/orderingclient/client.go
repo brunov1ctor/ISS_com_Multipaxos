@@ -238,7 +238,17 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		Signature: nil,
 	}
 
-	req.GroupId = orderer.ValidateAndRouteRequest(req)
+	// Obtém grupos definidos do orderer (via YAML)
+	groupIDs := orderer.GetAvailableGroups()
+	if len(groupIDs) == 0 {
+		groupIDs = []uint32{0} // Fallback: grupo global
+	}
+	
+	// Distribui requests entre grupos disponíveis (round-robin)
+	idx := int(seqNr) % len(groupIDs)
+	gid := groupIDs[idx]
+	req.GroupId = gid
+	req.TouchedGroups = []uint32{gid}
 	
 	// Log de roteamento a cada 500 requests para debug
 	if seqNr%500 == 0 {

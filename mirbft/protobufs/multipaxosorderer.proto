@@ -18,6 +18,7 @@ message MPxPrepare {
   MPxInstanceId id     = 1;
   uint64        ballot = 2;
   uint32        group_id = 3;
+  repeated int32 members = 4;
 }
 
 message MPxPromise {
@@ -27,7 +28,7 @@ message MPxPromise {
   uint64        accepted_ballot = 4;
   MPxValue      accepted_value  = 5;
   uint32        group_id = 6;
-  repeated uint32 members = 7;
+  repeated int32 members = 7;
 }
 
 message MPxAccept {

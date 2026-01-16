@@ -199,6 +199,22 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 
 	ballot := uint64(prepare.GetBallot())
 	
+	// Aprende members do Prepare (follower não depende do YAML)
+	if len(prepare.GetMembers()) > 0 {
+		members := make([]int32, len(prepare.Members))
+		for idx, m := range prepare.Members {
+			members[idx] = m
+		}
+		i.members = members
+		n := int32(len(i.members))
+		if n < 1 {
+			n = 1
+		}
+		i.quorum = n/2 + 1
+		i.bucketId = prepare.GetGroupId()
+		fmt.Printf("[MPX][INST] sn=%d learned members from PREPARE: %v quorum=%d groupId=%d\n", i.sn, members, i.quorum, i.bucketId)
+	}
+	
 	if int64(ballot) > i.currentBallot && i.leader == membership.OwnID {
 		seenCounter := ballot >> 32
 		i.currentBallot = int64((seenCounter + 1) << 32 | uint64(membership.OwnID))
@@ -208,7 +224,7 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		i.prepared = false
 		i.prepSent = false
 		i.promiseCount = 0
-		i.promisedFrom = make(map[int32]struct{})
+		i.promisedFrom = nil
 	}
 	
 	if ballot < i.promisedBallot {
@@ -224,17 +240,12 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	}
 
 	groupId := prepare.GetGroupId()
-	members := make([]uint32, 0)
+	members := make([]int32, 0)
 	
 	if len(i.members) > 0 {
-		for _, id := range i.members {
-			members = append(members, uint32(id))
-		}
+		members = append([]int32{}, i.members...)
 	} else {
-		all := membership.AllNodeIDs()
-		for _, id := range all {
-			members = append(members, uint32(id))
-		}
+		members = append([]int32{}, membership.AllNodeIDs()...)
 	}
 
 	promise := &pb.MPxMsg{Type: &pb.MPxMsg_Promise{
@@ -253,10 +264,16 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		Sn:       i.sn,
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: promise},
 	}
-	if i.parent.emit != nil {
-		fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d\n", i.sn, ballot, groupId)
-		i.parent.emit(out)
+	
+	// PROMISE unicast ao líder (não multicast)
+	leaderID := int32(prepare.GetId().GetLead())
+	if leaderID == membership.OwnID {
+		fmt.Printf("[MPX][INST] sn=%d skip PROMISE to self\n", i.sn)
+		return
 	}
+	
+	fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d to leader=%d\n", i.sn, ballot, groupId, leaderID)
+	messenger.EnqueueMsg(out, leaderID)
 }
 
 // onPromise processa mensagem PROMISE (resposta da Fase 1)

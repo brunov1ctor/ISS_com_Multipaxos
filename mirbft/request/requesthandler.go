@@ -44,12 +44,14 @@ func HandleRequest(req *pb.ClientRequest) {
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
 
 	// Log VISÍVEL de chegada da request (client → peer)
-	// Obs.: GetBucketByHashing abaixo é determinístico, então podemos logar antes de enfileirar.
-	b := GetBucketByHashing(req)
+	// Usa GetBucketNr() para respeitar regra multi-grupo → bucket 0
+	bucketNr := GetBucketNr(req)
 	logger.Info().
 		Int32("clientID", req.RequestId.ClientId).
 		Int32("clientSn", req.RequestId.ClientSn).
-		Int("bucketID", b.GetId()).
+		Int("bucketID", bucketNr).
+		Uint32("groupId", req.GroupId).
+		Int("numTouchedGroups", len(req.TouchedGroups)).
 		Msg("[REQ] ClientRequest received -> bucket")
 
 	if config.Config.RequestHandlerThreads > 0 {
@@ -59,49 +61,44 @@ func HandleRequest(req *pb.ClientRequest) {
 	}
 
 	// Após enfileirar, logar o tamanho aproximado do bucket
-	// (como AddReqMsg adiciona, podemos estimar novamente)
-	// Obs.: por simplicidade, recomputamos; para precisão, mover log p/ dentro de AddReqMsg.
-	b2 := GetBucketByHashing(req)
 	logger.Debug().
-		Int("bucketID", b2.GetId()).
-		Int("bucketLenApprox", b2.Len()).
+		Int("bucketID", bucketNr).
+		Int("bucketLenApprox", Buckets[bucketNr].Len()).
 		Msg("[REQ] Bucket size after enqueue")
 }
 
+// GetBucketByHashing retorna bucket usando apenas GroupId ou hash
+// ATENÇÃO: NÃO considera TouchedGroups (multi-grupo)!
+// Para roteamento real, use GetBucketNr() que implementa:
+//   - Multi-grupo (len(TouchedGroups) > 1) → bucket 0 (GROUP_GLOBAL)
+//   - Single-grupo → bucket baseado em GroupId ou hash
+// Esta função é mantida apenas para compatibilidade/casos especiais.
 func GetBucketByHashing(req *pb.ClientRequest) *Bucket {
-	// Use user-defined group_id for bucket selection
+	// Usa GroupId diretamente como bucketID
 	if req.GroupId > 0 {
-		// User provided logical GroupId (1..N) - map to bucket index (0..N-1)
-		// GroupId 1 -> bucket[0], GroupId 2 -> bucket[1], etc.
-		bucketIndex := int(req.GroupId - 1)
-		if bucketIndex >= 0 && bucketIndex < config.Config.NumBuckets {
-			return Buckets[bucketIndex]
+		bucketIndex := int(req.GroupId)
+		// Garante que não excede o tamanho do array Buckets
+		if bucketIndex >= len(Buckets) {
+			bucketIndex = bucketIndex % len(Buckets)
 		}
-		// If GroupId out of range, use modulo as fallback
-		bucketIndex = int(req.GroupId % uint32(config.Config.NumBuckets))
 		return Buckets[bucketIndex]
 	}
 	
-	// Fallback to original hash-based routing for compatibility
+	// Fallback: hash-based routing para requests sem GroupId
 	H := new(big.Int)
 	H.SetString(crypto.Hspace, 10)
 
-	// TODO keep this value somewhere else, its inefficient to calculate it all the time
 	bucketSize := new(big.Int).Div(H, big.NewInt(int64(config.Config.NumBuckets)))
 
 	reqKey := new(big.Int)
 	reqKey.SetBytes(crypto.Hash(RequestIDToBytes(req)))
 
-	// Calculating bucket id
 	I := new(big.Int).Div(reqKey, bucketSize)
 	i := I.Uint64()
 
-	// If the calculated ID is higher that the number of buckets clearly we are doing something wrong
 	if i > uint64(config.Config.NumBuckets-1) {
 		panic("Request beyond bucket limits")
 	}
 
-	b := Buckets[i]
-
-	return b
+	return Buckets[i]
 }
