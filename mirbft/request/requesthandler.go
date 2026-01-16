@@ -41,6 +41,11 @@ import (
 //       and at the same time avoid verifying the signature again, in case the request is already present.)
 func HandleRequest(req *pb.ClientRequest) {
 
+	// Fix: preencher TouchedGroups automaticamente se vazio
+	if len(req.TouchedGroups) == 0 {
+		req.TouchedGroups = []uint32{req.GroupId}
+	}
+
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
 
 	// Log VISÍVEL de chegada da request (client → peer)
