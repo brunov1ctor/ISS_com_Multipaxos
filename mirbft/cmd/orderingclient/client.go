@@ -714,11 +714,11 @@ func (c *client) newBucketsReady(epoch int32) *pb.BucketAssignment {
 }
 
 func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
-	// Calcula bucketID da mesma forma que o servidor (hash-based)
-	// CRÍTICO: Deve usar mesma lógica de request.GetBucketNr()
-	b := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(config.Config.NumBuckets))
+	// Usa a mesma função do servidor para calcular bucket
+	// Isso garante consistência quando TouchedGroups/GroupId forem usados
+	b := int(request.GetBucketNr(req))
 	
-	// Valida presença no mapa em vez de usar maxBucketID
+	// Valida presença no mapa
 	owner, ok := c.currentBucketAssignment[b]
 	if !ok {
 		// Fallback: tenta bucket 0 se o bucket calculado não existe
