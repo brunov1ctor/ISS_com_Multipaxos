@@ -18,7 +18,6 @@ import (
 	"github.com/hyperledger-labs/mirbft/messenger"
 	"github.com/hyperledger-labs/mirbft/request"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
-	"github.com/hyperledger-labs/mirbft/tracing"
 	logger "github.com/rs/zerolog/log"
 )
 
