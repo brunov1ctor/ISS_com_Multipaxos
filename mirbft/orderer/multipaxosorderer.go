@@ -22,6 +22,8 @@ import (
 
 type AnnounceFn func(sn int32, batchBytes []byte, metadata []byte)
 
+// mpxDispatcher gerencia mapa thread-safe de instâncias Paxos
+// Cada SN (sequence number) tem sua própria instância
 type mpxDispatcher struct {
 	mm sync.Map // map[int32]*mpxInstance
 }
@@ -35,23 +37,17 @@ func (d *mpxDispatcher) load(sn int32) (*mpxInstance, bool) {
 func (d *mpxDispatcher) store(sn int32, inst *mpxInstance) { d.mm.Store(sn, inst) }
 func (d *mpxDispatcher) delete(sn int32)                    { d.mm.Delete(sn) }
 
+// mpxBacklog armazena mensagens que chegaram antes da instância ser criada
 type mpxBacklog struct {
-	mu   sync.Mutex
-	qs   map[int32][]*pb.ProtocolMessage
-	gcCh chan int32
+	mu sync.Mutex
+	qs map[int32][]*pb.ProtocolMessage
 }
 
 func newMPXBacklog() mpxBacklog {
-	return mpxBacklog{
-		qs:   make(map[int32][]*pb.ProtocolMessage),
-		gcCh: make(chan int32, 1),
-	}
+	return mpxBacklog{qs: make(map[int32][]*pb.ProtocolMessage)}
 }
-func (b *mpxBacklog) add(msg *pb.ProtocolMessage) {
-	b.mu.Lock()
-	b.qs[msg.Sn] = append(b.qs[msg.Sn], msg)
-	b.mu.Unlock()
-}
+
+// drainTo entrega todas mensagens pendentes para uma instância
 func (b *mpxBacklog) drainTo(sn int32, f func(*pb.ProtocolMessage)) {
 	b.mu.Lock()
 	items := b.qs[sn]
@@ -62,55 +58,44 @@ func (b *mpxBacklog) drainTo(sn int32, f func(*pb.ProtocolMessage)) {
 	}
 }
 
+// MultiPaxosOrderer implementa consenso Multi-Paxos com suporte a grupos
+// Permite paralelismo: cada grupo executa Paxos independentemente
 type MultiPaxosOrderer struct {
 	mgr         manager.Manager
 	segmentChan chan manager.Segment
 
-	dispatcher mpxDispatcher
-	backlog    mpxBacklog
-	last       int32
+	dispatcher mpxDispatcher // Mapa de instâncias ativas
+	backlog    mpxBacklog    // Mensagens que chegaram cedo
+	last       int32         // Último SN processado
 
-	instances map[int32]*mpxInstance
 	instMu    sync.RWMutex
 	startOnce sync.Once
 
-	emit     func(pm *pb.ProtocolMessage)
-	announce AnnounceFn
+	emit     func(pm *pb.ProtocolMessage) // Função para enviar mensagens
+	announce AnnounceFn                    // Função para entregar batches
 
 	maxBatchSize     int
-	proposeEvery     time.Duration
-	view             int32
+	proposeEvery     time.Duration // Intervalo entre propostas
 	stopWg           sync.WaitGroup
 	sbNilAfter       time.Duration
 	enableNilDeliver bool
 	
-	onInstanceCreated func(sn int32)
+	onInstanceCreated func(sn int32) // Callback quando instância é criada
 	
-	// Paralelismo por grupo: cada grupo tem contador de SN independente
-	am *AtomicMulticast
+	am *AtomicMulticast // Gerenciador de grupos
 	
-	// Rastreia instâncias por segmento para cleanup correto
-	segmentInstances sync.Map
+	segmentInstances sync.Map // Rastreia instâncias por segmento
 }
 
-func isSegmentLeader(seg manager.Segment, ownID int32, view int32) bool {
-	leaders := seg.Leaders()
-	if len(leaders) == 0 {
-		return false
-	}
-	idx := int(view) % len(leaders)
-	return leaders[idx] == ownID
-}
-
+// Init inicializa o orderer Multi-Paxos
+// Configura parâmetros, funções de comunicação e gerenciamento de grupos
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.mgr = mgr
-	o.instances = make(map[int32]*mpxInstance)
 	o.backlog = newMPXBacklog()
 	o.last = -1
 
 	o.maxBatchSize = int(config.Config.BatchSize)
 	o.proposeEvery = time.Duration(config.Config.BatchTimeout)
-	o.view = 0
 
 	o.sbNilAfter = o.proposeEvery * 3
 	o.enableNilDeliver = true
@@ -118,7 +103,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	// Inicializa atomic multicast
 	o.am = NewAtomicMulticast()
 
-	// emit padrão - broadcast simples
+	// Função emit padrão: broadcast para todos os nós
 	o.emit = func(pm *pb.ProtocolMessage) {
 		for _, nid := range membership.AllNodeIDs() {
 			if nid == membership.OwnID {
@@ -130,7 +115,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.segmentChan = o.mgr.SubscribeOrderer()
 	messenger.OrdererMsgHandler = o.HandleMessage
 
-	// announce padrão
+	// Função announce padrão: entrega batch commitado à aplicação
 	o.announce = func(sn int32, batchBytes []byte, _ []byte) {
 		if len(batchBytes) == 0 {
 			fmt.Printf("[MPX][NIL] DELIVER ⊥ sn=%d\n", sn)
@@ -160,10 +145,12 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(len(b.Requests)))
 	}
 
-	fmt.Printf("[MPX] Init ok; cfg: batchSize=%d batchTimeout=%s view=%d leaderPolicy=%s\n",
-		o.maxBatchSize, o.proposeEvery, o.view, strings.ToLower(config.Config.LeaderPolicy))
+	fmt.Printf("[MPX] Init ok; cfg: batchSize=%d batchTimeout=%s leaderPolicy=%s\n",
+		o.maxBatchSize, o.proposeEvery, strings.ToLower(config.Config.LeaderPolicy))
 }
 
+// Start inicia processamento de segmentos
+// Cada segmento contém um range de SNs a serem ordenados
 func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 	o.startOnce.Do(func() {
 		fmt.Printf("[MPX] Start begin\n")
@@ -186,6 +173,8 @@ func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 	})
 }
 
+// HandleMessage processa mensagens Paxos recebidas
+// Cria instância on-demand se necessário (para followers)
 func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	sn := pm.Sn
 
@@ -232,6 +221,9 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 	})
 }
 
+// runSegment executa consenso para um segmento
+// Cria instâncias Paxos para cada grupo/bucket em paralelo
+// Líder de cada grupo propõe batches independentemente
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	// Paralelismo por grupo: cada bucket tem instância ativa independente
 	// Bucket 0 = GROUP_GLOBAL (serializa multi-grupo)
@@ -339,10 +331,8 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					
 					activeInstances[groupId] = inst
 					
-					// Rastreia instância para cleanup correto
 					if existing, loaded := o.segmentInstances.LoadOrStore(seg.SegID(), []*mpxInstance{inst}); loaded {
-						instList := existing.([]*mpxInstance)
-						o.segmentInstances.Store(seg.SegID(), append(instList, inst))
+						o.segmentInstances.Store(seg.SegID(), append(existing.([]*mpxInstance), inst))
 					}
 				}
 				mu.Unlock()
@@ -400,23 +390,9 @@ func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 }
 
 func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
-	o.instMu.RLock()
-	inst := o.instances[sn]
-	o.instMu.RUnlock()
-	if inst != nil {
-		return inst
-	}
-
-	o.instMu.Lock()
-	defer o.instMu.Unlock()
-	if inst = o.instances[sn]; inst == nil {
-		inst = newMPXInstance(o, sn, o.announce, o.maxBatchSize, o.proposeEvery)
-		o.instances[sn] = inst
-		
-		// Notifica callback
-		if o.onInstanceCreated != nil {
-			o.onInstanceCreated(sn)
-		}
+	inst := newMPXInstance(o, sn, o.announce, o.maxBatchSize, o.proposeEvery)
+	if o.onInstanceCreated != nil {
+		o.onInstanceCreated(sn)
 	}
 	return inst
 }
