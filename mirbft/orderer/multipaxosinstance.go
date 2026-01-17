@@ -221,12 +221,12 @@ func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 // Líder envia PREPARE para iniciar consenso
 // Followers respondem com PROMISE se aceitarem o ballot
 // CSMR: Followers incrementam inflightLocal ao receber PREPARE (rastreamento de drenagem)
-// CORREÇÃO 1: Ignora PREPARE se slot já committed
+// Ignora PREPARE se slot já committed
 func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	// CORREÇÃO 1: Slot já committed → ignora PREPARE
+	// Slot já committed → ignora PREPARE
 	if i.phase == phaseCommitted {
 		fmt.Printf("[MPX][INST] sn=%d ignoring PREPARE (already committed)\n", i.sn)
 		return
@@ -352,7 +352,7 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 // Líder envia ACCEPT com valor proposto
 // Followers aceitam e respondem com ACCEPTED
 // CSMR: Só aceita de membros do grupo
-// CORREÇÃO 1: Ignora ACCEPT se slot já committed
+// Ignora ACCEPT se slot já committed
 func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -386,7 +386,7 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		return
 	}
 
-	// CORREÇÃO 2: Digest determinístico para batches vazios
+	// Digest determinístico para batches vazios
 	if a.GetValue() != nil {
 		incomingBatch := a.GetValue().GetBatch()
 		// Normaliza batch vazio: nil ou []byte{} → []byte{} sempre
@@ -619,7 +619,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		
 		// Se não há requests, propõe batch vazio (NIL) para avançar SN
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
-			// CORREÇÃO 2: Batch vazio determinístico (sempre []byte{})
+			// Batch vazio determinístico (sempre []byte{})
 			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
 			batchBytes, err := proto.Marshal(emptyBatch)
 			if err != nil {
