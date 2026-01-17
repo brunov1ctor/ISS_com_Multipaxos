@@ -221,9 +221,16 @@ func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 // Líder envia PREPARE para iniciar consenso
 // Followers respondem com PROMISE se aceitarem o ballot
 // CSMR: Followers incrementam inflightLocal ao receber PREPARE (rastreamento de drenagem)
+// CORREÇÃO 1: Ignora PREPARE se slot já committed
 func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+
+	// CORREÇÃO 1: Slot já committed → ignora PREPARE
+	if i.phase == phaseCommitted {
+		fmt.Printf("[MPX][INST] sn=%d ignoring PREPARE (already committed)\n", i.sn)
+		return
+	}
 
 	ballot := uint64(prepare.GetBallot())
 	
@@ -345,9 +352,16 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 // Líder envia ACCEPT com valor proposto
 // Followers aceitam e respondem com ACCEPTED
 // CSMR: Só aceita de membros do grupo
+// CORREÇÃO 1: Ignora ACCEPT se slot já committed
 func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+
+	// CORREÇÃO 1: Slot já committed → ignora ACCEPT
+	if i.phase == phaseCommitted {
+		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT (already committed)\n", i.sn)
+		return
+	}
 
 	ballot := uint64(a.GetBallot())
 	
@@ -372,16 +386,25 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		return
 	}
 
+	// CORREÇÃO 2: Digest determinístico para batches vazios
 	if a.GetValue() != nil {
-		if i.lastVal != nil {
-			incomingDigest := sha256.Sum256(a.GetValue().GetBatch())
-			if incomingDigest != i.lastDigest {
-			fmt.Printf("[MPX][INST] sn=%d digest mismatch\n", i.sn)
-			return
+		incomingBatch := a.GetValue().GetBatch()
+		// Normaliza batch vazio: nil ou []byte{} → []byte{} sempre
+		if len(incomingBatch) == 0 {
+			incomingBatch = []byte{}
 		}
+		incomingDigest := sha256.Sum256(incomingBatch)
+		
+		if i.lastVal != nil {
+			// Já tem valor aceito: valida digest
+			if incomingDigest != i.lastDigest {
+				fmt.Printf("[MPX][INST] sn=%d digest mismatch (rejecting without state change)\n", i.sn)
+				return
+			}
 		} else {
+			// Primeiro valor: aceita e registra
 			i.lastVal = a.GetValue()
-			i.lastDigest = sha256.Sum256(i.lastVal.GetBatch())
+			i.lastDigest = incomingDigest
 		}
 	}
 
@@ -596,11 +619,15 @@ func (i *mpxInstance) ProposeIfDue() {
 		
 		// Se não há requests, propõe batch vazio (NIL) para avançar SN
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
-			// Batch vazio: cria valor NIL
+			// CORREÇÃO 2: Batch vazio determinístico (sempre []byte{})
 			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
 			batchBytes, err := proto.Marshal(emptyBatch)
 			if err != nil {
 				return
+			}
+			// Garante que batch vazio é sempre []byte{} (não nil)
+			if len(batchBytes) == 0 {
+				batchBytes = []byte{}
 			}
 			val = &pb.MPxValue{
 				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
