@@ -11,6 +11,7 @@ message ClientRequest {
     bytes signature = 4;
     uint32 group_id = 5;
     repeated uint32 touched_groups = 6;
+    uint64 GSN = 7;
 }
 
 message ClientResponse {

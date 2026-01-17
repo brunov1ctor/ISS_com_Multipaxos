@@ -51,6 +51,7 @@ var peerConnections = make(map[int32]PeerConnection)
 var CheckpointMsgHandler func(msg *pb.CheckpointMsg, senderID int32)
 var StateTransferMsgHandler func(msg *pb.ProtocolMessage)
 var OrdererMsgHandler func(msg *pb.ProtocolMessage)
+var ClientRequestHandler func(req *pb.ClientRequest)
 
 // HandleMessage é uma função pública para permitir que o multicast UDP chame diretamente
 func HandleMessage(msg *pb.ProtocolMessage) {
@@ -140,7 +141,14 @@ func handleMessage(msg *pb.ProtocolMessage, srv pb.Messenger_ListenServer) (fini
 	// If the message is not a checkpoint message, it is an Orderer message.
 	default:
 		//logger.Trace().Int32("from", msg.SenderId).Msg("Received protocol message: Orderer.")
-		OrdererMsgHandler(msg)
+		// Verifica se é ClientRequest forwarded (cross-op)
+		if clientReq := msg.GetClientRequest(); clientReq != nil {
+			if ClientRequestHandler != nil {
+				ClientRequestHandler(clientReq)
+			}
+		} else {
+			OrdererMsgHandler(msg)
+		}
 	}
 	return false
 }

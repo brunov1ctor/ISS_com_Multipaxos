@@ -15,95 +15,216 @@
 package request
 
 import (
-	"math/big"
+	"fmt"
+	"sort"
 
 	"github.com/hyperledger-labs/mirbft/config"
-	"github.com/hyperledger-labs/mirbft/crypto"
+	"github.com/hyperledger-labs/mirbft/membership"
+	"github.com/hyperledger-labs/mirbft/messenger"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/tracing"
 	logger "github.com/rs/zerolog/log"
 )
 
-// TODO: It's inefficient to hash a request every time it is needed to get the request ID
-
-// This function is used by the messenger as the handler function for requests (the main file performs the assignment).
-// Simply adds the received request to the corresponding request buffer.
-// TODO: If too many threads (64 or more in the current deployment with 32-core machines) invoke Add(),
-//       the buffer locks get extremely contended.
-//       Have only a fixed (configurable) number of threads invoking Add().
-//       Spawn those worker threads in the Init() function and make HandleRequest (this function) only write
-//       the request to a channel (do we need a big channel buffer for this?) that a worker reads.
-//       It would make sense to send requests from the same client to the same worker,
-//       Since the Buffer lock to be acquired by the worker is determined by the clientID.
-//       The lock being acquired by the same thread is crucial for avoiding contention.
-//       If this is not enough, try having the worker threads add requests to buffers in batches.
-//       (Although this might be very tricky if we want to avoid verifying signatures while holding the buffer lock,
-//       and at the same time avoid verifying the signature again, in case the request is already present.)
-func HandleRequest(req *pb.ClientRequest) {
-
-	// Fix: preencher TouchedGroups automaticamente se vazio
-	if len(req.TouchedGroups) == 0 {
-		req.TouchedGroups = []uint32{req.GroupId}
+// handlerThreadIndex normaliza índice do canal para evitar panic com ClientId negativo
+func handlerThreadIndex(clientID int32, threads int) int {
+	if threads <= 0 {
+		return 0
 	}
-
-	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
-
-	// Log VISÍVEL de chegada da request (client → peer)
-	// Usa GetBucketNr() para respeitar regra multi-grupo → bucket 0
-	bucketNr := GetBucketNr(req)
-	logger.Info().
-		Int32("clientID", req.RequestId.ClientId).
-		Int32("clientSn", req.RequestId.ClientSn).
-		Int("bucketID", bucketNr).
-		Uint32("groupId", req.GroupId).
-		Int("numTouchedGroups", len(req.TouchedGroups)).
-		Msg("[REQ] ClientRequest received -> bucket")
-
-	if config.Config.RequestHandlerThreads > 0 {
-		requestInputChannels[int(req.RequestId.ClientId)%config.Config.RequestHandlerThreads] <- req
-	} else {
-		AddReqMsg(req)
+	if clientID < 0 {
+		return 0
 	}
-
-	// Após enfileirar, logar o tamanho aproximado do bucket
-	logger.Debug().
-		Int("bucketID", bucketNr).
-		Int("bucketLenApprox", Buckets[bucketNr].Len()).
-		Msg("[REQ] Bucket size after enqueue")
+	return int(clientID) % threads
 }
 
-// GetBucketByHashing retorna bucket usando apenas GroupId ou hash
-// ATENÇÃO: NÃO considera TouchedGroups (multi-grupo)!
-// Para roteamento real, use GetBucketNr() que implementa:
-//   - Multi-grupo (len(TouchedGroups) > 1) → bucket 0 (GROUP_GLOBAL)
-//   - Single-grupo → bucket baseado em GroupId ou hash
-// Esta função é mantida apenas para compatibilidade/casos especiais.
-func GetBucketByHashing(req *pb.ClientRequest) *Bucket {
-	// Usa GroupId diretamente como bucketID
-	if req.GroupId > 0 {
-		bucketIndex := int(req.GroupId)
-		// Garante que não excede o tamanho do array Buckets
-		if bucketIndex >= len(Buckets) {
-			bucketIndex = bucketIndex % len(Buckets)
+// ForwardRequestToNodes envia request para nós específicos (usado para cross-op)
+func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
+	for _, nodeID := range nodeIDs {
+		if nodeID == membership.OwnID {
+			// Local: adiciona ao bucket
+			if config.Config.RequestHandlerThreads > 0 {
+				idx := handlerThreadIndex(req.RequestId.ClientId, config.Config.RequestHandlerThreads)
+				requestInputChannels[idx] <- req
+			} else {
+				AddReqMsg(req)
+			}
+		} else {
+			// Remoto: envia via messenger
+			pm := &pb.ProtocolMessage{
+				SenderId: membership.OwnID,
+				Sn:       -1,
+				Msg: &pb.ProtocolMessage_ClientRequest{
+					ClientRequest: req,
+				},
+			}
+			messenger.EnqueueMsg(pm, nodeID)
 		}
-		return Buckets[bucketIndex]
+	}
+}
+
+// TODO: It's inefficient to hash a request every time it is needed to get the request ID
+
+// HandleRequest processa request do cliente e implementa atomic multicast:
+// - Qualquer nó pode atuar como proxy (não há gargalo de proxy único)
+// - GSN sequencer (grupo 0) garante ordem global determinística
+// - META publicado apenas uma vez por proxy para evitar duplicação
+func HandleRequest(req *pb.ClientRequest) {
+
+	if len(req.TouchedGroups) == 0 {
+		// ✅ REPLICA MAPPER: Proxy decide TouchedGroups automaticamente
+		req.TouchedGroups = ReplicaMapper(req.Payload)
+		logger.Info().
+			Interface("touchedGroups", req.TouchedGroups).
+			Str("payload", string(req.Payload)[:min(50, len(req.Payload))]).
+			Msg("[REPLICA-MAPPER] Proxy mapped payload to groups")
+	} else {
+		// TouchedGroups já definido - valida consistência
+		mappedGroups := ReplicaMapper(req.Payload)
+		if !equalGroups(req.TouchedGroups, mappedGroups) {
+			logger.Warn().
+				Interface("provided", req.TouchedGroups).
+				Interface("mapped", mappedGroups).
+				Msg("[REPLICA-MAPPER] TouchedGroups mismatch - using provided")
+		}
 	}
 	
-	// Fallback: hash-based routing para requests sem GroupId
-	H := new(big.Int)
-	H.SetString(crypto.Hspace, 10)
-
-	bucketSize := new(big.Int).Div(H, big.NewInt(int64(config.Config.NumBuckets)))
-
-	reqKey := new(big.Int)
-	reqKey.SetBytes(crypto.Hash(RequestIDToBytes(req)))
-
-	I := new(big.Int).Div(reqKey, bucketSize)
-	i := I.Uint64()
-
-	if i > uint64(config.Config.NumBuckets-1) {
-		panic("Request beyond bucket limits")
+	// ✅ NORMALIZAÇÃO: Sempre normaliza TouchedGroups (ordena e remove duplicatas)
+	req.TouchedGroups = normalizeGroups(req.TouchedGroups)
+	
+	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
+	
+	// TODAS as requests precisam de GSN (conforme artigo)
+	if req.GSN == 0 {
+		// GSN não atribuído: qualquer nó pode atuar como proxy
+		// Obtém GSN via sequenciador global (grupo 0)
+		if gsnGenerator != nil {
+			req.GSN = gsnGenerator()
+		} else {
+			panic("[ATOMIC-MCAST] GSN generator not set")
+		}
+		
+		// ✅ CORREÇÃO: Publica META apenas UMA vez por proxy (evita duplicação)
+		if metaPublisher != nil {
+			metaPublisher(req.GSN, req.TouchedGroups)
+			logger.Info().
+				Uint64("gsn", req.GSN).
+				Interface("touchedGroups", req.TouchedGroups).
+				Int32("proxyNode", membership.OwnID).
+				Msg("[MULTI-PROXY] Published META once (no duplication)")
+		}
+		
+		// ✅ LIVENESS: Cache request para re-forward
+		if requestCacher != nil {
+			requestCacher(req.GSN, req)
+		}
+		
+		opID := GenerateOpID(req)
+		logger.Info().
+			Int32("clientID", req.RequestId.ClientId).
+			Int32("clientSn", req.RequestId.ClientSn).
+			Str("opID", opID).
+			Uint64("gsn", req.GSN).
+			Int32("proxyNode", membership.OwnID).
+			Int("numGroups", len(req.TouchedGroups)).
+			Msg("[MULTI-PROXY] Node acting as proxy, assigned GSN")
+	} else {
+		// GSN já atribuído (forwarded): apenas enfileirar localmente
+		logger.Info().
+			Int32("clientID", req.RequestId.ClientId).
+			Uint64("gsn", req.GSN).
+			Uint32("groupId", req.GroupId).
+			Msg("[ATOMIC-MCAST] Request received with GSN, enqueuing locally")
+		
+		if config.Config.RequestHandlerThreads > 0 {
+			idx := handlerThreadIndex(req.RequestId.ClientId, config.Config.RequestHandlerThreads)
+			requestInputChannels[idx] <- req
+		} else {
+			AddReqMsg(req)
+		}
+		return
 	}
+	
+	gsn := req.GSN
+	
+	// Fanout para todos os grupos tocados (single ou multi-group)
+	for _, groupID := range req.TouchedGroups {
+		clone := &pb.ClientRequest{
+			RequestId:     req.RequestId,
+			Payload:       req.Payload,
+			Signature:     req.Signature,
+			Pubkey:        req.Pubkey,
+			GroupId:       groupID,
+			TouchedGroups: req.TouchedGroups,
+			GSN:           gsn,
+		}
+		
+		logger.Info().
+			Int32("clientID", clone.RequestId.ClientId).
+			Int32("clientSn", clone.RequestId.ClientSn).
+			Uint32("groupId", groupID).
+			Uint64("gsn", gsn).
+			Msg("[ATOMIC-MCAST] Forwarding to group members (global order)")
+		
+		// Forward para todos os membros do grupo via callback
+		if groupMembersGetter != nil {
+			members := groupMembersGetter(groupID)
+			if members != nil && len(members) > 0 {
+				ForwardRequestToNodes(clone, members)
+			}
+		} else {
+			panic("[ATOMIC-MCAST] Group members getter not set (orderer must inject it)")
+		}
+	}
+}
 
-	return Buckets[i]
+// equalGroups verifica se dois slices de grupos são iguais como conjuntos
+// Normaliza ordem e remove duplicatas antes de comparar
+func equalGroups(a, b []uint32) bool {
+	// Normaliza ambos os slices
+	normA := normalizeGroups(a)
+	normB := normalizeGroups(b)
+	
+	if len(normA) != len(normB) {
+		return false
+	}
+	for i, v := range normA {
+		if v != normB[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeGroups ordena e remove duplicatas de um slice de grupos
+func normalizeGroups(groups []uint32) []uint32 {
+	if len(groups) == 0 {
+		return groups
+	}
+	
+	// Copia para não modificar o original
+	normalized := make([]uint32, len(groups))
+	copy(normalized, groups)
+	
+	// Ordena
+	sort.Slice(normalized, func(i, j int) bool {
+		return normalized[i] < normalized[j]
+	})
+	
+	// Remove duplicatas
+	unique := normalized[:0]
+	for i, group := range normalized {
+		if i == 0 || group != normalized[i-1] {
+			unique = append(unique, group)
+		}
+	}
+	
+	return unique
+}
+
+// min retorna o menor de dois inteiros
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

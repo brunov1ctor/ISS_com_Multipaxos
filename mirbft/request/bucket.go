@@ -17,6 +17,7 @@ package request
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog"
@@ -491,4 +492,106 @@ func (r *Request) log() *zerolog.Event {
 			Str("self", fmt.Sprintf("%d:%d", r.Msg.RequestId.ClientId, r.Msg.RequestId.ClientSn)).
 			Str("next", fmt.Sprintf("%d:%d", r.Next.Msg.RequestId.ClientId, r.Next.Msg.RequestId.ClientSn))
 	}
+}
+
+
+// FindRequestWithGSN procura request com GSN específico no bucket
+// GSN puro: considera TODAS as requests, não só cross-ops
+// ATTENTION: Bucket must be LOCKED when calling this method
+func (b *Bucket) FindRequestWithGSN(expectedGSN uint64) *Request {
+	r := b.FirstRequest
+	for r != nil {
+		if r.Msg.GSN == expectedGSN {
+			return r
+		}
+		r = r.Next
+	}
+	return nil
+}
+
+// RemoveFirstSingleGroup remove primeira request single-group do bucket
+// Usado quando cross-op com expectedGSN não está disponível
+// ATTENTION: Bucket must be LOCKED when calling this method
+func (b *Bucket) RemoveFirstSingleGroup(n int, dest []*Request) []*Request {
+	r := b.FirstRequest
+	for r != nil && n > 0 {
+		next := r.Next
+		if len(r.Msg.TouchedGroups) <= 1 {
+			dest = append(dest, r)
+			b.removeNoLock(r)
+			n--
+		}
+		r = next
+	}
+	return dest
+}
+
+
+// HasAnyCrossOp verifica se há qualquer cross-op no bucket
+// Usado para priorizar cross-ops sobre single-group
+// ATTENTION: Bucket must be LOCKED when calling this method
+func (b *Bucket) HasAnyCrossOp() bool {
+	r := b.FirstRequest
+	for r != nil {
+		if len(r.Msg.TouchedGroups) > 1 {
+			return true
+		}
+		r = r.Next
+	}
+	return false
+}
+
+
+// FindMinByGSN encontra request com menor GSN no bucket (TODAS as requests)
+// Implementa GSN puro conforme artigo - não só cross-ops
+// ATTENTION: Bucket must be LOCKED when calling this method
+func (b *Bucket) FindMinByGSN() *Request {
+	var minReq *Request
+	var minGSN uint64 = ^uint64(0) // Max uint64
+	
+	r := b.FirstRequest
+	for r != nil {
+		if r.Msg.GSN > 0 && r.Msg.GSN < minGSN {
+			minGSN = r.Msg.GSN
+			minReq = r
+		}
+		r = r.Next
+	}
+	return minReq
+}
+
+// FindMinCrossOpByGSN encontra cross-op com menor GSN no bucket
+// Usado para ordenação por GSN (atomic global order)
+// ATTENTION: Bucket must be LOCKED when calling this method
+func (b *Bucket) FindMinCrossOpByGSN() *Request {
+	var minReq *Request
+	var minGSN uint64 = ^uint64(0) // Max uint64
+	
+	r := b.FirstRequest
+	for r != nil {
+		if len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 && r.Msg.GSN < minGSN {
+			// Verifica barreira de GSN para atomic global order
+			if gsnBarrierChecker == nil || gsnBarrierChecker(r.Msg.GSN) {
+				minGSN = r.Msg.GSN
+				minReq = r
+			}
+		}
+		r = r.Next
+	}
+	return minReq
+}
+
+// FindSystemRequest procura primeira request sistêmica (SYSTEM:*) no bucket
+// Usado para priorizar GSN_REQUEST e META_STREAM no grupo 0
+// ATTENTION: Bucket must be LOCKED when calling this method
+func (b *Bucket) FindSystemRequest() *Request {
+	r := b.FirstRequest
+	for r != nil {
+		payload := string(r.Msg.Payload)
+		if strings.HasPrefix(payload, "SYSTEM:") {
+			return r
+		}
+		r = r.Next
+	}
+	return nil
 }

@@ -296,9 +296,9 @@ func (bg *BucketGroup) CutBatchFromBucket(bucketID int, size int, timeout time.D
 		targetBucket.Lock()
 	}
 	
-	// Cut batch from this bucket only
+	// Cut batch from this bucket only (single-group only, leave cross-ops for separate handling)
 	newBatch := Batch{Requests: make([]*Request, 0, size)}
-	newBatch.Requests = targetBucket.RemoveFirst(size, newBatch.Requests)
+	newBatch.Requests = targetBucket.RemoveFirstSingleGroup(size, newBatch.Requests)
 	
 	targetBucket.Unlock()
 	return &newBatch

@@ -112,6 +112,9 @@ type configuration struct {
 	RequestHandlerThreads     int    `yaml:"RequestHandlerThreads"` // Number of threads that write incoming requests to request Buffers.
 	RequestInputChannelBuffer int    `yaml:"RequestInputChannelBuffer"`
 	BatchVerifier             string `yaml:"BatchVerifier"`
+
+	// Proxy configuration for cross-op GSN assignment
+	CrossOpProxyNodeID int32 `yaml:"CrossOpProxyNodeID"` // Node ID that acts as proxy for cross-op GSN assignment. Set to -1 to disable (all nodes assign GSN).
 }
 
 func LoadFile(configFileName string) {
@@ -177,6 +180,7 @@ func LoadFile(configFileName string) {
 	logger.Debug().Int("RequestHandlerThreads", Config.RequestHandlerThreads).Msg("Config")
 	logger.Debug().Int("RequestInputChannelBuffer", Config.RequestInputChannelBuffer).Msg("Config")
 	logger.Debug().Str("BatchVerifier", Config.BatchVerifier).Msg("Config")
+	logger.Debug().Int32("CrossOpProxyNodeID", Config.CrossOpProxyNodeID).Msg("Config")
 
 	Config.LoggingLevel = setLoggingLevel(Config.LoggingLevelStr)
 

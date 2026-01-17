@@ -29,6 +29,7 @@ type ClientRequest struct {
 	Signature     []byte                 `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
 	GroupId       uint32                 `protobuf:"varint,5,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	TouchedGroups []uint32               `protobuf:"varint,6,rep,packed,name=touched_groups,json=touchedGroups,proto3" json:"touched_groups,omitempty"`
+	GSN           uint64                 `protobuf:"varint,7,opt,name=GSN,proto3" json:"GSN,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -103,6 +104,13 @@ func (x *ClientRequest) GetTouchedGroups() []uint32 {
 		return x.TouchedGroups
 	}
 	return nil
+}
+
+func (x *ClientRequest) GetGSN() uint64 {
+	if x != nil {
+		return x.GSN
+	}
+	return 0
 }
 
 type ClientResponse struct {
@@ -533,13 +541,16 @@ var File_request_proto protoreflect.FileDescriptor
 
 const file_request_proto_rawDesc = "" +
 	"\n" +
-	"\rrequest.proto\x12\tprotobufs\"\x94\x01\n" +
+	"\rrequest.proto\x12\tprotobufs\"\xa4\x01\n" +
 	"\rClientRequest\x123\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\v2\x14.protobufs.RequestIDR\trequestId\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x16\n" +
 	"\x06pubkey\x18\x03 \x01(\fR\x06pubkey\x12\x1c\n" +
-	"\tsignature\x18\x04 \x01(\fR\tsignature\"H\n" +
+	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
+	"\bgroup_id\x18\x05 \x01(\rR\agroupId\x12%\n" +
+	"\x0etouched_groups\x18\x06 \x03(\rR\rtouchedGroups\x12\x10\n" +
+	"\x03GSN\x18\x07 \x01(\x04R\x03GSN\"H\n" +
 	"\x0eClientResponse\x12\x1b\n" +
 	"\tclient_sn\x18\x01 \x01(\x05R\bclientSn\x12\x19\n" +
 	"\border_sn\x18\x02 \x01(\x05R\aorderSn\"E\n" +
