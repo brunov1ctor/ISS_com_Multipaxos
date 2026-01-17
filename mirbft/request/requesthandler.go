@@ -15,7 +15,6 @@
 package request
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/hyperledger-labs/mirbft/config"
@@ -49,15 +48,10 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 				AddReqMsg(req)
 			}
 		} else {
-			// Remoto: envia via messenger
-			pm := &pb.ProtocolMessage{
-				SenderId: membership.OwnID,
-				Sn:       -1,
-				Msg: &pb.ProtocolMessage_ClientRequest{
-					ClientRequest: req,
-				},
+			// Remoto: usa ClientRequestHandler diretamente
+			if messenger.ClientRequestHandler != nil {
+				messenger.ClientRequestHandler(req)
 			}
-			messenger.EnqueueMsg(pm, nodeID)
 		}
 	}
 }
