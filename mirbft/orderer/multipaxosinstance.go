@@ -469,8 +469,8 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		i.lastReqBatch = nil
 	}
 	var crossOpGSN uint64
-	var touchedGroups []uint32
-	batchBytes := i.lastVal.GetBatch()
+	var batchBytes []byte
+	batchBytes = i.lastVal.GetBatch()
 	innerBatch := batchBytes
 	if gsn, inner, hasGSN := decodeGSNBatch(batchBytes); hasGSN {
 		crossOpGSN = gsn
@@ -483,7 +483,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		return
 	}
 	if len(b.Requests) > 0 && len(b.Requests[0].TouchedGroups) > 0 {
-		touchedGroups = b.Requests[0].TouchedGroups
+		// touchedGroups = b.Requests[0].TouchedGroups // Removed unused variable
 	}
 	if crossOpGSN > 0 && GlobalMulticastOrderer != nil {
 		// Removida publicação redundante de META
@@ -553,7 +553,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		request.Buckets[i.bucketIndex].Lock()
 		
 		// Grupo 0 prioriza requests sistêmicas (GSN_REQUEST, META_STREAM)
-		var selectedReq *Request
+		var selectedReq *request.Request
 		if i.bucketId == 0 {
 			// Grupo 0: busca primeiro request sistêmico
 			systemReq := request.Buckets[i.bucketIndex].FindSystemRequest()
@@ -571,11 +571,10 @@ func (i *mpxInstance) ProposeIfDue() {
 		
 		if selectedReq != nil {
 			// Remove request selecionado
-			request.Buckets[i.bucketIndex].removeNoLock(selectedReq)
+			request.Buckets[i.bucketIndex].Remove([]*request.Request{selectedReq})
 			request.Buckets[i.bucketIndex].Unlock()
 			batchMsg := &pb.Batch{Requests: []*pb.ClientRequest{selectedReq.Msg}}
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-			rb.SetMessage(batchMsg)
 			if i.bucketId == 0 {
 				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 proposing system/expected request\n", i.sn)
 			} else {
@@ -593,6 +592,7 @@ func (i *mpxInstance) ProposeIfDue() {
 			}
 		}
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
+			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
 			batchBytes, err := proto.Marshal(emptyBatch)
 			if err != nil {
 				return
