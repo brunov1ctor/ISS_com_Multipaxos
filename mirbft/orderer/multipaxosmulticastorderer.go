@@ -37,6 +37,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"github.com/hyperledger-labs/mirbft/log"
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
@@ -726,4 +727,36 @@ func (o *MultiPaxosMulticastOrderer) requestReforward(gsn uint64, groups []uint3
 	// Simplified approach: use existing MissingEntry mechanism
 	fmt.Printf("[LIVENESS] Requesting reforward for GSN %d groups %v (using MissingEntry)\n", gsn, groups)
 	// TODO: Implement using existing MissingEntry mechanism or add custom protobuf field
+}
+
+// Sign - Assina dados com chave privada do orderer (implementa interface Orderer)
+func (o *MultiPaxosMulticastOrderer) Sign(data []byte) ([]byte, error) {
+	return nil, nil
+}
+
+// CheckSig - Verifica assinatura de dados (implementa interface Orderer)
+func (o *MultiPaxosMulticastOrderer) CheckSig(data []byte, senderID int32, signature []byte) error {
+	return nil
+}
+
+// HandleEntry - Processa entrada do log (implementa interface Orderer)
+func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
+	// Delega para orderers de grupo apropriados
+	if entry == nil {
+		return
+	}
+	
+	// Determina grupo baseado no SN ou conteúdo da entrada
+	var groupID uint32 = 0
+	if entry.Batch != nil && len(entry.Batch.Requests) > 0 {
+		groupID = entry.Batch.Requests[0].GetGroupId()
+	}
+	
+	o.orderersMu.RLock()
+	orderer := o.groupOrderers[groupID]
+	o.orderersMu.RUnlock()
+	
+	if orderer != nil {
+		orderer.HandleEntry(entry)
+	}
 }
