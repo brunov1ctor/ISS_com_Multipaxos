@@ -573,7 +573,6 @@ func (i *mpxInstance) ProposeIfDue() {
 			// Remove request selecionado
 			request.Buckets[i.bucketIndex].Remove([]*request.Request{selectedReq})
 			request.Buckets[i.bucketIndex].Unlock()
-			batchMsg := &pb.Batch{Requests: []*pb.ClientRequest{selectedReq.Msg}}
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 			if i.bucketId == 0 {
 				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 proposing system/expected request\n", i.sn)
