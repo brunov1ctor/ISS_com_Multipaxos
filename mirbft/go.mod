@@ -6,7 +6,7 @@ toolchain go1.23.1
 
 require (
 	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8
-	github.com/golang/protobuf v1.5.0
+	github.com/golang/protobuf v1.5.4
 	github.com/rs/zerolog v1.34.0
 	go.dedis.ch/kyber/v3 v3.1.0
 	golang.org/x/net v0.26.0
