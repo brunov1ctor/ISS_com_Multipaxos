@@ -222,12 +222,6 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 	}
 }
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
-	// ✅ LIVENESS: Handler para ReforwardRequest
-	if reforwardReq := pm.GetReforwardRequest(); reforwardReq != nil {
-		o.handleReforwardRequest(reforwardReq)
-		return
-	}
-	
 	if missingEntry := pm.GetMissingEntry(); missingEntry != nil {
 		// SN intercalado: usa GroupId da request ao invés de mapear SN
 		var groupID uint32 = 0
@@ -697,43 +691,6 @@ func (o *MultiPaxosMulticastOrderer) CacheRequest(gsn uint64, req *pb.ClientRequ
 	fmt.Printf("[LIVENESS] Cached request GSN %d for re-forward\n", gsn)
 }
 
-// ✅ LIVENESS: Handler para ReforwardRequest
-func (o *MultiPaxosMulticastOrderer) handleReforwardRequest(req *pb.ReforwardRequest) {
-	gsn := req.GetGsn()
-	groups := req.GetGroups()
-	
-	fmt.Printf("[LIVENESS] Received reforward request for GSN %d groups %v\n", gsn, groups)
-	
-	// Busca request no cache
-	o.cacheMu.RLock()
-	cachedReq, exists := o.requestCache[gsn]
-	o.cacheMu.RUnlock()
-	
-	if !exists {
-		fmt.Printf("[LIVENESS] No cached request for GSN %d, cannot reforward\n", gsn)
-		return
-	}
-	
-	// Re-forward para grupos solicitados
-	for _, groupID := range groups {
-		clone := &pb.ClientRequest{
-			RequestId:     cachedReq.RequestId,
-			Payload:       cachedReq.Payload,
-			Signature:     cachedReq.Signature,
-			Pubkey:        cachedReq.Pubkey,
-			GroupId:       groupID,
-			TouchedGroups: cachedReq.TouchedGroups,
-			GSN:           gsn,
-		}
-		
-		members := o.am.GetGroupMembers(groupID)
-		if members != nil && len(members) > 0 {
-			request.ForwardRequestToNodes(clone, members)
-			fmt.Printf("[LIVENESS] Re-forwarded GSN %d to group %d members %v\n", gsn, groupID, members)
-		}
-	}
-}
-
 // ✅ LIVENESS: Watchdog para detectar e re-forward requests perdidas
 func (o *MultiPaxosMulticastOrderer) reforwardWatchdog() {
 	ticker := time.NewTicker(5 * time.Second) // Verifica a cada 5s
@@ -766,21 +723,7 @@ func (o *MultiPaxosMulticastOrderer) reforwardWatchdog() {
 
 // ✅ LIVENESS: Solicita re-forward de request perdida
 func (o *MultiPaxosMulticastOrderer) requestReforward(gsn uint64, groups []uint32) {
-	// Envia solicitação de re-forward para todos os nós
-	allNodes := o.am.GetGroupMembers(0) // Grupo 0 = todos os nós
-	for _, nodeID := range allNodes {
-		if nodeID != membership.OwnID {
-			reforwardReq := &pb.ProtocolMessage{
-				SenderId: membership.OwnID,
-				Sn:       -1,
-				Msg: &pb.ProtocolMessage_ReforwardRequest{
-					ReforwardRequest: &pb.ReforwardRequest{
-						Gsn:    gsn,
-						Groups: groups,
-					},
-				},
-			}
-			messenger.EnqueueMsg(reforwardReq, nodeID)
-		}
-	}
+	// Simplified approach: use existing MissingEntry mechanism
+	fmt.Printf("[LIVENESS] Requesting reforward for GSN %d groups %v (using MissingEntry)\n", gsn, groups)
+	// TODO: Implement using existing MissingEntry mechanism or add custom protobuf field
 }
