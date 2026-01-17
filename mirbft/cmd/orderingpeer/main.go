@@ -138,6 +138,23 @@ func main() {
 
 	chkp = setCheckpointer(config.Config.Checkpointer)
 	rsp = request.NewResponder()
+	
+	// CSMR: Conecta Replica Mapper e Output Processing
+	if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
+		rsp.SetIsMemberFunc(mcOrd.IsMember)
+		rsp.SetGroupMembersFunc(mcOrd.GetGroupMembers)
+		mcOrd.SetForwardRequestFn(request.ForwardRequestToNodes)
+		request.SetProxyInterceptor(func(req *request.Request) {
+			if req.Msg != nil {
+				mcOrd.ProxyInterceptor(req.Msg.GSN, req.Msg.TouchedGroups, req.Msg)
+			}
+		})
+		request.SetGSNBarrierChecker(mcOrd.CanProcessCrossOp)
+		request.SetGSNGenerator(mcOrd.GetNextGSN)
+		request.SetGroupMembersGetter(mcOrd.GetGroupMembers)
+		// ✅ CORREÇÃO: Configura META publisher para evitar duplicação
+		request.SetMETAPublisher(mcOrd.PublishMETAOnce)
+	}
 
 	// Initialize modules.
 	// No outgoing messages must be produced even after initialization,
@@ -255,10 +272,8 @@ func setOrderer(ordererType string, ownPrivateIP string, configFileName string) 
 	case "MultiPaxosMulticast":
 		ord = &orderer.MultiPaxosMulticastOrderer{}
 		if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
-			// Use env var ou caminho relativo ao config principal
 			groupsFile := os.Getenv("MIR_GROUPS_FILE")
 			if groupsFile == "" {
-				// Caminho relativo ao config principal
 				configDir := filepath.Dir(configFileName)
 				groupsFile = filepath.Join(configDir, "groups.yml")
 			}

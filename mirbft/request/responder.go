@@ -22,6 +22,7 @@ import (
 	logger "github.com/rs/zerolog/log"
 
 	"github.com/hyperledger-labs/mirbft/log"
+	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/tracing"
@@ -30,7 +31,7 @@ import (
 // ========================== Instrumentação extra ============================
 
 // ResponderBuildTag ajuda a identificar nos logs se a versão nova está rodando.
-const ResponderBuildTag = "RESPONDER+SEND-LOGS-v1.1-2025-09-22"
+const ResponderBuildTag = "OUTPUT-PROCESSING-v2.0-ATOMIC-COMMIT"
 
 // Banner de versão impresso apenas uma vez.
 var printVersionOnce sync.Once
@@ -44,12 +45,18 @@ func printVersionBanner() {
 
 // ============================= Tipo principal ===============================
 
-// Represents a responder to client requests
+// Responder implementa Output Processing do CSMR 
+// Coleta outputs das réplicas e aplica função de seleção 
 type Responder struct {
-
-	// Channel through which the log will push entries to the responder in sequence number order.
-	// The responder reads from this channel and responds to the corresponding client for each entry.
 	entriesChan chan *log.Entry
+	
+	// CSMR Replica Mapper : mapeia operações → réplicas
+	isMemberFunc func(groupID uint32, nodeID int32) bool
+	getGroupMembers func(groupID uint32) []int32
+	
+	// Deduplicação de respostas para cross-ops
+	respondedOps   sync.Map // opID -> time.Time
+	respondedOpsMu sync.Mutex
 }
 
 // Creates a new responder.
@@ -59,8 +66,18 @@ type Responder struct {
 func NewResponder() *Responder {
 	printVersionBanner()
 	return &Responder{
-		entriesChan: log.Entries(),
+		entriesChan:  log.Entries(),
 	}
+}
+
+// SetIsMemberFunc configura Replica Mapper (CSMR Definition 7)
+func (r *Responder) SetIsMemberFunc(f func(groupID uint32, nodeID int32) bool) {
+	r.isMemberFunc = f
+}
+
+// SetGroupMembersFunc configura função R(x) - replication set (Definition 7)
+func (r *Responder) SetGroupMembersFunc(f func(groupID uint32) []int32) {
+	r.getGroupMembers = f
 }
 
 // Observes the log and responds to clients in commit order.
@@ -69,6 +86,16 @@ func NewResponder() *Responder {
 func (r *Responder) Start(wg *sync.WaitGroup) {
 	defer wg.Done()
 	printVersionBanner()
+	
+	// Cleanup periódico de respondedOps
+	// Timeout conservador: 5 minutos para tolerar atrasos
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			r.cleanupRespondedOps(5 * time.Minute)
+		}
+	}()
 
 	// Read log entries (containing ordered batches) from
 	// the entries channel until the channel is closed.
@@ -91,6 +118,7 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 
 		// For each ClientRequest in the ordered batch
 		sent := 0
+		skipped := 0
 		for _, req := range e.Batch.Requests {
 			if req == nil || req.RequestId == nil {
 				fmt.Printf("[RESPONDER][WARN] sn=%d request sem RequestId — ignorando\n", e.Sn)
@@ -99,6 +127,33 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 
 			cid := req.RequestId.ClientId
 			csn := req.RequestId.ClientSn
+			
+			// Cross-op: DEDUPLICAÇÃO apenas
+			// Atomic order já garantido pelo orderer (expectedGSN)
+			if len(req.TouchedGroups) > 1 {
+				opID := GenerateOpID(req)
+				
+				// DEDUPLICAÇÃO: responde apenas uma vez por opID
+				if _, loaded := r.respondedOps.LoadOrStore(opID, time.Now()); loaded {
+					fmt.Printf("[OUTPUT-PROC][DEDUP] sn=%d opid=%s already responded\n", e.Sn, opID)
+					skipped++
+					continue
+				}
+				
+				fmt.Printf("[OUTPUT-PROC][CROSS-OP] sn=%d opid=%s group=%d gsn=%d (atomic order by orderer)\n", 
+					e.Sn, opID, req.GetGroupId(), req.GSN)
+			}
+			
+			// CSMR Output Processing: filtra por membership
+			// Crash model: primeira resposta válida é suficiente
+			if r.isMemberFunc != nil && req.GroupId != 0 {
+				if !r.isMemberFunc(req.GroupId, membership.OwnID) {
+					fmt.Printf("[OUTPUT-PROC][SKIP] sn=%d req=%d group=%d (not in R(x))\n",
+						e.Sn, csn, req.GroupId)
+					skipped++
+					continue
+				}
+			}
 
 			logger.Trace().
 				Int32("clientId", cid).
@@ -123,7 +178,33 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 			sent++
 		}
 
-		fmt.Printf("[RESPONDER][ENTRY][DONE] sn=%d sent=%d/%d\n", e.Sn, sent, nReq)
+		if skipped > 0 {
+			fmt.Printf("[RESPONDER][ENTRY][DONE] sn=%d sent=%d skipped=%d (not member) total=%d\n", 
+				e.Sn, sent, skipped, nReq)
+		} else {
+			fmt.Printf("[RESPONDER][ENTRY][DONE] sn=%d sent=%d/%d\n", e.Sn, sent, nReq)
+		}
 	}
 }
 
+
+
+// cleanupRespondedOps remove entradas antigas para evitar vazamento de memória
+func (r *Responder) cleanupRespondedOps(timeout time.Duration) {
+	now := time.Now()
+	cleaned := 0
+	
+	r.respondedOps.Range(func(key, value interface{}) bool {
+		if ts, ok := value.(time.Time); ok {
+			if now.Sub(ts) > timeout {
+				r.respondedOps.Delete(key)
+				cleaned++
+			}
+		}
+		return true
+	})
+	
+	if cleaned > 0 {
+		fmt.Printf("[RESPONDER-CLEANUP] removed %d stale opIDs\n", cleaned)
+	}
+}

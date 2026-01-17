@@ -342,6 +342,7 @@ type MPxAccepted struct {
 	Id            *MPxInstanceId         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Ballot        uint64                 `protobuf:"varint,2,opt,name=ballot,proto3" json:"ballot,omitempty"`
 	Ok            bool                   `protobuf:"varint,3,opt,name=ok,proto3" json:"ok,omitempty"`
+	GroupId       uint32                 `protobuf:"varint,4,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -395,6 +396,13 @@ func (x *MPxAccepted) GetOk() bool {
 		return x.Ok
 	}
 	return false
+}
+
+func (x *MPxAccepted) GetGroupId() uint32 {
+	if x != nil {
+		return x.GroupId
+	}
+	return 0
 }
 
 type MPxCommit struct {

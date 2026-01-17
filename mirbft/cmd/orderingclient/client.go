@@ -241,12 +241,13 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		Signature: nil,
 	}
 
-	// REPLICA MAPPER (CSMR): Roteia por hash para grupo específico
+	// ATOMIC MULTICAST: Define TouchedGroups
 	groupId := uint32((c.ownClientID + seqNr) % int32(config.Config.NumBuckets))
 	if groupId == 0 {
 		groupId = 1
 	}
 	req.GroupId = groupId
+	req.TouchedGroups = []uint32{groupId} // Single-group por padrão
 	
 	var err error
 	if config.Config.SignRequests {
@@ -717,18 +718,19 @@ func (c *client) newBucketsReady(epoch int32) *pb.BucketAssignment {
 }
 
 func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
-	// Usa a mesma função do servidor para calcular bucket
-	// Isso garante consistência quando TouchedGroups/GroupId forem usados
+	// PROXY MODE: Cross-ops sempre vão para o proxy configurado
+	if config.Config.CrossOpProxyNodeID >= 0 && len(req.TouchedGroups) > 1 {
+		return []int32{config.Config.CrossOpProxyNodeID}
+	}
+	
+	// Single-group: usa bucket assignment normal
 	b := int(request.GetBucketNr(req))
 	
-	// Valida presença no mapa
 	owner, ok := c.currentBucketAssignment[b]
 	if !ok {
-		// Fallback: tenta bucket 0 se o bucket calculado não existe
 		owner = c.currentBucketAssignment[0]
 	}
 
-	// Envia apenas para o dono do bucket calculado
 	return []int32{owner}
 }
 

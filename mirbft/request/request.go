@@ -16,8 +16,10 @@ package request
 
 import (
 	"encoding/binary"
+	"fmt"
 	"sync"
 
+	"google.golang.org/protobuf/proto"
 	logger "github.com/rs/zerolog/log"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/crypto"
@@ -56,6 +58,27 @@ var (
 
 	// Function used for verifying request batches. Set during initialization.
 	batchVerifierFunc func(*Batch) bool
+	
+	// Proxy interceptor para atribuir GSN
+	proxyInterceptor func(*Request)
+	
+	// GSN barrier checker para atomic global order
+	gsnBarrierChecker func(uint64) bool
+	
+	// GSN generator (injected by orderer to avoid import cycle)
+	gsnGenerator func() uint64
+	
+	// Group members getter (injected by orderer to avoid import cycle)
+	groupMembersGetter func(uint32) []int32
+	
+	// META publisher (injected by orderer to avoid import cycle)
+	metaPublisher func(uint64, []uint32)
+	
+	// ✅ LIVENESS: Callback para marcar request como recebida
+	requestReceivedMarker func(uint64, uint32)
+	
+	// ✅ LIVENESS: Callback para cache de requests
+	requestCacher func(uint64, *pb.ClientRequest)
 )
 
 type watermarkRange struct {
@@ -166,21 +189,111 @@ type Request struct {
 	// When a verifier has verified the request's signature, it writes it to this channel in order to notify the
 	// batch verification method that the verification of this request finished.
 	VerifiedChan chan *Request
+
+	// CROSS-OP SUPPORT (atomic multicast)
+	// OpID: identificador determinístico da operação
+	OpID string
+
+	// GSN: Global Sequence Number para cross-ops
+	GSN uint64
+}
+
+// SetProxyInterceptor configura interceptor do proxy
+func SetProxyInterceptor(fn func(*Request)) {
+	proxyInterceptor = fn
+}
+
+// SetGSNBarrierChecker configura checker de barreira GSN
+func SetGSNBarrierChecker(fn func(uint64) bool) {
+	gsnBarrierChecker = fn
+}
+
+// SetGSNGenerator configura gerador de GSN (injected by orderer)
+func SetGSNGenerator(fn func() uint64) {
+	gsnGenerator = fn
+}
+
+// SetGroupMembersGetter configura getter de membros de grupo (injected by orderer)
+func SetGroupMembersGetter(fn func(uint32) []int32) {
+	groupMembersGetter = fn
+}
+
+// SetMETAPublisher configura publisher de META (injected by orderer)
+func SetMETAPublisher(fn func(uint64, []uint32)) {
+	metaPublisher = fn
+}
+
+// ✅ LIVENESS: SetRequestReceivedMarker configura callback para marcar requests recebidas
+func SetRequestReceivedMarker(fn func(uint64, uint32)) {
+	requestReceivedMarker = fn
+}
+
+// ✅ LIVENESS: SetRequestCacher configura callback para cache de requests
+func SetRequestCacher(fn func(uint64, *pb.ClientRequest)) {
+	requestCacher = fn
+}
+
+// ReplicaMapper - Mapeia payload para grupos tocados (paper-like)
+// Implementa lógica automática do proxy para decidir TouchedGroups
+func ReplicaMapper(payload []byte) []uint32 {
+	// ✅ REPLICA MAPPER: Lógica automática conforme artigo
+	payloadStr := string(payload)
+	
+	// Requests sistêmicas sempre vão para grupo 0
+	if strings.HasPrefix(payloadStr, "SYSTEM:") {
+		return []uint32{0}
+	}
+	
+	// Exemplo de mapeamento baseado em payload
+	// TODO: Implementar lógica específica da aplicação
+	if strings.Contains(payloadStr, "CROSS") {
+		// Operação cross-group: toca grupos 1 e 2
+		return []uint32{1, 2}
+	}
+	
+	if strings.Contains(payloadStr, "GROUP1") {
+		return []uint32{1}
+	}
+	
+	if strings.Contains(payloadStr, "GROUP2") {
+		return []uint32{2}
+	}
+	
+	// Hash-based mapping como fallback
+	hash := crypto.Hash(payload)
+	groupCount := uint32(3) // Assumindo grupos 0, 1, 2
+	if groupCount <= 1 {
+		return []uint32{0}
+	}
+	
+	// Mapeia para grupo 1 ou 2 baseado no hash
+	groupID := uint32(hash[0])%(groupCount-1) + 1
+	return []uint32{groupID}
+}
+
+// GetGroupMembersGetter retorna getter de membros (para watchdog)
+func GetGroupMembersGetter() func(uint32) []int32 {
+	return groupMembersGetter
 }
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
-	// CSMR: Validação crítica de TouchedGroups para atomic global order
-	// Operações multi-grupo SEM TouchedGroups violam linearizability (Figura 2 CSMR)
-	// CORREÇÃO: aceita len==1 (single-group válido), só rejeita len==0 com GroupId==0
-	if reqMsg.GetGroupId() == 0 && len(reqMsg.TouchedGroups) == 0 {
+	if len(reqMsg.TouchedGroups) == 0 {
 		logger.Fatal().
 			Int32("clId", reqMsg.RequestId.ClientId).
 			Int32("clSn", reqMsg.RequestId.ClientSn).
-			Msg("[CSMR] FATAL: GroupId=0 but TouchedGroups not set. Multi-group ops MUST set TouchedGroups!")
+			Uint32("groupId", reqMsg.GroupId).
+			Msg("[CSMR] FATAL: TouchedGroups not set!")
 	}
 	
-	return Add(&Request{
+	// ✅ LIVENESS: Marca request como recebida se tem GSN
+	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
+		requestReceivedMarker(reqMsg.GSN, reqMsg.GroupId)
+	}
+	
+	opID := GenerateOpID(reqMsg)
+	
+	req := &Request{
 		Msg:      reqMsg,
 		Digest:   Digest(reqMsg),
 		Buffer:   getBuffer(reqMsg.RequestId.ClientId),
@@ -189,7 +302,26 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		InFlight: false,
 		Next:     nil,
 		Prev:     nil,
-	})
+		OpID:     opID,
+		GSN:      reqMsg.GSN,
+	}
+	
+	if proxyInterceptor != nil {
+		proxyInterceptor(req)
+	}
+	
+	return Add(req)
+}
+
+// GenerateOpID cria identificador determinístico para operação
+func GenerateOpID(req *pb.ClientRequest) string {
+	buffer := make([]byte, 0, 8+len(req.Payload))
+	// ClientID (4 bytes) + ClientSn (4 bytes)
+	id := RequestIDToBytes(req)
+	buffer = append(buffer, id...)
+	buffer = append(buffer, req.Payload...)
+	hash := crypto.Hash(buffer)
+	return fmt.Sprintf("%x", hash[:16]) // 16 bytes = 32 hex chars
 }
 
 // Adds a request received as a protobuf message to the appropriate buffer and bucket.
@@ -315,41 +447,20 @@ func getBucket(req *pb.ClientRequest) *Bucket {
 }
 
 func GetBucketNr(req *pb.ClientRequest) int {
-	// ATOMIC GLOBAL ORDER (artigo CSMR):
-	// Requests multi-grupo (len(TouchedGroups) > 1) precisam de coordenação global
-	// para garantir linearizability (ex: range query em 2 partições).
-	// Solução: rotear para GROUP_GLOBAL (bucket 0) = broadcast total order.
-	// Limitação: perde paralelismo (todos nós processam), mas garante atomicidade.
-	// Alternativa completa: implementar barreiras/coordenação entre grupos.
-	if len(req.TouchedGroups) > 1 {
-		logger.Debug().
-			Int32("clId", req.RequestId.ClientId).
-			Int32("clSn", req.RequestId.ClientSn).
-			Int("numGroups", len(req.TouchedGroups)).
-			Msg("Multi-group request routed to GROUP_GLOBAL for atomic order")
-		return 0 // Multi-grupo → bucket 0 (GROUP_GLOBAL)
-	}
+	// ATOMIC MULTICAST: cada grupo tem seu bucket (não usa bucket 0 global)
 	if len(req.TouchedGroups) == 1 {
 		groupId := int(req.TouchedGroups[0])
-		// GroupId deve estar no range válido de buckets
 		if groupId >= 0 && groupId < len(Buckets) {
 			return groupId
 		}
-		// Se fora do range, usa grupo 0 (global)
 		return 0
 	}
 	
-	// Usa GroupId se especificado
+	// Cross-op: usa GroupId do clone (cada clone vai para bucket do seu grupo)
 	groupId := int(req.GetGroupId())
-	if groupId > 0 {
-		if groupId < len(Buckets) {
-			return groupId
-		}
-		// Se fora do range, usa grupo 0 (global)
-		return 0
+	if groupId > 0 && groupId < len(Buckets) {
+		return groupId
 	}
-	
-	// Fallback: hash-based
 	return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(len(Buckets)))
 }
 
