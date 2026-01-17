@@ -17,9 +17,9 @@ package request
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"sync"
 
-	"google.golang.org/protobuf/proto"
 	logger "github.com/rs/zerolog/log"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/crypto"
