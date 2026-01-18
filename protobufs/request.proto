@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "./;protobufs";
+option go_package = "github.com/hyperledger-labs/mirbft/protobufs;protobufs";
 
 package protobufs;
 
@@ -9,6 +9,9 @@ message ClientRequest {
     bytes payload = 2;
     bytes pubkey = 3;
     bytes signature = 4;
+    uint32 group_id = 5;
+    repeated uint32 touched_groups = 6;
+    uint64 GSN = 7;
 }
 
 message ClientResponse {

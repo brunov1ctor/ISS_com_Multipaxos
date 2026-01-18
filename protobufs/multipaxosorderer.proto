@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+option go_package = "github.com/hyperledger-labs/mirbft/protobufs;protobufs";
+
+package protobufs;
+
+message MPxInstanceId {
+  int32  sn   = 1;
+  uint64 lead = 2;
+}
+
+message MPxValue {
+  MPxInstanceId id    = 1;
+  bytes         batch = 2;
+}
+
+message MPxPrepare {
+  MPxInstanceId id       = 1;
+  uint64        ballot   = 2;
+  uint32        group_id = 3;
+}
+
+message MPxPromise {
+  MPxInstanceId id       = 1;
+  uint64        ballot   = 2;
+  bool          ok       = 3;
+  MPxValue      value    = 4;
+  uint32        group_id = 5;
+  repeated uint32 members = 6;
+}
+
+message MPxAccept {
+  MPxInstanceId id     = 1;
+  uint64        ballot = 2;
+  MPxValue      value  = 3;
+  uint32        group_id = 4;
+}
+
+message MPxAccepted {
+  MPxInstanceId id     = 1;
+  uint64        ballot = 2;
+  bool          ok     = 3;
+  uint32        group_id = 4;
+}
+
+message MPxCommit {
+  MPxInstanceId id     = 1;
+  MPxValue      value  = 2;
+  uint32        group_id = 3;
+}
+
+message MPxMsg {
+  oneof type {
+    MPxPrepare  prepare  = 1;
+    MPxPromise  promise  = 2;
+    MPxAccept   accept   = 3;
+    MPxAccepted accepted = 4;
+    MPxCommit   commit   = 5;
+  }
+}
+
