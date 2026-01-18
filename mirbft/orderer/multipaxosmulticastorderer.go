@@ -33,6 +33,7 @@ Garantias do Sistema:
 package orderer
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -155,7 +156,7 @@ func (o *MultiPaxosMulticastOrderer) initComponents() {
 // loadGroups - Carrega configuração de grupos do arquivo YAML
 func (o *MultiPaxosMulticastOrderer) loadGroups() {
 	if o.groupsFilePath == "" {
-		o.groupsFilePath = "config/groups.yml"
+		o.groupsFilePath = "/tmp/iss-Bruno/config/groups.yml"
 	}
 	if err := o.am.LoadGroupsFromYAML(o.groupsFilePath); err != nil {
 		panic(fmt.Sprintf("FATAL: Failed to load groups from %s: %v", o.groupsFilePath, err))
