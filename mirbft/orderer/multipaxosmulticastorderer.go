@@ -33,7 +33,6 @@ Garantias do Sistema:
 package orderer
 import (
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
