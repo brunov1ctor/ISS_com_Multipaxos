@@ -807,8 +807,12 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 // PreprocessRequest - Preprocessa request para atomic multicast
 // Retorna true se já processou (não precisa processamento padrão)
 func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bool {
-	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v\n", 
-		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, req.TouchedGroups)
+	payloadPreview := req.Payload
+	if len(payloadPreview) > 50 {
+		payloadPreview = payloadPreview[:50]
+	}
+	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v payload=%s\n", 
+		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
 	// ✅ Mensagens sistêmicas (GSN_REQUEST, META_STREAM) vão direto para grupo 0
 	if isSystemMessage(req) {
@@ -816,14 +820,16 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return false // Deixa processar normalmente
 	}
 	
-	// ✅ Se já tem TouchedGroups, já foi preprocessado
-	if len(req.TouchedGroups) > 0 {
-		fmt.Printf("[PREPROCESS] Already processed, skipping\n")
+	// ✅ Se já tem TouchedGroups E GroupId, já foi preprocessado (clone de cross-op)
+	if len(req.TouchedGroups) > 0 && req.GroupId > 0 {
+		fmt.Printf("[PREPROCESS] Already processed (clone), skipping\n")
 		return false
 	}
 	
 	// ✅ Mapeia requisição para grupos usando ReplicaMapper
+	fmt.Printf("[PREPROCESS] Calling ReplicaMapper...\n")
 	req.TouchedGroups = request.ReplicaMapper(req.Payload)
+	fmt.Printf("[PREPROCESS] ReplicaMapper returned groups=%v\n", req.TouchedGroups)
 	
 	// ✅ VALIDAÇÃO: Remove grupo 0 se ReplicaMapper retornou (não deve acontecer)
 	for i := 0; i < len(req.TouchedGroups); i++ {
@@ -841,7 +847,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	}
 	
 	// ✅ Obtém GSN e publica META
+	fmt.Printf("[PREPROCESS] Getting GSN...\n")
 	req.GSN = o.GetNextGSN()
+	fmt.Printf("[PREPROCESS] Got GSN=%d, publishing META...\n", req.GSN)
 	o.PublishGSNMetadata(req.GSN, req.TouchedGroups)
 	
 	fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, req.GSN)
