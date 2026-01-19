@@ -338,12 +338,28 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	}
 	
 	fmt.Printf("[GSN-REQ] Requesting GSN reqID=%d from group 0 (clientId=%d, clientSn=%d)\n", reqID, membership.OwnID, clientSn)
-	request.AddReqMsg(gsnReq)
+	
+	// ✅ CRITICAL FIX: Broadcast GSN request to ALL nodes in group 0
+	// System requests must bypass bucket assignment and reach all sequencer nodes
+	group0Members := o.GetGroupMembers(0)
+	if group0Members != nil && len(group0Members) > 0 {
+		fmt.Printf("[GSN-REQ] Broadcasting to %d group 0 members: %v\n", len(group0Members), group0Members)
+		if o.forwardRequestFn != nil {
+			o.forwardRequestFn(gsnReq, group0Members)
+		} else {
+			// Fallback: add locally only
+			request.AddReqMsg(gsnReq)
+		}
+	} else {
+		// Fallback: add locally
+		request.AddReqMsg(gsnReq)
+	}
+	
 	payloadPreview := gsnReq.Payload
 	if len(payloadPreview) > 50 {
 		payloadPreview = payloadPreview[:50]
 	}
-	fmt.Printf("[GSN-REQ] GSN request added to queue: reqID=%d, groupId=%d, payload=%s\n", reqID, gsnReq.GroupId, string(payloadPreview))
+	fmt.Printf("[GSN-REQ] GSN request broadcasted: reqID=%d, groupId=%d, payload=%s\n", reqID, gsnReq.GroupId, string(payloadPreview))
 	
 	// ✅ TIMEOUT: Evita deadlock infinito
 	select {
@@ -636,7 +652,19 @@ func (o *MultiPaxosMulticastOrderer) PublishGSNMetadata(gsn uint64, touchedGroup
 	}
 	
 	fmt.Printf("[META-STREAM] Publishing GSN %d -> groups %v to group 0 (proxy %d, guaranteed non-empty)\n", gsn, touchedGroups, membership.OwnID)
-	request.AddReqMsg(metaReq)
+	
+	// ✅ CRITICAL FIX: Broadcast META to ALL nodes in group 0
+	group0Members := o.GetGroupMembers(0)
+	if group0Members != nil && len(group0Members) > 0 {
+		fmt.Printf("[META-STREAM] Broadcasting to %d group 0 members: %v\n", len(group0Members), group0Members)
+		if o.forwardRequestFn != nil {
+			o.forwardRequestFn(metaReq, group0Members)
+		} else {
+			request.AddReqMsg(metaReq)
+		}
+	} else {
+		request.AddReqMsg(metaReq)
+	}
 }
 
 // Mcast - API black-box para multicast atômico
@@ -815,14 +843,21 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
 	// ✅ Mensagens sistêmicas (GSN_REQUEST, META_STREAM) vão direto para grupo 0
+	// NÃO preprocessa - já estão prontas
 	if isSystemMessage(req) {
-		fmt.Printf("[PREPROCESS] System message, allowing group 0\n")
+		fmt.Printf("[PREPROCESS] System message, skipping preprocessing\n")
 		return false // Deixa processar normalmente
 	}
 	
-	// ✅ Se já tem TouchedGroups E GroupId, já foi preprocessado (clone de cross-op)
+	// ✅ Se já tem TouchedGroups E GroupId, já foi preprocessado (clone de cross-op ou forwarded)
 	if len(req.TouchedGroups) > 0 && req.GroupId > 0 {
-		fmt.Printf("[PREPROCESS] Already processed (clone), skipping\n")
+		fmt.Printf("[PREPROCESS] Already processed (has TouchedGroups and GroupId), skipping\n")
+		return false
+	}
+	
+	// ✅ Se já tem GSN, foi forwarded de outro nó - não preprocessa de novo
+	if req.GSN > 0 {
+		fmt.Printf("[PREPROCESS] Already has GSN=%d (forwarded), skipping\n", req.GSN)
 		return false
 	}
 	
