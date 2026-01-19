@@ -806,21 +806,29 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 // PreprocessRequest - Preprocessa request para atomic multicast
 // Retorna true se já processou (não precisa processamento padrão)
 func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bool {
+	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d touchedGroups=%v\n", 
+		req.RequestId.ClientId, req.RequestId.ClientSn, req.TouchedGroups)
+	
 	if len(req.TouchedGroups) > 0 {
-		return false // Já processado
+		fmt.Printf("[PREPROCESS] Already processed, skipping\n")
+		return false
 	}
 	
 	req.TouchedGroups = request.ReplicaMapper(req.Payload)
 	req.GSN = o.GetNextGSN()
 	o.PublishGSNMetadata(req.GSN, req.TouchedGroups)
 	
+	fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, req.GSN)
+	
 	if len(req.TouchedGroups) == 1 {
 		req.GroupId = req.TouchedGroups[0]
+		fmt.Printf("[PREPROCESS] Single-group: adding to bucket=%d\n", req.GroupId)
 		request.AddReqMsg(req)
 		return true
 	}
 	
 	// Cross-op: clona para cada grupo
+	fmt.Printf("[PREPROCESS] Cross-op: cloning for %d groups\n", len(req.TouchedGroups))
 	for _, groupID := range req.TouchedGroups {
 		clone := &pb.ClientRequest{
 			RequestId:     req.RequestId,
