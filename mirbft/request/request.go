@@ -459,20 +459,15 @@ func getBucket(req *pb.ClientRequest) *Bucket {
 }
 
 func GetBucketNr(req *pb.ClientRequest) int {
-	// ATOMIC MULTICAST: cada grupo tem seu bucket (não usa bucket 0 global)
-	if len(req.TouchedGroups) == 1 {
-		groupId := int(req.TouchedGroups[0])
-		if groupId >= 0 && groupId < len(Buckets) {
+	// ATOMIC MULTICAST: usa GroupId diretamente como bucket
+	if req.GetGroupId() > 0 {
+		groupId := int(req.GetGroupId())
+		if groupId < len(Buckets) {
 			return groupId
 		}
-		return 0
 	}
 	
-	// Cross-op: usa GroupId do clone (cada clone vai para bucket do seu grupo)
-	groupId := int(req.GetGroupId())
-	if groupId > 0 && groupId < len(Buckets) {
-		return groupId
-	}
+	// Fallback: hash-based
 	return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(len(Buckets)))
 }
 
