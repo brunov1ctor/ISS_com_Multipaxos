@@ -816,7 +816,8 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	
 	if len(req.TouchedGroups) == 1 {
 		req.GroupId = req.TouchedGroups[0]
-		return false // Processa normalmente
+		request.AddReqMsg(req)
+		return true
 	}
 	
 	// Cross-op: clona para cada grupo
@@ -832,5 +833,5 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		}
 		request.AddReqMsg(clone)
 	}
-	return true // Já processou
+	return true
 }
