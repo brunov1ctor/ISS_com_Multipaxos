@@ -241,13 +241,7 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		Signature: nil,
 	}
 
-	// ATOMIC MULTICAST: Define TouchedGroups
-	groupId := uint32((c.ownClientID + seqNr) % int32(config.Config.NumBuckets))
-	if groupId == 0 {
-		groupId = 1
-	}
-	req.GroupId = groupId
-	req.TouchedGroups = []uint32{groupId} // Single-group por padrão
+	// TouchedGroups será definido pelo servidor (PreprocessRequest)
 	
 	var err error
 	if config.Config.SignRequests {
