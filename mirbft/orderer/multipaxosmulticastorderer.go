@@ -194,6 +194,7 @@ func (o *MultiPaxosMulticastOrderer) setupHandlers() {
 	request.SetMETAPublisher(o.PublishGSNMetadata)
 	request.SetRequestReceivedMarker(o.MarkRequestReceived)
 	request.SetRequestCacher(o.CacheRequest)
+	request.SetRequestPreprocessor(o.PreprocessRequest)
 	
 	logger.Info().Msg("[MULTICAST] Registered GSN/atomic multicast callbacks")
 	
@@ -800,4 +801,39 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 	if orderer != nil {
 		orderer.HandleEntry(entry)
 	}
+}
+
+// PreprocessRequest - Preprocessa request para atomic multicast
+// Retorna true se já processou (não precisa processamento padrão)
+func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bool {
+	if len(req.TouchedGroups) > 0 {
+		return false // Já processado
+	}
+	
+	req.TouchedGroups = request.ReplicaMapper(req.Payload)
+	req.GSN = o.GetNextGSN()
+	
+	if o.metaPublisher != nil {
+		o.PublishGSNMetadata(req.GSN, req.TouchedGroups)
+	}
+	
+	if len(req.TouchedGroups) == 1 {
+		req.GroupId = req.TouchedGroups[0]
+		return false // Processa normalmente
+	}
+	
+	// Cross-op: clona para cada grupo
+	for _, groupID := range req.TouchedGroups {
+		clone := &pb.ClientRequest{
+			RequestId:     req.RequestId,
+			Payload:       req.Payload,
+			Signature:     req.Signature,
+			Pubkey:        req.Pubkey,
+			GroupId:       groupID,
+			TouchedGroups: req.TouchedGroups,
+			GSN:           req.GSN,
+		}
+		request.AddReqMsg(clone)
+	}
+	return true // Já processou
 }

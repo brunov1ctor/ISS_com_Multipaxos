@@ -79,6 +79,9 @@ var (
 	
 	// ✅ LIVENESS: Callback para cache de requests
 	requestCacher func(uint64, *pb.ClientRequest)
+	
+	// Preprocessor customizado (ex: atomic multicast)
+	requestPreprocessor func(*pb.ClientRequest) bool
 )
 
 type watermarkRange struct {
@@ -233,10 +236,14 @@ func SetRequestCacher(fn func(uint64, *pb.ClientRequest)) {
 	requestCacher = fn
 }
 
+// SetRequestPreprocessor configura preprocessor customizado
+func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
+	requestPreprocessor = fn
+}
+
 // ReplicaMapper - Mapeia payload para grupos tocados (paper-like)
 // Implementa lógica automática do proxy para decidir TouchedGroups
 func ReplicaMapper(payload []byte) []uint32 {
-	// ✅ REPLICA MAPPER: Lógica automática conforme artigo
 	payloadStr := string(payload)
 	
 	// Requests sistêmicas sempre vão para grupo 0
@@ -244,30 +251,16 @@ func ReplicaMapper(payload []byte) []uint32 {
 		return []uint32{0}
 	}
 	
-	// Exemplo de mapeamento baseado em payload
-	// TODO: Implementar lógica específica da aplicação
-	if strings.Contains(payloadStr, "CROSS") {
-		// Operação cross-group: toca grupos 1 e 2
-		return []uint32{1, 2}
-	}
+	// ❌ PROBLEMA: Grupos 1,2,3,4 existem, mas lógica usa strings específicas
+	// Clientes normais não enviam "CROSS", "GROUP1", etc.
+	// Resultado: cai no hash-based que pode retornar grupo inexistente
 	
-	if strings.Contains(payloadStr, "GROUP1") {
-		return []uint32{1}
-	}
-	
-	if strings.Contains(payloadStr, "GROUP2") {
-		return []uint32{2}
-	}
-	
-	// Hash-based mapping como fallback
+	// Hash-based mapping para grupos de dados (1-4)
 	hash := crypto.Hash(payload)
-	groupCount := uint32(3) // Assumindo grupos 0, 1, 2
-	if groupCount <= 1 {
-		return []uint32{0}
-	}
+	groupCount := uint32(4) // Grupos 1, 2, 3, 4 (não conta grupo 0)
+	groupID := uint32(hash[0])%groupCount + 1 // Retorna 1, 2, 3 ou 4
 	
-	// Mapeia para grupo 1 ou 2 baseado no hash
-	groupID := uint32(hash[0])%(groupCount-1) + 1
+	fmt.Printf("[REPLICA-MAPPER] Mapped payload to group %d (hash-based)\n", groupID)
 	return []uint32{groupID}
 }
 
