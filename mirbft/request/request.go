@@ -271,13 +271,7 @@ func GetGroupMembersGetter() func(uint32) []int32 {
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
-	if len(reqMsg.TouchedGroups) == 0 {
-		logger.Fatal().
-			Int32("clId", reqMsg.RequestId.ClientId).
-			Int32("clSn", reqMsg.RequestId.ClientSn).
-			Uint32("groupId", reqMsg.GroupId).
-			Msg("[CSMR] FATAL: TouchedGroups not set!")
-	}
+	// TouchedGroups pode estar vazio (será preenchido pelo PreprocessRequest)
 	
 	// ✅ DEBUG: Log quando request é adicionada
 	payloadPreview := reqMsg.Payload
