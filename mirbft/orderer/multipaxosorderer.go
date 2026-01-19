@@ -377,7 +377,13 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
 		fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
 		if groupLeader != membership.OwnID {
+			if groupId == 0 {
+				fmt.Printf("[MPX][LEADER][INFO] Group 0: This node is NOT the leader, will not propose GSN requests\n")
+			}
 			continue
+		}
+		if groupId == 0 {
+			fmt.Printf("[MPX][LEADER][CRITICAL] Group 0: This node IS the leader, will propose GSN requests!\n")
 		}
 		var groupIdx int32 = -1
 		for idx, gid := range allGroupIDs {

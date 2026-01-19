@@ -286,12 +286,25 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 			Msg("[CSMR] FATAL: TouchedGroups not set!")
 	}
 	
+	// ✅ DEBUG: Log quando request é adicionada
+	payloadPreview := reqMsg.Payload
+	if len(payloadPreview) > 50 {
+		payloadPreview = payloadPreview[:50]
+	}
+	isSystem := strings.HasPrefix(string(reqMsg.Payload), "SYSTEM:")
+	fmt.Printf("[ADD-REQ] clientId=%d clientSn=%d groupId=%d gsn=%d touchedGroups=%v isSystem=%v payload=%s\n",
+		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
+	
 	// ✅ LIVENESS: Marca request como recebida se tem GSN
 	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
 		requestReceivedMarker(reqMsg.GSN, reqMsg.GroupId)
 	}
 	
 	opID := GenerateOpID(reqMsg)
+	
+	// ✅ DEBUG: Log bucket assignment
+	bucketNr := GetBucketNr(reqMsg)
+	fmt.Printf("[ADD-REQ] Assigning to bucket=%d (groupId=%d)\n", bucketNr, reqMsg.GroupId)
 	
 	req := &Request{
 		Msg:      reqMsg,
@@ -310,7 +323,13 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		proxyInterceptor(req)
 	}
 	
-	return Add(req)
+	addedReq := Add(req)
+	if addedReq != nil {
+		fmt.Printf("[ADD-REQ] Successfully added to bucket=%d\n", bucketNr)
+	} else {
+		fmt.Printf("[ADD-REQ][WARN] Failed to add to bucket=%d\n", bucketNr)
+	}
+	return addedReq
 }
 
 // GenerateOpID cria identificador determinístico para operação
