@@ -58,119 +58,18 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 
 // TODO: It's inefficient to hash a request every time it is needed to get the request ID
 
-// HandleRequest processa request do cliente e implementa atomic multicast:
-// - Qualquer nó pode atuar como proxy (não há gargalo de proxy único)
-// - GSN sequencer (grupo 0) garante ordem global determinística
-// - META publicado apenas uma vez por proxy para evitar duplicação
+// HandleRequest processa request do cliente
+// Orderers específicos (como MultipaxosMulticast) podem injetar lógica customizada via callbacks
 func HandleRequest(req *pb.ClientRequest) {
-
-	if len(req.TouchedGroups) == 0 {
-		// ✅ REPLICA MAPPER: Proxy decide TouchedGroups automaticamente
-		req.TouchedGroups = ReplicaMapper(req.Payload)
-		logger.Info().
-			Interface("touchedGroups", req.TouchedGroups).
-			Str("payload", string(req.Payload)[:min(50, len(req.Payload))]).
-			Msg("[REPLICA-MAPPER] Proxy mapped payload to groups")
-	} else {
-		// TouchedGroups já definido - valida consistência
-		mappedGroups := ReplicaMapper(req.Payload)
-		if !equalGroups(req.TouchedGroups, mappedGroups) {
-			logger.Warn().
-				Interface("provided", req.TouchedGroups).
-				Interface("mapped", mappedGroups).
-				Msg("[REPLICA-MAPPER] TouchedGroups mismatch - using provided")
-		}
-	}
-	
-	// ✅ NORMALIZAÇÃO: Sempre normaliza TouchedGroups (ordena e remove duplicatas)
-	req.TouchedGroups = normalizeGroups(req.TouchedGroups)
 	
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
 	
-	// TODAS as requests precisam de GSN (conforme artigo)
-	if req.GSN == 0 {
-		// GSN não atribuído: qualquer nó pode atuar como proxy
-		// Obtém GSN via sequenciador global (grupo 0)
-		if gsnGenerator == nil {
-			logger.Error().
-				Int32("clientID", req.RequestId.ClientId).
-				Int32("clientSn", req.RequestId.ClientSn).
-				Msg("[ATOMIC-MCAST] GSN generator not set - skipping request")
-			return
-		}
-		req.GSN = gsnGenerator()
-		
-		// ✅ CORREÇÃO: Publica META apenas UMA vez por proxy (evita duplicação)
-		if metaPublisher != nil {
-			metaPublisher(req.GSN, req.TouchedGroups)
-			logger.Info().
-				Uint64("gsn", req.GSN).
-				Interface("touchedGroups", req.TouchedGroups).
-				Int32("proxyNode", membership.OwnID).
-				Msg("[MULTI-PROXY] Published META once (no duplication)")
-		}
-		
-		// ✅ LIVENESS: Cache request para re-forward
-		if requestCacher != nil {
-			requestCacher(req.GSN, req)
-		}
-		
-		opID := GenerateOpID(req)
-		logger.Info().
-			Int32("clientID", req.RequestId.ClientId).
-			Int32("clientSn", req.RequestId.ClientSn).
-			Str("opID", opID).
-			Uint64("gsn", req.GSN).
-			Int32("proxyNode", membership.OwnID).
-			Int("numGroups", len(req.TouchedGroups)).
-			Msg("[MULTI-PROXY] Node acting as proxy, assigned GSN")
+	// Processa request diretamente (PBFT, ISS, etc)
+	if config.Config.RequestHandlerThreads > 0 {
+		idx := handlerThreadIndex(req.RequestId.ClientId, config.Config.RequestHandlerThreads)
+		requestInputChannels[idx] <- req
 	} else {
-		// GSN já atribuído (forwarded): apenas enfileirar localmente
-		logger.Info().
-			Int32("clientID", req.RequestId.ClientId).
-			Uint64("gsn", req.GSN).
-			Uint32("groupId", req.GroupId).
-			Msg("[ATOMIC-MCAST] Request received with GSN, enqueuing locally")
-		
-		if config.Config.RequestHandlerThreads > 0 {
-			idx := handlerThreadIndex(req.RequestId.ClientId, config.Config.RequestHandlerThreads)
-			requestInputChannels[idx] <- req
-		} else {
-			AddReqMsg(req)
-		}
-		return
-	}
-	
-	gsn := req.GSN
-	
-	// Fanout para todos os grupos tocados (single ou multi-group)
-	for _, groupID := range req.TouchedGroups {
-		clone := &pb.ClientRequest{
-			RequestId:     req.RequestId,
-			Payload:       req.Payload,
-			Signature:     req.Signature,
-			Pubkey:        req.Pubkey,
-			GroupId:       groupID,
-			TouchedGroups: req.TouchedGroups,
-			GSN:           gsn,
-		}
-		
-		logger.Info().
-			Int32("clientID", clone.RequestId.ClientId).
-			Int32("clientSn", clone.RequestId.ClientSn).
-			Uint32("groupId", groupID).
-			Uint64("gsn", gsn).
-			Msg("[ATOMIC-MCAST] Forwarding to group members (global order)")
-		
-		// Forward para todos os membros do grupo via callback
-		if groupMembersGetter != nil {
-			members := groupMembersGetter(groupID)
-			if members != nil && len(members) > 0 {
-				ForwardRequestToNodes(clone, members)
-			}
-		} else {
-			panic("[ATOMIC-MCAST] Group members getter not set (orderer must inject it)")
-		}
+		AddReqMsg(req)
 	}
 }
 
