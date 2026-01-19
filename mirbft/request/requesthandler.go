@@ -55,54 +55,16 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 	}
 }
 
-// TODO: It's inefficient to hash a request every time it is needed to get the request ID
-
 // HandleRequest processa request do cliente
-// Orderers específicos (como MultipaxosMulticast) podem injetar lógica customizada via callbacks
+// Orderers específicos podem injetar lógica customizada via callbacks
 func HandleRequest(req *pb.ClientRequest) {
-	
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
 	
-	// ✅ ATOMIC MULTICAST: Se gsnGenerator está disponível, atribui GSN
-	if gsnGenerator != nil && len(req.TouchedGroups) == 0 {
-		// Determina grupos tocados via ReplicaMapper
-		req.TouchedGroups = ReplicaMapper(req.Payload)
-		
-		// Obtém GSN via grupo 0 (sequenciador global)
-		req.GSN = gsnGenerator()
-		
-		// Publica META uma vez via grupo 0
-		if metaPublisher != nil {
-			metaPublisher(req.GSN, req.TouchedGroups)
-		}
-		
-		// Determina GroupId para roteamento ao bucket correto
-		if len(req.TouchedGroups) == 1 {
-			req.GroupId = req.TouchedGroups[0]
-		} else if len(req.TouchedGroups) > 1 {
-			// Cross-op: cria clones para cada grupo
-			for _, groupID := range req.TouchedGroups {
-				clone := &pb.ClientRequest{
-					RequestId:     req.RequestId,
-					Payload:       req.Payload,
-					Signature:     req.Signature,
-					Pubkey:        req.Pubkey,
-					GroupId:       groupID,
-					TouchedGroups: req.TouchedGroups,
-					GSN:           req.GSN,
-				}
-				if config.Config.RequestHandlerThreads > 0 {
-					idx := handlerThreadIndex(clone.RequestId.ClientId, config.Config.RequestHandlerThreads)
-					requestInputChannels[idx] <- clone
-				} else {
-					AddReqMsg(clone)
-				}
-			}
-			return
-		}
+	// Preprocessor customizado (ex: atomic multicast)
+	if requestPreprocessor != nil && requestPreprocessor(req) {
+		return // Preprocessor já processou
 	}
 	
-	// Processa request diretamente (PBFT, ISS, ou single-group)
 	if config.Config.RequestHandlerThreads > 0 {
 		idx := handlerThreadIndex(req.RequestId.ClientId, config.Config.RequestHandlerThreads)
 		requestInputChannels[idx] <- req

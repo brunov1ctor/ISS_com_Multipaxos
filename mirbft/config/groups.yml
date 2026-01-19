@@ -13,7 +13,7 @@
 #   Node 3: groups [2, 4]     - participates in 2 groups
 #   Node 4: groups [3, 4]     - participates in 2 groups
 
-groups:
+groups:             # O código cria o grupo 0 automaticamente
   1: [0, 1, 2]      # Group 1 (3 nodes) - fault tolerant
   2: [2, 3, 4]      # Group 2 (3 nodes) - fault tolerant  
   3: [0, 4, 1]      # Group 3 (3 nodes) - fault tolerant
