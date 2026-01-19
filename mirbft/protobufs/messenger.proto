@@ -49,6 +49,7 @@ message ProtocolMessage {
         MissingEntry missing_entry = 26;
         PbftCatchUp pbft_catchup = 27;
         HotStuffNewView hotstuff_newview = 28;
+        GSNReqForward gsn_req_forward = 29;
         MPxMsg multipaxos= 30;
     }
 }
@@ -59,6 +60,10 @@ message ProtocolMessageBatch {
 
 message BandwidthTest {
     bytes payload = 1;
+}
+
+message GSNReqForward {
+  ClientRequest req = 1;
 }
 
 message BandwidthTestAck {
