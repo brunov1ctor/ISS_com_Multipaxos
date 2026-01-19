@@ -187,6 +187,16 @@ func (o *MultiPaxosMulticastOrderer) createGroupOrderers(mngr manager.Manager) {
 // setupHandlers - Configura handlers de mensagens e goroutines de monitoramento
 func (o *MultiPaxosMulticastOrderer) setupHandlers() {
 	messenger.OrdererMsgHandler = o.HandleMessage
+	
+	// Registra callbacks do request package para GSN/atomic multicast
+	request.SetGSNGenerator(o.GetNextGSN)
+	request.SetGroupMembersGetter(o.GetGroupMembers)
+	request.SetMETAPublisher(o.PublishGSNMetadata)
+	request.SetRequestReceivedMarker(o.MarkRequestReceived)
+	request.SetRequestCacher(o.CacheRequest)
+	
+	logger.Info().Msg("[MULTICAST] Registered GSN/atomic multicast callbacks")
+	
 	go o.trackSegments()    // Monitora novos segmentos
 	go o.trackCheckpoints() // Monitora checkpoints para limpeza
 	go o.reforwardWatchdog() // ✅ LIVENESS: Monitora requests perdidas
