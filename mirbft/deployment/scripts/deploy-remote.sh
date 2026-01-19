@@ -294,7 +294,7 @@ log_i "fetch-results.sh OK. Log: $exp_data_dir/$local_result_fetching_log"
 
 log_i "Publicando (cópia) resultados em: ${published_root}"
 mkdir -p "${published_root}"
-rsync -rtz --delete \
+rsync -rtz \
   "${exp_data_dir}/experiment-output/" \
   "${published_root}/"
 log_i "Publicação OK: ${published_root}"

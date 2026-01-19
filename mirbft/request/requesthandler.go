@@ -91,11 +91,14 @@ func HandleRequest(req *pb.ClientRequest) {
 	if req.GSN == 0 {
 		// GSN não atribuído: qualquer nó pode atuar como proxy
 		// Obtém GSN via sequenciador global (grupo 0)
-		if gsnGenerator != nil {
-			req.GSN = gsnGenerator()
-		} else {
-			panic("[ATOMIC-MCAST] GSN generator not set")
+		if gsnGenerator == nil {
+			logger.Error().
+				Int32("clientID", req.RequestId.ClientId).
+				Int32("clientSn", req.RequestId.ClientSn).
+				Msg("[ATOMIC-MCAST] GSN generator not set - skipping request")
+			return
 		}
+		req.GSN = gsnGenerator()
 		
 		// ✅ CORREÇÃO: Publica META apenas UMA vez por proxy (evita duplicação)
 		if metaPublisher != nil {
