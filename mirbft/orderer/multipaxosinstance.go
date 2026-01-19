@@ -555,12 +555,21 @@ func (i *mpxInstance) ProposeIfDue() {
 		// Grupo 0 prioriza requests sistêmicas (GSN_REQUEST, META_STREAM)
 		var selectedReq *request.Request
 		if i.bucketId == 0 {
+			// ✅ DEBUG: Log estado do bucket antes de buscar
+			bucketLen := request.Buckets[i.bucketIndex].Len()
+			fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 bucketIndex=%d bucketLen=%d\n", i.sn, i.bucketIndex, bucketLen)
+			
 			// Grupo 0: busca primeiro request sistêmico
 			systemReq := request.Buckets[i.bucketIndex].FindSystemRequest()
 			if systemReq != nil {
 				selectedReq = systemReq
-				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 prioritizing system request\n", i.sn)
+				payloadPreview := systemReq.Msg.Payload
+				if len(payloadPreview) > 50 {
+					payloadPreview = payloadPreview[:50]
+				}
+				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 FOUND system request: %s\n", i.sn, string(payloadPreview))
 			} else {
+				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 NO system request found, trying GSN=%d\n", i.sn, expectedGSN)
 				// Se não há system, busca GSN exato esperado
 				selectedReq = request.Buckets[i.bucketIndex].FindRequestWithGSN(expectedGSN)
 			}
@@ -575,18 +584,18 @@ func (i *mpxInstance) ProposeIfDue() {
 			request.Buckets[i.bucketIndex].Unlock()
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 			if i.bucketId == 0 {
-				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 proposing system/expected request\n", i.sn)
+				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 SELECTED and REMOVED system/expected request from bucket\n", i.sn)
 			} else {
-				fmt.Printf("[GSN-EXACT] sn=%d group=%d proposing expected gsn=%d (no buffering)\n", 
+				fmt.Printf("[GSN-EXACT] sn=%d group=%d SELECTED and REMOVED expected gsn=%d from bucket\n", 
 					i.sn, i.bucketId, expectedGSN)
 			}
 		} else {
 			// Sem request adequado: propõe batch vazio
 			request.Buckets[i.bucketIndex].Unlock()
 			if i.bucketId == 0 {
-				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 no system requests, will propose empty\n", i.sn)
+				fmt.Printf("[SYSTEM-PRIORITY][WARN] sn=%d group=0 NO system requests found, bucket is empty or has no system requests\n", i.sn)
 			} else {
-				fmt.Printf("[GSN-EXACT] sn=%d group=%d no request with expected gsn=%d, will propose empty\n", 
+				fmt.Printf("[GSN-EXACT][WARN] sn=%d group=%d NO request with expected gsn=%d, will propose empty batch\n", 
 					i.sn, i.bucketId, expectedGSN)
 			}
 		}
