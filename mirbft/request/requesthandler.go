@@ -22,7 +22,6 @@ import (
 	"github.com/hyperledger-labs/mirbft/messenger"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/tracing"
-	logger "github.com/rs/zerolog/log"
 )
 
 // handlerThreadIndex normaliza índice do canal para evitar panic com ClientId negativo
