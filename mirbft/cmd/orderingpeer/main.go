@@ -154,6 +154,8 @@ func main() {
 		request.SetGroupMembersGetter(mcOrd.GetGroupMembers)
 		// ✅ CORREÇÃO: Configura META publisher para evitar duplicação
 		request.SetMETAPublisher(mcOrd.PublishMETAOnce)
+		// ✅ CRÍTICO: Registra PreprocessRequest para processar requisições de clientes
+		request.SetRequestPreprocessor(mcOrd.PreprocessRequest)
 	}
 
 	// Initialize modules.
