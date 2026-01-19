@@ -337,7 +337,11 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	
 	fmt.Printf("[GSN-REQ] Requesting GSN reqID=%d from group 0 (clientId=%d, clientSn=%d)\n", reqID, membership.OwnID, clientSn)
 	request.AddReqMsg(gsnReq)
-	fmt.Printf("[GSN-REQ] GSN request added to queue: reqID=%d, groupId=%d, payload=%s\n", reqID, gsnReq.GroupId, string(gsnReq.Payload[:min(len(gsnReq.Payload), 50)]))
+	payloadPreview := gsnReq.Payload
+	if len(payloadPreview) > 50 {
+		payloadPreview = payloadPreview[:50]
+	}
+	fmt.Printf("[GSN-REQ] GSN request added to queue: reqID=%d, groupId=%d, payload=%s\n", reqID, gsnReq.GroupId, string(payloadPreview))
 	
 	// ✅ TIMEOUT: Evita deadlock infinito
 	select {
