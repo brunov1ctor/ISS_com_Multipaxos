@@ -58,19 +58,27 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 // HandleRequest processa request do cliente
 // Orderers específicos podem injetar lógica customizada via callbacks
 func HandleRequest(req *pb.ClientRequest) {
+	fmt.Printf("[HANDLE-REQ] Received clientId=%d clientSn=%d groupId=%d\n", 
+		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId)
+	
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
 	
 	// Preprocessor customizado (ex: atomic multicast)
 	if requestPreprocessor != nil {
+		fmt.Printf("[HANDLE-REQ] Calling preprocessor...\n")
 		if requestPreprocessor(req) {
+			fmt.Printf("[HANDLE-REQ] Preprocessor handled request, returning\n")
 			return // Preprocessor já processou
 		}
+		fmt.Printf("[HANDLE-REQ] Preprocessor returned false, continuing normal flow\n")
 	}
 	
 	if config.Config.RequestHandlerThreads > 0 {
 		idx := handlerThreadIndex(req.RequestId.ClientId, config.Config.RequestHandlerThreads)
+		fmt.Printf("[HANDLE-REQ] Adding to input channel %d\n", idx)
 		requestInputChannels[idx] <- req
 	} else {
+		fmt.Printf("[HANDLE-REQ] Adding directly (no handler threads)\n")
 		AddReqMsg(req)
 	}
 }
