@@ -807,51 +807,54 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 // PreprocessRequest - Preprocessa request para atomic multicast
 // Retorna true se já processou (não precisa processamento padrão)
 func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bool {
-	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d touchedGroups=%v\n", 
-		req.RequestId.ClientId, req.RequestId.ClientSn, req.TouchedGroups)
+	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v\n", 
+		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, req.TouchedGroups)
 	
-	// ✅ CRÍTICO: Grupo 0 é apenas para GSN/META, não para requisições de clientes
-	if req.GroupId == 0 && !isSystemMessage(req) {
-		fmt.Printf("[PREPROCESS][ERROR] Client request cannot target group 0 (GSN/META only)\n")
-		return true // Bloqueia requisição inválida
+	// ✅ Mensagens sistêmicas (GSN_REQUEST, META_STREAM) vão direto para grupo 0
+	if isSystemMessage(req) {
+		fmt.Printf("[PREPROCESS] System message, allowing group 0\n")
+		return false // Deixa processar normalmente
 	}
 	
+	// ✅ Se já tem TouchedGroups, já foi preprocessado
 	if len(req.TouchedGroups) > 0 {
 		fmt.Printf("[PREPROCESS] Already processed, skipping\n")
 		return false
 	}
 	
+	// ✅ Mapeia requisição para grupos usando ReplicaMapper
 	req.TouchedGroups = request.ReplicaMapper(req.Payload)
 	
-	// ✅ VALIDAÇÃO: TouchedGroups não pode conter grupo 0 para requisições de clientes
-	for i, gid := range req.TouchedGroups {
-		if gid == 0 {
-			fmt.Printf("[PREPROCESS][WARN] Removing group 0 from TouchedGroups (GSN/META only)\n")
-			// Remove grupo 0 da lista
+	// ✅ VALIDAÇÃO: Remove grupo 0 se ReplicaMapper retornou (não deve acontecer)
+	for i := 0; i < len(req.TouchedGroups); i++ {
+		if req.TouchedGroups[i] == 0 {
+			fmt.Printf("[PREPROCESS][WARN] Removing group 0 from TouchedGroups\n")
 			req.TouchedGroups = append(req.TouchedGroups[:i], req.TouchedGroups[i+1:]...)
-			break
+			i--
 		}
 	}
 	
 	// ✅ VALIDAÇÃO: Deve ter pelo menos um grupo de dados
 	if len(req.TouchedGroups) == 0 {
-		fmt.Printf("[PREPROCESS][ERROR] No valid data groups for request\n")
-		return true // Bloqueia requisição sem grupos válidos
+		fmt.Printf("[PREPROCESS][ERROR] No valid data groups, rejecting request\n")
+		return true // Bloqueia requisição inválida
 	}
 	
+	// ✅ Obtém GSN e publica META
 	req.GSN = o.GetNextGSN()
 	o.PublishGSNMetadata(req.GSN, req.TouchedGroups)
 	
 	fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, req.GSN)
 	
+	// ✅ Single-group: adiciona diretamente
 	if len(req.TouchedGroups) == 1 {
 		req.GroupId = req.TouchedGroups[0]
-		fmt.Printf("[PREPROCESS] Single-group: adding to bucket=%d\n", req.GroupId)
+		fmt.Printf("[PREPROCESS] Single-group: adding to group=%d\n", req.GroupId)
 		request.AddReqMsg(req)
 		return true
 	}
 	
-	// Cross-op: clona para cada grupo
+	// ✅ Cross-op: clona para cada grupo
 	fmt.Printf("[PREPROCESS] Cross-op: cloning for %d groups\n", len(req.TouchedGroups))
 	for _, groupID := range req.TouchedGroups {
 		clone := &pb.ClientRequest{
