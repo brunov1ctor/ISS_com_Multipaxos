@@ -15,6 +15,7 @@
 package request
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/hyperledger-labs/mirbft/config"
