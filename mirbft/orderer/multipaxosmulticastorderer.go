@@ -339,27 +339,15 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	
 	fmt.Printf("[GSN-REQ] Requesting GSN reqID=%d from group 0 (clientId=%d, clientSn=%d)\n", reqID, membership.OwnID, clientSn)
 	
-	// ✅ CRITICAL FIX: Broadcast GSN request to ALL nodes in group 0
-	// System requests must bypass bucket assignment and reach all sequencer nodes
-	group0Members := o.GetGroupMembers(0)
-	if group0Members != nil && len(group0Members) > 0 {
-		fmt.Printf("[GSN-REQ] Broadcasting to %d group 0 members: %v\n", len(group0Members), group0Members)
-		if o.forwardRequestFn != nil {
-			o.forwardRequestFn(gsnReq, group0Members)
-		} else {
-			// Fallback: add locally only
-			request.AddReqMsg(gsnReq)
-		}
-	} else {
-		// Fallback: add locally
-		request.AddReqMsg(gsnReq)
-	}
+	// ✅ SIMPLE FIX: Add locally only - MultiPaxos consensus will propagate to all nodes
+	// No need for explicit broadcast - the consensus protocol handles replication
+	request.AddReqMsg(gsnReq)
 	
 	payloadPreview := gsnReq.Payload
 	if len(payloadPreview) > 50 {
 		payloadPreview = payloadPreview[:50]
 	}
-	fmt.Printf("[GSN-REQ] GSN request broadcasted: reqID=%d, groupId=%d, payload=%s\n", reqID, gsnReq.GroupId, string(payloadPreview))
+	fmt.Printf("[GSN-REQ] GSN request added locally: reqID=%d, groupId=%d, payload=%s\n", reqID, gsnReq.GroupId, string(payloadPreview))
 	
 	// ✅ TIMEOUT: Evita deadlock infinito
 	select {
@@ -651,20 +639,10 @@ func (o *MultiPaxosMulticastOrderer) PublishGSNMetadata(gsn uint64, touchedGroup
 		GSN:           gsn,
 	}
 	
-	fmt.Printf("[META-STREAM] Publishing GSN %d -> groups %v to group 0 (proxy %d, guaranteed non-empty)\n", gsn, touchedGroups, membership.OwnID)
+	fmt.Printf("[META-STREAM] Publishing GSN %d -> groups %v to group 0 (proxy %d)\n", gsn, touchedGroups, membership.OwnID)
 	
-	// ✅ CRITICAL FIX: Broadcast META to ALL nodes in group 0
-	group0Members := o.GetGroupMembers(0)
-	if group0Members != nil && len(group0Members) > 0 {
-		fmt.Printf("[META-STREAM] Broadcasting to %d group 0 members: %v\n", len(group0Members), group0Members)
-		if o.forwardRequestFn != nil {
-			o.forwardRequestFn(metaReq, group0Members)
-		} else {
-			request.AddReqMsg(metaReq)
-		}
-	} else {
-		request.AddReqMsg(metaReq)
-	}
+	// ✅ SIMPLE FIX: Add locally only - MultiPaxos consensus will propagate
+	request.AddReqMsg(metaReq)
 }
 
 // Mcast - API black-box para multicast atômico
