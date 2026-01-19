@@ -70,11 +70,16 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 
 	// Call the handler for each request received from the client
 	for req, err = srv.Recv(); err == nil; req, err = srv.Recv() {
+		fmt.Printf("[MESSENGER] Received request from client %d sn %d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
 		logger.Trace().
 			Int32("clId", req.RequestId.ClientId).
 			Int32("clSn", req.RequestId.ClientSn).
 			Msg("Received request.")
-		ClientRequestHandler(req)
+		if ClientRequestHandler == nil {
+			fmt.Printf("[MESSENGER][ERROR] ClientRequestHandler is nil!\n")
+		} else {
+			ClientRequestHandler(req)
+		}
 	}
 
 	// Log error message produced on termination of the above loop.
