@@ -556,11 +556,11 @@ func (i *mpxInstance) ProposeIfDue() {
 		var selectedReq *request.Request
 		if i.bucketId == 0 {
 			// ✅ DEBUG: Log estado do bucket antes de buscar
-			bucketLen := request.Buckets[i.bucketIndex].Len()
-			fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 bucketIndex=%d bucketLen=%d\n", i.sn, i.bucketIndex, bucketLen)
+			bucketLen := request.Buckets[i.bucketId].Len()
+			fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 bucketId=%d bucketLen=%d\n", i.sn, i.bucketId, bucketLen)
 			
 			// Grupo 0: busca primeiro request sistêmico
-			systemReq := request.Buckets[i.bucketIndex].FindSystemRequest()
+			systemReq := request.Buckets[i.bucketId].FindSystemRequest()
 			if systemReq != nil {
 				selectedReq = systemReq
 				payloadPreview := systemReq.Msg.Payload
@@ -571,17 +571,17 @@ func (i *mpxInstance) ProposeIfDue() {
 			} else {
 				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 NO system request found, trying GSN=%d\n", i.sn, expectedGSN)
 				// Se não há system, busca GSN exato esperado
-				selectedReq = request.Buckets[i.bucketIndex].FindRequestWithGSN(expectedGSN)
+				selectedReq = request.Buckets[i.bucketId].FindRequestWithGSN(expectedGSN)
 			}
 		} else {
 			// Outros grupos: busca GSN exato esperado
-			selectedReq = request.Buckets[i.bucketIndex].FindRequestWithGSN(expectedGSN)
+			selectedReq = request.Buckets[i.bucketId].FindRequestWithGSN(expectedGSN)
 		}
 		
 		if selectedReq != nil {
 			// Remove request selecionado
-			request.Buckets[i.bucketIndex].Remove([]*request.Request{selectedReq})
-			request.Buckets[i.bucketIndex].Unlock()
+			request.Buckets[i.bucketId].Remove([]*request.Request{selectedReq})
+			request.Buckets[i.bucketId].Unlock()
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 			if i.bucketId == 0 {
 				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 SELECTED and REMOVED system/expected request from bucket\n", i.sn)
