@@ -812,10 +812,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	
 	req.TouchedGroups = request.ReplicaMapper(req.Payload)
 	req.GSN = o.GetNextGSN()
-	
-	if o.metaPublisher != nil {
-		o.PublishGSNMetadata(req.GSN, req.TouchedGroups)
-	}
+	o.PublishGSNMetadata(req.GSN, req.TouchedGroups)
 	
 	if len(req.TouchedGroups) == 1 {
 		req.GroupId = req.TouchedGroups[0]
