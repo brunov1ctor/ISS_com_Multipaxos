@@ -357,7 +357,11 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 
 func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 	// ✅ DEBUG: Log todas as requests do grupo 0
-	fmt.Printf("[GSN-SEQ] OnGroup0Commit called: groupId=%d payload=%s\n", req.GroupId, string(req.Payload[:min(50, len(req.Payload))]))
+	payloadPreview := req.Payload
+	if len(payloadPreview) > 50 {
+		payloadPreview = payloadPreview[:50]
+	}
+	fmt.Printf("[GSN-SEQ] OnGroup0Commit called: groupId=%d payload=%s\n", req.GroupId, string(payloadPreview))
 	
 	// ✅ CORREÇÃO: Processa apenas requests do grupo 0 (sequenciador)
 	if req.GroupId != 0 {

@@ -375,6 +375,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			continue
 		}
 		groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
+		fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
 		if groupLeader != membership.OwnID {
 			continue
 		}
