@@ -236,7 +236,7 @@ func (am *AtomicMulticast) UpdateSequencerGroup() {
 	allNodes := membership.AllNodeIDs()
 	if len(allNodes) > 0 {
 		am.groups[0] = append([]int32{}, allNodes...)
-		fmt.Printf("[GROUPS] Updated sequencer group 0 with %d members: %v\n", len(allNodes), allNodes)
+		fmt.Printf("[GROUPS] Sequencer group 0 with %d members: %v (GSN only, not for data)\n", len(allNodes), allNodes)
 	} else {
 		fmt.Printf("[GROUPS][WARN] AllNodeIDs() still empty, keeping group 0 as-is\n")
 	}

@@ -166,6 +166,7 @@ func (o *MultiPaxosMulticastOrderer) loadGroups() {
 
 // createGroupOrderers - Cria um MultiPaxosOrderer para cada grupo
 // SN global intercalado: cada grupo usa slots diferentes no mesmo espaço SN
+// IMPORTANTE: Grupo 0 é apenas para GSN/META, não processa requisições de dados
 func (o *MultiPaxosMulticastOrderer) createGroupOrderers(mngr manager.Manager) {
 	groupIDs := o.am.GetDefinedGroups()
 	for _, gid := range groupIDs {
@@ -177,7 +178,7 @@ func (o *MultiPaxosMulticastOrderer) createGroupOrderers(mngr manager.Manager) {
 		groupOrderer.Init(mngr)
 		o.groupOrderers[gid] = groupOrderer
 		if gid == 0 {
-			fmt.Printf("[MULTICAST] Created GSN SEQUENCER (group 0) - interleaved SN\n")
+			fmt.Printf("[MULTICAST] Created GSN SEQUENCER (group 0) - GSN/META only\n")
 		} else {
 			fmt.Printf("[MULTICAST] Created orderer for group %d - interleaved SN\n", gid)
 		}
@@ -809,12 +810,35 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d touchedGroups=%v\n", 
 		req.RequestId.ClientId, req.RequestId.ClientSn, req.TouchedGroups)
 	
+	// ✅ CRÍTICO: Grupo 0 é apenas para GSN/META, não para requisições de clientes
+	if req.GroupId == 0 && !isSystemMessage(req) {
+		fmt.Printf("[PREPROCESS][ERROR] Client request cannot target group 0 (GSN/META only)\n")
+		return true // Bloqueia requisição inválida
+	}
+	
 	if len(req.TouchedGroups) > 0 {
 		fmt.Printf("[PREPROCESS] Already processed, skipping\n")
 		return false
 	}
 	
 	req.TouchedGroups = request.ReplicaMapper(req.Payload)
+	
+	// ✅ VALIDAÇÃO: TouchedGroups não pode conter grupo 0 para requisições de clientes
+	for i, gid := range req.TouchedGroups {
+		if gid == 0 {
+			fmt.Printf("[PREPROCESS][WARN] Removing group 0 from TouchedGroups (GSN/META only)\n")
+			// Remove grupo 0 da lista
+			req.TouchedGroups = append(req.TouchedGroups[:i], req.TouchedGroups[i+1:]...)
+			break
+		}
+	}
+	
+	// ✅ VALIDAÇÃO: Deve ter pelo menos um grupo de dados
+	if len(req.TouchedGroups) == 0 {
+		fmt.Printf("[PREPROCESS][ERROR] No valid data groups for request\n")
+		return true // Bloqueia requisição sem grupos válidos
+	}
+	
 	req.GSN = o.GetNextGSN()
 	o.PublishGSNMetadata(req.GSN, req.TouchedGroups)
 	
