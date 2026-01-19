@@ -346,7 +346,9 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 }
 
 func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
+	// ✅ CORREÇÃO: Processa apenas requests do grupo 0 (sequenciador)
 	if req.GroupId != 0 {
+		fmt.Printf("[GSN-SEQ][SKIP] Request groupId=%d (not sequencer group 0)\n", req.GroupId)
 		return
 	}
 	
@@ -367,6 +369,13 @@ func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 		fmt.Printf("[META-STREAM] Group 0 committed GSN %d -> groups %v (from proxy %d)\n", gsn, touchedGroups, req.RequestId.ClientId)
 		return
 	}
+	
+	// ✅ DEBUG: Request não reconhecida
+	payloadLen := len(req.Payload)
+	if payloadLen > 50 {
+		payloadLen = 50
+	}
+	fmt.Printf("[GSN-SEQ][WARN] Group 0 committed unknown request type (payload=%s)\n", string(req.Payload[:payloadLen]))
 }
 // onGroup0Commit - Processa commit do grupo 0 (sequenciador GSN)
 // Atribui GSN sequencial e acorda proxies aguardando
