@@ -61,8 +61,10 @@ func HandleRequest(req *pb.ClientRequest) {
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
 	
 	// Preprocessor customizado (ex: atomic multicast)
-	if requestPreprocessor != nil && requestPreprocessor(req) {
-		return // Preprocessor já processou
+	if requestPreprocessor != nil {
+		if requestPreprocessor(req) {
+			return // Preprocessor já processou
+		}
 	}
 	
 	if config.Config.RequestHandlerThreads > 0 {
