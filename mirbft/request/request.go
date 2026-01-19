@@ -454,11 +454,9 @@ func getBucket(req *pb.ClientRequest) *Bucket {
 
 func GetBucketNr(req *pb.ClientRequest) int {
 	// ATOMIC MULTICAST: usa GroupId diretamente como bucket
-	if req.GetGroupId() > 0 {
-		groupId := int(req.GetGroupId())
-		if groupId < len(Buckets) {
-			return groupId
-		}
+	groupId := int(req.GetGroupId())
+	if groupId >= 0 && groupId < len(Buckets) {
+		return groupId
 	}
 	
 	// Fallback: hash-based
