@@ -335,17 +335,30 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		TouchedGroups: []uint32{0}, // Sempre grupo 0 (sequenciador)
 	}
 	
+	fmt.Printf("[GSN-REQ] Requesting GSN reqID=%d from group 0\n", reqID)
 	request.AddReqMsg(gsnReq)
-	gsn := <-respChan
 	
-	o.gsnReqMu.Lock()
-	delete(o.gsnRequestsPending, reqID)
-	o.gsnReqMu.Unlock()
-	
-	return gsn
+	// ✅ TIMEOUT: Evita deadlock infinito
+	select {
+	case gsn := <-respChan:
+		fmt.Printf("[GSN-REQ] Received GSN=%d for reqID=%d\n", gsn, reqID)
+		o.gsnReqMu.Lock()
+		delete(o.gsnRequestsPending, reqID)
+		o.gsnReqMu.Unlock()
+		return gsn
+	case <-time.After(10 * time.Second):
+		fmt.Printf("[GSN-REQ][ERROR] Timeout waiting for GSN reqID=%d\n", reqID)
+		o.gsnReqMu.Lock()
+		delete(o.gsnRequestsPending, reqID)
+		o.gsnReqMu.Unlock()
+		return 0 // Retorna 0 em caso de timeout
+	}
 }
 
 func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
+	// ✅ DEBUG: Log todas as requests do grupo 0
+	fmt.Printf("[GSN-SEQ] OnGroup0Commit called: groupId=%d payload=%s\n", req.GroupId, string(req.Payload[:min(50, len(req.Payload))]))
+	
 	// ✅ CORREÇÃO: Processa apenas requests do grupo 0 (sequenciador)
 	if req.GroupId != 0 {
 		fmt.Printf("[GSN-SEQ][SKIP] Request groupId=%d (not sequencer group 0)\n", req.GroupId)
