@@ -87,6 +87,10 @@ type MultiPaxosMulticastOrderer struct {
 	metaSeqCounter     uint32 // ✅ Contador separado para META (evita overflow)
 	mcastSeqCounter    uint32 // ✅ Contador separado para Mcast (evita overflow)
 	
+	// Deduplicação de GSN requests no líder
+	seenGSNReq map[uint64]bool
+	seenGSNMu  sync.Mutex
+	
 	// META Stream
 	gsnMetadata map[uint64][]uint32
 	metaMu      sync.RWMutex
@@ -150,6 +154,9 @@ func (o *MultiPaxosMulticastOrderer) initComponents() {
 	
 	// ✅ DEDUPLICACAO: Inicializa controle de META publicados
 	o.publishedMeta = make(map[uint64]bool)
+	
+	// Deduplicação de GSN requests no líder
+	o.seenGSNReq = make(map[uint64]bool)
 }
 
 // loadGroups - Carrega configuração de grupos do arquivo YAML
@@ -235,6 +242,32 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 	}
 }
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
+	// Trata GSNReqForward (líder do grupo 0)
+	if fwd := pm.GetGsnReqForward(); fwd != nil {
+		req := fwd.Req
+		if req == nil || req.RequestId == nil {
+			return
+		}
+		
+		// Chave única global (ClientId + ClientSn)
+		reqKey := makeGlobalRequestID(req.RequestId.ClientId, uint32(req.RequestId.ClientSn))
+		
+		// Verifica duplicata
+		o.seenGSNMu.Lock()
+		if o.seenGSNReq[reqKey] {
+			o.seenGSNMu.Unlock()
+			fmt.Printf("[GSN-FWD] Duplicate reqKey=%d, ignoring\n", reqKey)
+			return
+		}
+		o.seenGSNReq[reqKey] = true
+		o.seenGSNMu.Unlock()
+		
+		// Adiciona ao bucket do grupo 0
+		fmt.Printf("[GSN-FWD] Leader received forward reqKey=%d, adding to bucket\n", reqKey)
+		request.AddReqMsg(req)
+		return
+	}
+	
 	if missingEntry := pm.GetMissingEntry(); missingEntry != nil {
 		// SN intercalado: usa GroupId da request ao invés de mapear SN
 		var groupID uint32 = 0
@@ -317,8 +350,6 @@ func makeGlobalRequestID(nodeID int32, localCounter uint32) uint64 {
 // Usa identificador único global para evitar colisões entre proxies
 func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	clientSn := atomic.AddUint32(&o.gsnSeqCounter, 1)
-	
-	// ✅ CORREÇÃO: Chave composta global (nodeID + contador)
 	reqID := makeGlobalRequestID(membership.OwnID, clientSn)
 	respChan := make(chan uint64, 1)
 	
@@ -326,30 +357,41 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	o.gsnRequestsPending[reqID] = respChan
 	o.gsnReqMu.Unlock()
 	
-	// ✅ GARANTIA: TouchedGroups sempre setado + ClientId único por proxy
 	gsnReq := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
-			ClientId: membership.OwnID, // ✅ ID único do proxy (não constante)
-			ClientSn: int32(clientSn),  // Contador local do proxy
+			ClientId: membership.OwnID,
+			ClientSn: int32(clientSn),
 		},
 		Payload:       []byte(fmt.Sprintf("%s%d", SYSTEM_GSN_REQUEST, reqID)),
 		GroupId:       0,
-		TouchedGroups: []uint32{0}, // Sempre grupo 0 (sequenciador)
+		TouchedGroups: []uint32{0},
 	}
 	
-	fmt.Printf("[GSN-REQ] Requesting GSN reqID=%d from group 0 (clientId=%d, clientSn=%d)\n", reqID, membership.OwnID, clientSn)
-	
-	// ✅ SIMPLE FIX: Add locally only - MultiPaxos consensus will propagate to all nodes
-	// No need for explicit broadcast - the consensus protocol handles replication
-	request.AddReqMsg(gsnReq)
-	
-	payloadPreview := gsnReq.Payload
-	if len(payloadPreview) > 50 {
-		payloadPreview = payloadPreview[:50]
+	// Descobre líder do grupo 0
+	group0Members := o.am.GetGroupMembers(0)
+	if len(group0Members) == 0 {
+		fmt.Printf("[GSN-REQ][ERROR] No members in group 0\n")
+		return 0
 	}
-	fmt.Printf("[GSN-REQ] GSN request added locally: reqID=%d, groupId=%d, payload=%s\n", reqID, gsnReq.GroupId, string(payloadPreview))
+	leaderID := group0Members[0] // Simplificado: primeiro membro é líder
 	
-	// ✅ TIMEOUT: Evita deadlock infinito
+	if leaderID == membership.OwnID {
+		// Sou líder: adiciona ao bucket local
+		fmt.Printf("[GSN-REQ] I am leader, adding to local bucket reqID=%d\n", reqID)
+		request.AddReqMsg(gsnReq)
+	} else {
+		// Não sou líder: envia GSNReqForward para o líder
+		fmt.Printf("[GSN-REQ] Forwarding to leader %d reqID=%d\n", leaderID, reqID)
+		pm := &pb.ProtocolMessage{
+			SenderId: membership.OwnID,
+			Sn:       0,
+			Msg: &pb.ProtocolMessage_GsnReqForward{
+				GsnReqForward: &pb.GSNReqForward{Req: gsnReq},
+			},
+		}
+		messenger.EnqueueMsg(pm, leaderID)
+	}
+	
 	select {
 	case gsn := <-respChan:
 		fmt.Printf("[GSN-REQ] Received GSN=%d for reqID=%d\n", gsn, reqID)
@@ -362,7 +404,7 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		o.gsnReqMu.Lock()
 		delete(o.gsnRequestsPending, reqID)
 		o.gsnReqMu.Unlock()
-		return 0 // Retorna 0 em caso de timeout
+		return 0
 	}
 }
 
