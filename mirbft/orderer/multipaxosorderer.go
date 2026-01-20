@@ -450,6 +450,14 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 							o.emit(pm)
 						}
 						inst.prepSent = true
+					} else {
+						// Instância já existe, atualiza bucketIndex se necessário
+						inst.mu.Lock()
+						if inst.bucketIndex < 0 {
+							inst.bucketIndex = gIdx
+							fmt.Printf("[MPX][INST] sn=%d updated bucketIndex=%d\n", currentSN, gIdx)
+						}
+						inst.mu.Unlock()
 					}
 					inst.tick(now)
 					inst.ProposeIfDue()
