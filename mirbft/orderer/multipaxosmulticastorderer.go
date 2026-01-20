@@ -896,50 +896,46 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ ASYNC: Processa GSN em goroutine para não bloquear cliente
-	fmt.Printf("[PREPROCESS] Starting async GSN processing...\n")
-	go func() {
-		// Obtém GSN (pode bloquear, mas não bloqueia o cliente)
-		fmt.Printf("[PREPROCESS] Getting GSN...\n")
-		gsn := o.GetNextGSN()
-		fmt.Printf("[PREPROCESS] Got GSN=%d, publishing META...\n", gsn)
-		o.PublishGSNMetadata(gsn, req.TouchedGroups)
-		
-		fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, gsn)
-		
-		// ✅ Single-group: adiciona diretamente
-		if len(req.TouchedGroups) == 1 {
-			reqCopy := &pb.ClientRequest{
-				RequestId:     req.RequestId,
-				Payload:       req.Payload,
-				Signature:     req.Signature,
-				Pubkey:        req.Pubkey,
-				GroupId:       req.TouchedGroups[0],
-				TouchedGroups: req.TouchedGroups,
-				GSN:           gsn,
-			}
-			fmt.Printf("[PREPROCESS] Single-group: adding to group=%d\n", reqCopy.GroupId)
-			request.AddReqMsg(reqCopy)
-			return
-		}
-		
-		// ✅ Cross-op: clona para cada grupo
-		fmt.Printf("[PREPROCESS] Cross-op: cloning for %d groups\n", len(req.TouchedGroups))
-		for _, groupID := range req.TouchedGroups {
-			clone := &pb.ClientRequest{
-				RequestId:     req.RequestId,
-				Payload:       req.Payload,
-				Signature:     req.Signature,
-				Pubkey:        req.Pubkey,
-				GroupId:       groupID,
-				TouchedGroups: req.TouchedGroups,
-				GSN:           gsn,
-			}
-			request.AddReqMsg(clone)
-		}
-	}()
+	// ✅ SYNC: Processa GSN sincronamente para garantir adição aos buckets
+	fmt.Printf("[PREPROCESS] Getting GSN...\n")
+	gsn := o.GetNextGSN()
+	fmt.Printf("[PREPROCESS] Got GSN=%d, publishing META...\n", gsn)
+	o.PublishGSNMetadata(gsn, req.TouchedGroups)
 	
-	// Retorna imediatamente para não bloquear o cliente
-	fmt.Printf("[PREPROCESS] Async processing started, returning immediately\n")
+	fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, gsn)
+	
+	// ✅ Single-group: adiciona diretamente
+	if len(req.TouchedGroups) == 1 {
+		reqCopy := &pb.ClientRequest{
+			RequestId:     req.RequestId,
+			Payload:       req.Payload,
+			Signature:     req.Signature,
+			Pubkey:        req.Pubkey,
+			GroupId:       req.TouchedGroups[0],
+			TouchedGroups: req.TouchedGroups,
+			GSN:           gsn,
+		}
+		fmt.Printf("[PREPROCESS] Single-group: adding to group=%d\n", reqCopy.GroupId)
+		request.AddReqMsg(reqCopy)
+		return true // Já adicionou, não precisa processar de novo
+	}
+	
+	// ✅ Cross-op: clona para cada grupo
+	fmt.Printf("[PREPROCESS] Cross-op: cloning for %d groups\n", len(req.TouchedGroups))
+	for _, groupID := range req.TouchedGroups {
+		clone := &pb.ClientRequest{
+			RequestId:     req.RequestId,
+			Payload:       req.Payload,
+			Signature:     req.Signature,
+			Pubkey:        req.Pubkey,
+			GroupId:       groupID,
+			TouchedGroups: req.TouchedGroups,
+			GSN:           gsn,
+		}
+		request.AddReqMsg(clone)
+	}
+	
+	// Já adicionou aos buckets, não precisa processar de novo
+	fmt.Printf("[PREPROCESS] Processing complete, returning true\n")
 	return true
 }
