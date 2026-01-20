@@ -138,19 +138,17 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.emit = func(pm *pb.ProtocolMessage) {
 		mpx := pm.GetMultipaxos()
 		if mpx == nil {
+			// Envia para todos incluindo si mesmo
 			for _, nid := range membership.AllNodeIDs() {
-				if nid != membership.OwnID {
-					messenger.EnqueueMsg(pm, nid)
-				}
+				messenger.EnqueueMsg(pm, nid)
 			}
 			return
 		}
 		groupID := extractGroupID(mpx)
 		if groupID == 0 {
+			// Grupo 0: envia para todos incluindo si mesmo
 			for _, nid := range membership.AllNodeIDs() {
-				if nid != membership.OwnID {
-					messenger.EnqueueMsg(pm, nid)
-				}
+				messenger.EnqueueMsg(pm, nid)
 			}
 			return
 		}
