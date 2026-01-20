@@ -359,6 +359,18 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		fmt.Printf("[MPX] runSegment: standalone mode - processing all groups %v\n", groupsToProcess)
 	}
 	allGroupIDs := o.am.GetDefinedGroups()
+	// Garante que grupo 0 está sempre incluído
+	hasGroup0 := false
+	for _, gid := range allGroupIDs {
+		if gid == 0 {
+			hasGroup0 = true
+			break
+		}
+	}
+	if !hasGroup0 {
+		// Adiciona grupo 0 no início
+		allGroupIDs = append([]uint32{0}, allGroupIDs...)
+	}
 	if len(allGroupIDs) == 0 {
 		allGroupIDs = []uint32{0}
 	}
