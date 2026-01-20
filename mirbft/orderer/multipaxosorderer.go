@@ -376,12 +376,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		}
 		groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
 		fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
-		
-		// Atualiza líder do grupo 0 no multicast orderer
-		if groupId == 0 && GlobalMulticastOrderer != nil {
-			GlobalMulticastOrderer.UpdateGroup0Leader(groupLeader)
-		}
-		
 		// (sequencer) runs on ALL nodes, not just leader
 		if groupLeader != membership.OwnID && groupId != 0 {
 			continue

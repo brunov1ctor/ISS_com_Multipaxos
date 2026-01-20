@@ -87,13 +87,9 @@ type MultiPaxosMulticastOrderer struct {
 	metaSeqCounter     uint32
 	mcastSeqCounter    uint32
 	
-	// Deduplicação de GSN requests no líder
+	// Deduplicação de GSN requests
 	seenGSNReq map[uint64]bool
 	seenGSNMu  sync.Mutex
-	
-	// Líder atual do grupo 0
-	group0Leader int32
-	group0LeaderMu sync.RWMutex
 	
 	// META Stream
 	gsnMetadata map[uint64][]uint32
@@ -370,26 +366,25 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		TouchedGroups: []uint32{0},
 	}
 	
-	// Obtém líder atual do grupo 0
-	o.group0LeaderMu.RLock()
-	leaderID := o.group0Leader
-	o.group0LeaderMu.RUnlock()
-	
-	if leaderID == membership.OwnID || leaderID == 0 {
-		// Sou líder ou líder desconhecido: adiciona localmente
-		fmt.Printf("[GSN-REQ] Adding locally reqID=%d (leader=%d)\n", reqID, leaderID)
-		request.AddReqMsg(gsnReq)
-	} else {
-		// Não sou líder: forward para o líder
-		fmt.Printf("[GSN-REQ] Forwarding to leader %d reqID=%d\n", leaderID, reqID)
-		pm := &pb.ProtocolMessage{
-			SenderId: membership.OwnID,
-			Sn:       0,
-			Msg: &pb.ProtocolMessage_GsnReqForward{
-				GsnReqForward: &pb.GSNReqForward{Req: gsnReq},
-			},
+	// Broadcast para todos os nós do grupo 0
+	// Cada nó adiciona localmente, líder vai propor
+	fmt.Printf("[GSN-REQ] Broadcasting GSN request reqID=%d to all group 0 nodes\n", reqID)
+	group0Members := o.am.GetGroupMembers(0)
+	for _, nodeID := range group0Members {
+		if nodeID == membership.OwnID {
+			// Adiciona localmente
+			request.AddReqMsg(gsnReq)
+		} else {
+			// Envia para outros nós
+			pm := &pb.ProtocolMessage{
+				SenderId: membership.OwnID,
+				Sn:       0,
+				Msg: &pb.ProtocolMessage_GsnReqForward{
+					GsnReqForward: &pb.GSNReqForward{Req: gsnReq},
+				},
+			}
+			messenger.EnqueueMsg(pm, nodeID)
 		}
-		messenger.EnqueueMsg(pm, leaderID)
 	}
 	
 	select {
@@ -406,14 +401,6 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		o.gsnReqMu.Unlock()
 		return 0
 	}
-}
-
-// UpdateGroup0Leader - Atualiza líder do grupo 0 (chamado quando novo segmento inicia)
-func (o *MultiPaxosMulticastOrderer) UpdateGroup0Leader(leaderID int32) {
-	o.group0LeaderMu.Lock()
-	o.group0Leader = leaderID
-	o.group0LeaderMu.Unlock()
-	fmt.Printf("[GSN-LEADER] Group 0 leader updated to %d\n", leaderID)
 }
 
 func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
