@@ -388,12 +388,18 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		}
 		groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
 		fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
-		// (sequencer) runs on ALL nodes, not just leader
-		if groupLeader != membership.OwnID && groupId != 0 {
+		
+		// Para grupo 0 (sequencer): APENAS o líder processa
+		// Para outros grupos: apenas membros que são líderes processam
+		if groupLeader != membership.OwnID {
+			if groupId == 0 {
+				fmt.Printf("[MPX][SEQUENCER] Group 0: Skipping (not leader, leader=%d)\n", groupLeader)
+			}
 			continue
 		}
+		
 		if groupId == 0 {
-			fmt.Printf("[MPX][SEQUENCER] Group 0: Running on ALL nodes (leader=%d)\n", groupLeader)
+			fmt.Printf("[MPX][SEQUENCER] Group 0: Leader %d will process\n", groupLeader)
 		}
 		var groupIdx int32 = -1
 		for idx, gid := range allGroupIDs {
