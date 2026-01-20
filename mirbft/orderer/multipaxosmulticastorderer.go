@@ -896,35 +896,50 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ Obtém GSN e publica META
-	fmt.Printf("[PREPROCESS] Getting GSN...\n")
-	req.GSN = o.GetNextGSN()
-	fmt.Printf("[PREPROCESS] Got GSN=%d, publishing META...\n", req.GSN)
-	o.PublishGSNMetadata(req.GSN, req.TouchedGroups)
-	
-	fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, req.GSN)
-	
-	// ✅ Single-group: adiciona diretamente
-	if len(req.TouchedGroups) == 1 {
-		req.GroupId = req.TouchedGroups[0]
-		fmt.Printf("[PREPROCESS] Single-group: adding to group=%d\n", req.GroupId)
-		request.AddReqMsg(req)
-		return true
-	}
-	
-	// ✅ Cross-op: clona para cada grupo
-	fmt.Printf("[PREPROCESS] Cross-op: cloning for %d groups\n", len(req.TouchedGroups))
-	for _, groupID := range req.TouchedGroups {
-		clone := &pb.ClientRequest{
-			RequestId:     req.RequestId,
-			Payload:       req.Payload,
-			Signature:     req.Signature,
-			Pubkey:        req.Pubkey,
-			GroupId:       groupID,
-			TouchedGroups: req.TouchedGroups,
-			GSN:           req.GSN,
+	// ✅ ASYNC: Processa GSN em goroutine para não bloquear cliente
+	fmt.Printf("[PREPROCESS] Starting async GSN processing...\n")
+	go func() {
+		// Obtém GSN (pode bloquear, mas não bloqueia o cliente)
+		fmt.Printf("[PREPROCESS] Getting GSN...\n")
+		gsn := o.GetNextGSN()
+		fmt.Printf("[PREPROCESS] Got GSN=%d, publishing META...\n", gsn)
+		o.PublishGSNMetadata(gsn, req.TouchedGroups)
+		
+		fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, gsn)
+		
+		// ✅ Single-group: adiciona diretamente
+		if len(req.TouchedGroups) == 1 {
+			reqCopy := &pb.ClientRequest{
+				RequestId:     req.RequestId,
+				Payload:       req.Payload,
+				Signature:     req.Signature,
+				Pubkey:        req.Pubkey,
+				GroupId:       req.TouchedGroups[0],
+				TouchedGroups: req.TouchedGroups,
+				GSN:           gsn,
+			}
+			fmt.Printf("[PREPROCESS] Single-group: adding to group=%d\n", reqCopy.GroupId)
+			request.AddReqMsg(reqCopy)
+			return
 		}
-		request.AddReqMsg(clone)
-	}
+		
+		// ✅ Cross-op: clona para cada grupo
+		fmt.Printf("[PREPROCESS] Cross-op: cloning for %d groups\n", len(req.TouchedGroups))
+		for _, groupID := range req.TouchedGroups {
+			clone := &pb.ClientRequest{
+				RequestId:     req.RequestId,
+				Payload:       req.Payload,
+				Signature:     req.Signature,
+				Pubkey:        req.Pubkey,
+				GroupId:       groupID,
+				TouchedGroups: req.TouchedGroups,
+				GSN:           gsn,
+			}
+			request.AddReqMsg(clone)
+		}
+	}()
+	
+	// Retorna imediatamente para não bloquear o cliente
+	fmt.Printf("[PREPROCESS] Async processing started, returning immediately\n")
 	return true
 }
