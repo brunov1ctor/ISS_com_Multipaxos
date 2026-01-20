@@ -265,6 +265,13 @@ func publishEntries() {
 			Int("nReq", len(entry.(*Entry).Batch.Requests)).
 			Msg("Delivered batch.")
 
+		// Trace REQ_DELIVERED for each request in the batch
+		for _, req := range entry.(*Entry).Batch.Requests {
+			if req != nil && req.RequestId != nil {
+				tracing.MainTrace.Event(tracing.REQ_DELIVERED, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
+			}
+		}
+
 		// On each iteration, push new log Entry to all in-order subscriber channels.
 		publishEntry(entry.(*Entry), logSubscribers)
 
