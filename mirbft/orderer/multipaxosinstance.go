@@ -290,10 +290,8 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	}
 	leaderID := int32(prepare.GetId().GetLead())
 	if leaderID == membership.OwnID {
-		// Líder processa seu próprio PREPARE: seta-se como líder
 		fmt.Printf("[MPX][INST] sn=%d PREPARE from self, setting as leader\n", i.sn)
 		i.leader = membership.OwnID
-		// Conta próprio voto de promise
 		if i.promisedFrom == nil {
 			i.promisedFrom = make(map[int32]struct{})
 		}
@@ -307,10 +305,10 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 				fmt.Printf("[MPX][INST] sn=%d QUORUM de promises atingido, entrando em steady-state\n", i.sn)
 			}
 		}
-		return
+	} else {
+		fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d to leader=%d\n", i.sn, ballot, groupId, leaderID)
+		messenger.EnqueueMsg(out, leaderID)
 	}
-	fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d to leader=%d\n", i.sn, ballot, groupId, leaderID)
-	messenger.EnqueueMsg(out, leaderID)
 }
 func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	i.mu.Lock()

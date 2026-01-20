@@ -444,6 +444,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 							Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
 						}
 						if o.emit != nil {
+							// Líder processa seu próprio PREPARE localmente primeiro
+							inst.enqueue(pm)
+							// Depois envia para os outros membros do grupo
 							o.emit(pm)
 						}
 						inst.prepSent = true
