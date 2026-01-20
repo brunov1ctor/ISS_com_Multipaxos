@@ -81,15 +81,19 @@ type MultiPaxosMulticastOrderer struct {
 	// GSN Sequencer
 	nextGSN            uint64
 	gsnMu              sync.Mutex
-	gsnRequestsPending map[uint64]chan uint64 // ✅ Chave composta global
+	gsnRequestsPending map[uint64]chan uint64
 	gsnReqMu           sync.Mutex
 	gsnSeqCounter      uint32
-	metaSeqCounter     uint32 // ✅ Contador separado para META (evita overflow)
-	mcastSeqCounter    uint32 // ✅ Contador separado para Mcast (evita overflow)
+	metaSeqCounter     uint32
+	mcastSeqCounter    uint32
 	
 	// Deduplicação de GSN requests no líder
 	seenGSNReq map[uint64]bool
 	seenGSNMu  sync.Mutex
+	
+	// Líder atual do grupo 0
+	group0Leader int32
+	group0LeaderMu sync.RWMutex
 	
 	// META Stream
 	gsnMetadata map[uint64][]uint32
@@ -347,7 +351,6 @@ func makeGlobalRequestID(nodeID int32, localCounter uint32) uint64 {
 }
 
 // GetNextGSN - Obtém próximo GSN via grupo 0 (sequenciador global)
-// Usa identificador único global para evitar colisões entre proxies
 func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	clientSn := atomic.AddUint32(&o.gsnSeqCounter, 1)
 	reqID := makeGlobalRequestID(membership.OwnID, clientSn)
@@ -367,20 +370,17 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		TouchedGroups: []uint32{0},
 	}
 	
-	// Descobre líder do grupo 0
-	group0Members := o.am.GetGroupMembers(0)
-	if len(group0Members) == 0 {
-		fmt.Printf("[GSN-REQ][ERROR] No members in group 0\n")
-		return 0
-	}
-	leaderID := group0Members[0] // Simplificado: primeiro membro é líder
+	// Obtém líder atual do grupo 0
+	o.group0LeaderMu.RLock()
+	leaderID := o.group0Leader
+	o.group0LeaderMu.RUnlock()
 	
-	if leaderID == membership.OwnID {
-		// Sou líder: adiciona ao bucket local
-		fmt.Printf("[GSN-REQ] I am leader, adding to local bucket reqID=%d\n", reqID)
+	if leaderID == membership.OwnID || leaderID == 0 {
+		// Sou líder ou líder desconhecido: adiciona localmente
+		fmt.Printf("[GSN-REQ] Adding locally reqID=%d (leader=%d)\n", reqID, leaderID)
 		request.AddReqMsg(gsnReq)
 	} else {
-		// Não sou líder: envia GSNReqForward para o líder
+		// Não sou líder: forward para o líder
 		fmt.Printf("[GSN-REQ] Forwarding to leader %d reqID=%d\n", leaderID, reqID)
 		pm := &pb.ProtocolMessage{
 			SenderId: membership.OwnID,
@@ -406,6 +406,14 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		o.gsnReqMu.Unlock()
 		return 0
 	}
+}
+
+// UpdateGroup0Leader - Atualiza líder do grupo 0 (chamado quando novo segmento inicia)
+func (o *MultiPaxosMulticastOrderer) UpdateGroup0Leader(leaderID int32) {
+	o.group0LeaderMu.Lock()
+	o.group0Leader = leaderID
+	o.group0LeaderMu.Unlock()
+	fmt.Printf("[GSN-LEADER] Group 0 leader updated to %d\n", leaderID)
 }
 
 func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
