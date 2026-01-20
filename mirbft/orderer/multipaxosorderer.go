@@ -304,6 +304,19 @@ func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	inst, ok := o.dispatcher.load(sn)
 	if !ok || inst == nil {
 		inst = o.ensureInstance(sn)
+		// Seta bucketId e bucketIndex baseado na mensagem
+		if mpx != nil {
+			inst.bucketId = groupID
+			// Calcula bucketIndex baseado no groupID
+			allGroupIDs := o.am.GetDefinedGroups()
+			for idx, gid := range allGroupIDs {
+				if gid == groupID {
+					inst.bucketIndex = int32(idx)
+					fmt.Printf("[MPX][INST] sn=%d set bucketId=%d bucketIndex=%d from message\n", sn, groupID, idx)
+					break
+				}
+			}
+		}
 		o.dispatcher.store(sn, inst)
 		inst.startWorkers(&o.stopWg)
 		o.backlog.drainTo(sn, inst.enqueue)
@@ -451,11 +464,12 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						}
 						inst.prepSent = true
 					} else {
-						// Instância já existe, atualiza bucketIndex se necessário
+						// Instância já existe, atualiza bucketIndex e bucketId se necessário
 						inst.mu.Lock()
 						if inst.bucketIndex < 0 {
 							inst.bucketIndex = gIdx
-							fmt.Printf("[MPX][INST] sn=%d updated bucketIndex=%d\n", currentSN, gIdx)
+							inst.bucketId = gid
+							fmt.Printf("[MPX][INST] sn=%d updated bucketIndex=%d bucketId=%d\n", currentSN, gIdx, gid)
 						}
 						inst.mu.Unlock()
 					}
