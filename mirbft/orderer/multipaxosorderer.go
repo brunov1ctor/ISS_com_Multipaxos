@@ -359,17 +359,13 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	if o.ownedGroupID != 0 {
 		groupsToProcess = []uint32{o.ownedGroupID}
 		fmt.Printf("[MPX] runSegment: processing only owned group %d\n", o.ownedGroupID)
-	} else if o.skipHandlerRegistration {
-		// Modo multicast: grupo 0 processa apenas grupo 0 (sequencer)
-		groupsToProcess = []uint32{0}
-		fmt.Printf("[MPX] runSegment: multicast mode - group 0 processes only sequencer\n")
 	} else {
 		// Modo standalone: processa todos os grupos
 		groupsToProcess = o.am.GetDefinedGroups()
 		if len(groupsToProcess) == 0 {
 			groupsToProcess = []uint32{0}
 		}
-		fmt.Printf("[MPX] runSegment: standalone mode - processing all groups %v\n", groupsToProcess)
+		fmt.Printf("[MPX] runSegment: processing groups %v (ownedGroupID=%d)\n", groupsToProcess, o.ownedGroupID)
 	}
 	allGroupIDs := o.am.GetDefinedGroups()
 	// Garante que grupo 0 está sempre incluído
