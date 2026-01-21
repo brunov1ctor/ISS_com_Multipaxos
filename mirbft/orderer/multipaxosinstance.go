@@ -571,7 +571,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		if i.bucketId == 0 {
 			// ✅ DEBUG: Log estado do bucket antes de buscar
 			bucketLen := request.Buckets[i.bucketId].Len()
-			fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 bucketId=%d bucketLen=%d\n", i.sn, i.bucketId, bucketLen)
+			fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 bucketId=%d bucketLen=%d expectedGSN=%d\n", i.sn, i.bucketId, bucketLen, expectedGSN)
 			
 			// Grupo 0: busca primeiro request sistêmico
 			systemReq := request.Buckets[i.bucketId].FindSystemRequest()

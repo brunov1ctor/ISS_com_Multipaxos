@@ -390,19 +390,24 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	for _, groupId := range groupsToProcess {
 		members := o.am.GetGroupMembers(groupId)
 		if members == nil {
+			fmt.Printf("[MPX][CRITICAL] Group %d has NO members, skipping\n", groupId)
 			continue
 		}
+		fmt.Printf("[MPX][SEGMENT] Processing group %d with %d members: %v\n", groupId, len(members), members)
 		if groupId != 0 && !o.am.IsMember(groupId, membership.OwnID) {
+			fmt.Printf("[MPX][SEGMENT] Skipping group %d (not a member)\n", groupId)
 			continue
 		}
 		groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
 		fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
 		
-		// Grupo 0 (sequencer): TODOS os nós processam (não apenas líder)
+		// Grupo 0 (sequencer): TODOS os nós podem propor (round-robin ou todos)
 		// Outros grupos: apenas líder processa
 		if groupId == 0 {
-			fmt.Printf("[MPX][SEQUENCER] Group 0: All nodes process (leader=%d)\n", groupLeader)
+			fmt.Printf("[MPX][SEQUENCER] Group 0: All nodes can propose (ownID=%d, leader=%d)\n", membership.OwnID, groupLeader)
+			// Grupo 0: todos os nós participam ativamente
 		} else if groupLeader != membership.OwnID {
+			// Outros grupos: apenas líder propõe
 			continue
 		}
 		var groupIdx int32 = -1
@@ -419,11 +424,15 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			t := time.NewTicker(o.proposeEvery)
 			defer t.Stop()
 			currentSN := seg.FirstSN() + gIdx
+			fmt.Printf("[MPX][TICKER] Started ticker for group %d, firstSN=%d, currentSN=%d, interval=%v\n", gid, seg.FirstSN(), currentSN, o.proposeEvery)
 			for {
 				select {
 				case <-stopCh:
 					return
 				case <-t.C:
+					if gid == 0 {
+						fmt.Printf("[MPX][TICK-G0] sn=%d tick received for group 0\n", currentSN)
+					}
 					if currentSN > seg.LastSN() {
 						continue
 					}

@@ -344,7 +344,7 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	}
 	
 	// ✅ FIX: Adiciona diretamente ao bucket 0 ao invés de broadcast
-	fmt.Printf("[GSN-REQ][ADD] Adding GSN request reqID=%d directly to bucket 0\n", reqID)
+	fmt.Printf("[GSN-REQ][ADD] Adding GSN request reqID=%d directly to bucket 0 (clientId=%d clientSn=%d)\n", reqID, membership.OwnID, clientSn)
 	request.AddReqMsg(gsnReq)
 	fmt.Printf("[GSN-REQ][ADDED] reqID=%d added to bucket, waiting for response...\n", reqID)
 	
