@@ -237,10 +237,10 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:      randomRequestPayload,
-		Signature:    nil,
-		GroupId:      1, // Default to group 1 for single-group requests
-		TouchedGroups: []uint32{1}, // Single-group request
+		Payload:   randomRequestPayload,
+		Signature: nil,
+		GroupId:   1, // Default to group 1 for single-group requests
+		// TouchedGroups will be set by the proxy/preprocessor
 	}
 
 	var err error
