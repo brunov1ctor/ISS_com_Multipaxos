@@ -59,8 +59,12 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 // HandleRequest processa request do cliente
 // Orderers específicos podem injetar lógica customizada via callbacks
 func HandleRequest(req *pb.ClientRequest) {
-	fmt.Printf("[HANDLE-REQ] Received clientId=%d clientSn=%d groupId=%d\n", 
-		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId)
+	payloadPreview := req.Payload
+	if len(payloadPreview) > 50 {
+		payloadPreview = payloadPreview[:50]
+	}
+	fmt.Printf("[HANDLE-REQ][ENTRY] clientId=%d clientSn=%d groupId=%d payload=%s\n", 
+		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, string(payloadPreview))
 	
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
 	
