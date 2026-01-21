@@ -725,13 +725,22 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 		return []int32{config.Config.CrossOpProxyNodeID}
 	}
 	
-	// Single-group: usa bucket assignment normal
-	b := int(request.GetBucketNr(req))
+	// Calculate bucket using same hash as server: (clientId + clientSn) % maxBucketID+1
+	b := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(c.maxBucketID+1))
+	fmt.Printf("[GUESS-TARGET] clSn=%d bucket=%d maxBucket=%d\n", req.RequestId.ClientSn, b, c.maxBucketID)
 	
 	owner, ok := c.currentBucketAssignment[b]
 	if !ok {
-		owner = c.currentBucketAssignment[0]
+		fmt.Printf("[GUESS-TARGET][WARN] clSn=%d bucket=%d NOT FOUND, trying modulo fallback\n", req.RequestId.ClientSn, b)
+		// Fallback: try bucket 0
+		owner, ok = c.currentBucketAssignment[0]
+		if !ok {
+			// Last resort: send to all orderers
+			fmt.Printf("[GUESS-TARGET][ERROR] No bucket assignment found, sending to all\n")
+			return membership.AllNodeIDs()
+		}
 	}
+	fmt.Printf("[GUESS-TARGET] clSn=%d bucket=%d -> orderer=%d\n", req.RequestId.ClientSn, b, owner)
 
 	return []int32{owner}
 }
