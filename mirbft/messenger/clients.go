@@ -66,7 +66,13 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 	var req *pb.ClientRequest
 
 	// Exchange a dummy request and a dummy response with the client.
+	fmt.Printf("[MESSENGER][HANDSHAKE] Starting handshake\n")
 	err = ms.performClientHandshake(srv)
+	if err != nil {
+		fmt.Printf("[MESSENGER][HANDSHAKE][ERROR] Handshake failed: %v\n", err)
+		return err
+	}
+	fmt.Printf("[MESSENGER][HANDSHAKE] Handshake completed, starting request loop\n")
 
 	// Call the handler for each request received from the client
 	for req, err = srv.Recv(); err == nil; req, err = srv.Recv() {
