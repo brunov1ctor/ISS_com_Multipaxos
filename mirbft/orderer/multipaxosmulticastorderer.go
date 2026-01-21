@@ -242,32 +242,6 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 	}
 }
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
-	// Trata GSNReqForward (líder do grupo 0)
-	if fwd := pm.GetGsnReqForward(); fwd != nil {
-		req := fwd.Req
-		if req == nil || req.RequestId == nil {
-			return
-		}
-		
-		// Chave única global (ClientId + ClientSn)
-		reqKey := makeGlobalRequestID(req.RequestId.ClientId, uint32(req.RequestId.ClientSn))
-		
-		// Verifica duplicata
-		o.seenGSNMu.Lock()
-		if o.seenGSNReq[reqKey] {
-			o.seenGSNMu.Unlock()
-			fmt.Printf("[GSN-FWD] Duplicate reqKey=%d, ignoring\n", reqKey)
-			return
-		}
-		o.seenGSNReq[reqKey] = true
-		o.seenGSNMu.Unlock()
-		
-		// Adiciona ao bucket do grupo 0
-		fmt.Printf("[GSN-FWD] Leader received forward reqKey=%d, adding to bucket\n", reqKey)
-		request.AddReqMsg(req)
-		return
-	}
-	
 	if missingEntry := pm.GetMissingEntry(); missingEntry != nil {
 		// SN intercalado: usa GroupId da request ao invés de mapear SN
 		var groupID uint32 = 0
@@ -352,8 +326,11 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	reqID := makeGlobalRequestID(membership.OwnID, clientSn)
 	respChan := make(chan uint64, 1)
 	
+	fmt.Printf("[GSN-REQ][START] nodeId=%d clientSn=%d reqID=%d\n", membership.OwnID, clientSn, reqID)
+	
 	o.gsnReqMu.Lock()
 	o.gsnRequestsPending[reqID] = respChan
+	fmt.Printf("[GSN-REQ][PENDING] reqID=%d registered, total pending=%d\n", reqID, len(o.gsnRequestsPending))
 	o.gsnReqMu.Unlock()
 	
 	gsnReq := &pb.ClientRequest{
@@ -366,38 +343,23 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		TouchedGroups: []uint32{0},
 	}
 	
-	// Broadcast para todos os nós do grupo 0
-	// Cada nó adiciona localmente, líder vai propor
-	fmt.Printf("[GSN-REQ] Broadcasting GSN request reqID=%d to all group 0 nodes\n", reqID)
-	group0Members := o.am.GetGroupMembers(0)
-	for _, nodeID := range group0Members {
-		if nodeID == membership.OwnID {
-			// Adiciona localmente
-			request.AddReqMsg(gsnReq)
-		} else {
-			// Envia para outros nós
-			pm := &pb.ProtocolMessage{
-				SenderId: membership.OwnID,
-				Sn:       0,
-				Msg: &pb.ProtocolMessage_GsnReqForward{
-					GsnReqForward: &pb.GSNReqForward{Req: gsnReq},
-				},
-			}
-			messenger.EnqueueMsg(pm, nodeID)
-		}
-	}
+	// ✅ FIX: Adiciona diretamente ao bucket 0 ao invés de broadcast
+	fmt.Printf("[GSN-REQ][ADD] Adding GSN request reqID=%d directly to bucket 0\n", reqID)
+	request.AddReqMsg(gsnReq)
+	fmt.Printf("[GSN-REQ][ADDED] reqID=%d added to bucket, waiting for response...\n", reqID)
 	
 	select {
 	case gsn := <-respChan:
-		fmt.Printf("[GSN-REQ] Received GSN=%d for reqID=%d\n", gsn, reqID)
+		fmt.Printf("[GSN-REQ][SUCCESS] Received GSN=%d for reqID=%d\n", gsn, reqID)
 		o.gsnReqMu.Lock()
 		delete(o.gsnRequestsPending, reqID)
 		o.gsnReqMu.Unlock()
 		return gsn
 	case <-time.After(10 * time.Second):
-		fmt.Printf("[GSN-REQ][ERROR] Timeout waiting for GSN reqID=%d\n", reqID)
+		fmt.Printf("[GSN-REQ][ERROR] Timeout waiting for GSN reqID=%d after 10s\n", reqID)
 		o.gsnReqMu.Lock()
 		delete(o.gsnRequestsPending, reqID)
+		fmt.Printf("[GSN-REQ][ERROR] Still pending: %d requests\n", len(o.gsnRequestsPending))
 		o.gsnReqMu.Unlock()
 		return 0
 	}
@@ -409,7 +371,8 @@ func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 	if len(payloadPreview) > 50 {
 		payloadPreview = payloadPreview[:50]
 	}
-	fmt.Printf("[GSN-SEQ] OnGroup0Commit called: groupId=%d payload=%s\n", req.GroupId, string(payloadPreview))
+	fmt.Printf("[GSN-SEQ][COMMIT] OnGroup0Commit called: clientId=%d clientSn=%d groupId=%d payload=%s\n", 
+		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, string(payloadPreview))
 	
 	// ✅ CORREÇÃO: Processa apenas requests do grupo 0 (sequenciador)
 	if req.GroupId != 0 {
@@ -422,7 +385,7 @@ func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 		// ✅ CORREÇÃO: Usa chave composta global do RequestId
 		reqID := makeGlobalRequestID(req.RequestId.ClientId, uint32(req.RequestId.ClientSn))
 		gsn := o.onGroup0Commit(reqID)
-		fmt.Printf("[GSN-SEQ] Group 0 committed GSN request %d -> GSN=%d (from proxy %d)\n", reqID, gsn, req.RequestId.ClientId)
+		fmt.Printf("[GSN-SEQ][GSN-ASSIGNED] reqID=%d -> GSN=%d (from proxy %d)\n", reqID, gsn, req.RequestId.ClientId)
 		return
 	}
 	
@@ -431,7 +394,7 @@ func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 		gsn := req.GSN
 		touchedGroups := req.TouchedGroups
 		o.RegisterGSNMetadata(gsn, touchedGroups)
-		fmt.Printf("[META-STREAM] Group 0 committed GSN %d -> groups %v (from proxy %d)\n", gsn, touchedGroups, req.RequestId.ClientId)
+		fmt.Printf("[META-STREAM][REGISTERED] GSN %d -> groups %v (from proxy %d)\n", gsn, touchedGroups, req.RequestId.ClientId)
 		return
 	}
 	
@@ -448,6 +411,7 @@ func (o *MultiPaxosMulticastOrderer) onGroup0Commit(reqID uint64) uint64 {
 	o.gsnMu.Lock()
 	gsn := o.nextGSN
 	o.nextGSN++
+	fmt.Printf("[GSN-SEQ][ASSIGN] reqID=%d assigned GSN=%d (nextGSN now=%d)\n", reqID, gsn, o.nextGSN)
 	o.gsnMu.Unlock()
 	
 	// ✅ ROBUSTEZ: Acorda apenas o canal correto com chave composta
@@ -455,18 +419,19 @@ func (o *MultiPaxosMulticastOrderer) onGroup0Commit(reqID uint64) uint64 {
 	respChan, exists := o.gsnRequestsPending[reqID]
 	if exists {
 		delete(o.gsnRequestsPending, reqID) // Remove imediatamente
+		fmt.Printf("[GSN-SEQ][FOUND] reqID=%d found in pending map, sending GSN=%d\n", reqID, gsn)
+	} else {
+		fmt.Printf("[GSN-SEQ][NOT-FOUND] reqID=%d NOT in pending map (possible duplicate or late)\n", reqID)
 	}
 	o.gsnReqMu.Unlock()
 	
 	if exists {
 		select {
 		case respChan <- gsn:
-			fmt.Printf("[GSN-SEQ] Delivered GSN %d to reqID %d\n", gsn, reqID)
+			fmt.Printf("[GSN-SEQ][DELIVERED] GSN %d delivered to reqID %d\n", gsn, reqID)
 		default:
 			fmt.Printf("[GSN-SEQ][WARN] Channel blocked for reqID %d\n", reqID)
 		}
-	} else {
-		fmt.Printf("[GSN-SEQ][WARN] No pending channel for reqID %d (possible duplicate)\n", reqID)
 	}
 	
 	return gsn
