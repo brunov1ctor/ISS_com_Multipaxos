@@ -423,11 +423,14 @@ func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestCl
 			c.Lock()
 			c.sentTimestamps[req.RequestId.ClientSn] = time.Now().UnixNano() / 1000 // In us
 			c.Unlock()
+			fmt.Printf("[CLIENT][SEND] Sending request clSn=%d to orderer=%d\n", req.RequestId.ClientSn, ordererID)
 			if err := clientStub.Send(req); err != nil {
 				c.log.Error().Err(err).
 					Int32("ordererId", ordererID).
 					Int32("clSeqNr", req.RequestId.ClientSn).
 					Msg("Failed sending request to ordering peer.")
+			} else {
+				fmt.Printf("[CLIENT][SEND-OK] Sent request clSn=%d to orderer=%d\n", req.RequestId.ClientSn, ordererID)
 			}
 		}
 
