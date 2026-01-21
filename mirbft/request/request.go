@@ -291,7 +291,7 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 	
 	// ✅ DEBUG: Log bucket assignment
 	bucketNr := GetBucketNr(reqMsg)
-	fmt.Printf("[ADD-REQ] Assigning to bucket=%d (groupId=%d)\n", bucketNr, reqMsg.GroupId)
+	fmt.Printf("[ADD-REQ] Assigning to bucket=%d (groupId=%d) numBuckets=%d\n", bucketNr, reqMsg.GroupId, len(Buckets))
 	
 	req := &Request{
 		Msg:      reqMsg,
@@ -342,6 +342,7 @@ func Add(req *Request) *Request {
 	// The request might be backlogged though by the Buffer
 	// (Note that the implementation of backlogging does not require a write lock on the buffer.).
 	if !req.Buffer.Add(req) {
+		fmt.Printf("[ADD][REJECT] clientId=%d clientSn=%d rejected by Buffer.Add (watermark)\n", req.Msg.RequestId.ClientId, req.Msg.RequestId.ClientSn)
 		return nil
 	}
 
