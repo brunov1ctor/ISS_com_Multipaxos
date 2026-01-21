@@ -75,6 +75,7 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 	fmt.Printf("[MESSENGER][HANDSHAKE] Handshake completed, starting request loop\n")
 
 	// Call the handler for each request received from the client
+	fmt.Printf("[MESSENGER][LOOP] Starting to receive requests...\n")
 	for req, err = srv.Recv(); err == nil; req, err = srv.Recv() {
 		fmt.Printf("[MESSENGER][RECV] Received request from client %d sn %d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
 		logger.Trace().
@@ -159,6 +160,7 @@ func (ms *messengerServer) performClientHandshake(srv pb.Messenger_RequestServer
 		logger.Error().Msg("Error receiving first (dummy) client request.")
 		return err
 	}
+	fmt.Printf("[MESSENGER][HANDSHAKE] Received dummy request: clientId=%d clientSn=%d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
 
 	// Save the connection to the client.
 	registerClientConnection(srv, req.RequestId.ClientId)
@@ -166,9 +168,13 @@ func (ms *messengerServer) performClientHandshake(srv pb.Messenger_RequestServer
 	// Send a dummy response to the client.
 	// This is not an actual response, and only serves as an acknowledgment to the client that the connection has
 	// been registered at the server.
-	return srv.Send(&pb.ClientResponse{
+	err := srv.Send(&pb.ClientResponse{
 		ClientSn: -1,
 	})
+	if err != nil {
+		fmt.Printf("[MESSENGER][HANDSHAKE][ERROR] Failed to send dummy response: %v\n", err)
+	}
+	return err
 }
 
 // Saves the client connection in clientConnections.
