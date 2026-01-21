@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/rs/zerolog"
 	logger "github.com/rs/zerolog/log"
@@ -76,7 +78,9 @@ func main() {
 	var srvWg sync.WaitGroup
 	srvWg.Add(1)
 	var cmdWg sync.WaitGroup
-	cmdWg.Add(1)
+	if len(cmds) > 0 {
+		cmdWg.Add(1)
+	}
 
 	// Sobe servidor gRPC de discovery.
 	grpcServer := grpc.NewServer()
@@ -88,38 +92,44 @@ func main() {
 	// Inicia goroutine que processa comandos recebidos (via tokenChannel).
 	tokenChan := masterSrv.ProcessCommands(&cmdWg)
 
-	// Alimenta o tokenChan com os comandos vindos da linha de comando.
-	for i := 0; i < len(cmds); i++ {
-		switch cmds[i] {
-		case "-":
-			logger.Info().Msg("Reading commands from stdin.")
-			readCommandsFromStdin(tokenChan)
+	if len(cmds) > 0 {
+		// Alimenta o tokenChan com os comandos vindos da linha de comando.
+		for i := 0; i < len(cmds); i++ {
+			switch cmds[i] {
+			case "-":
+				logger.Info().Msg("Reading commands from stdin.")
+				readCommandsFromStdin(tokenChan)
 
-		case "file":
-			// Esperamos mais um argumento com o nome do arquivo.
-			if i+1 >= len(cmds) {
-				logger.Error().Msg("Token 'file' sem nome de arquivo; ignorando.")
-				continue
+			case "file":
+				// Esperamos mais um argumento com o nome do arquivo.
+				if i+1 >= len(cmds) {
+					logger.Error().Msg("Token 'file' sem nome de arquivo; ignorando.")
+					continue
+				}
+				fileName := cmds[i+1]
+				logger.Info().Str("file", fileName).Msg("Processing command file.")
+				processCommandFile(fileName, tokenChan)
+				i++ // pula o nome do arquivo
+
+			default:
+				// Qualquer outro token é passado diretamente para o parser.
+				tokenChan <- cmds[i]
 			}
-			fileName := cmds[i+1]
-			logger.Info().Str("file", fileName).Msg("Processing command file.")
-			processCommandFile(fileName, tokenChan)
-			i++ // pula o nome do arquivo
-
-		default:
-			// Qualquer outro token é passado diretamente para o parser.
-			tokenChan <- cmds[i]
 		}
+		close(tokenChan)
+		cmdWg.Wait()
+		logger.Info().Msg("Initial commands processed.")
+	} else {
+		logger.Info().Msg("No initial commands (LEGACY mode).")
 	}
 
-	// Não vamos mais enviar comandos.
-	close(tokenChan)
+	// Aguarda sinal de término (SIGINT/SIGTERM) para shutdown limpo
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
 
-	// Espera o processamento de todos os comandos terminar.
-	cmdWg.Wait()
-
-	// Encerra o servidor gRPC e espera finalizar.
-	grpcServer.Stop()
+	logger.Info().Msg("Shutdown signal received. Stopping server...")
+	grpcServer.GracefulStop()
 	srvWg.Wait()
 
 	logger.Info().Msg("discoverymaster terminated cleanly.")
