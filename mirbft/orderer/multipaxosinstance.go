@@ -594,8 +594,10 @@ func (i *mpxInstance) ProposeIfDue() {
 		
 		if selectedReq != nil {
 			// Remove request selecionado
+			fmt.Printf("[DEBUG] sn=%d removing selected request from bucket\n", i.sn)
 			request.Buckets[i.bucketId].Remove([]*request.Request{selectedReq})
 			request.Buckets[i.bucketId].Unlock()
+			fmt.Printf("[DEBUG] sn=%d creating batch with selected request\n", i.sn)
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 			if i.bucketId == 0 {
 				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 SELECTED and REMOVED system/expected request from bucket\n", i.sn)
@@ -614,6 +616,7 @@ func (i *mpxInstance) ProposeIfDue() {
 			}
 		}
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
+			fmt.Printf("[DEBUG] sn=%d rb is nil or empty, creating empty batch\n", i.sn)
 			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
 			batchBytes, err := proto.Marshal(emptyBatch)
 			if err != nil {
@@ -630,9 +633,12 @@ func (i *mpxInstance) ProposeIfDue() {
 			i.lastDigest = sha256.Sum256(batchBytes)
 			fmt.Printf("[MPX][INST] sn=%d proposing EMPTY batch (no requests)\n", i.sn)
 		} else {
+			fmt.Printf("[DEBUG] sn=%d validating batch homogeneity\n", i.sn)
 			if !i.validateBatchHomogeneity(rb) {
+				fmt.Printf("[DEBUG] sn=%d batch validation FAILED, returning\n", i.sn)
 				return
 			}
+			fmt.Printf("[DEBUG] sn=%d batch validation OK, proceeding\n", i.sn)
 			batchMsg := rb.Message()
 			if len(batchMsg.Requests) > 0 && len(batchMsg.Requests[0].TouchedGroups) > 1 {
 				if len(batchMsg.Requests) != 1 {
