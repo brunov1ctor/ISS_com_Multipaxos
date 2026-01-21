@@ -47,9 +47,15 @@ var (
 // On first client request (that it considers dummy and doesn't process normally), performs a handshake with the
 // client. Submits all subsequent requests to the registered handler function.
 func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("[MESSENGER][PANIC] Request handler panicked: %v\n", r)
+		}
+	}()
 
 	// WARNING: If a simulate crash, the peer ignores all messages
 	if Crashed {
+		fmt.Printf("[MESSENGER][CRASHED] Peer is crashed, rejecting connection\n")
 		return nil
 	}
 
@@ -66,7 +72,7 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 	var req *pb.ClientRequest
 
 	// Exchange a dummy request and a dummy response with the client.
-	fmt.Printf("[MESSENGER][HANDSHAKE] Starting handshake\n")
+	fmt.Printf("[MESSENGER][HANDSHAKE] Starting handshake (ClientRequestHandler=%v)\n", ClientRequestHandler != nil)
 	err = ms.performClientHandshake(srv)
 	if err != nil {
 		fmt.Printf("[MESSENGER][HANDSHAKE][ERROR] Handshake failed: %v\n", err)
@@ -76,8 +82,11 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 
 	// Call the handler for each request received from the client
 	fmt.Printf("[MESSENGER][LOOP] Starting to receive requests...\n")
+	fmt.Printf("[MESSENGER][CONTEXT] Context error before loop: %v\n", srv.Context().Err())
+	reqCount := 0
 	for req, err = srv.Recv(); err == nil; req, err = srv.Recv() {
-		fmt.Printf("[MESSENGER][RECV] Received request from client %d sn %d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
+		reqCount++
+		fmt.Printf("[MESSENGER][RECV] Received request #%d from client %d sn %d\n", reqCount, req.RequestId.ClientId, req.RequestId.ClientSn)
 		logger.Trace().
 			Int32("clId", req.RequestId.ClientId).
 			Int32("clSn", req.RequestId.ClientSn).
@@ -91,6 +100,7 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 
 	// Log error message produced on termination of the above loop.
 	fmt.Printf("[MESSENGER][LOOP-END] Request loop ended with error: %v (address=%s)\n", err, p.Addr.String())
+	fmt.Printf("[MESSENGER][CONTEXT] Context error after loop: %v\n", srv.Context().Err())
 	logger.Info().Err(err).Str("address", p.Addr.String()).Msg("Connection terminated.")
 
 	// Send gRPC response message and close connection.
