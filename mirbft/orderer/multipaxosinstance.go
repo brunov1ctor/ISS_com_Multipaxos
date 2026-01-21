@@ -698,6 +698,13 @@ func (i *mpxInstance) ProposeIfDue() {
 	if !i.prepared {
 		if i.promiseCount < i.quorum {
 			fmt.Printf("[MPX][INST] sn=%d aguardando quorum de promises (%d/%d)\n", i.sn, i.promiseCount, i.quorum)
+			// ✅ CORREÇÃO: Devolver request ao bucket se não conseguir propor
+			if i.lastReqBatch != nil {
+				fmt.Printf("[MPX][INST] sn=%d returning batch to bucket (no quorum)\n", i.sn)
+				i.lastReqBatch.Resurrect()
+				i.lastReqBatch = nil
+				i.lastVal = nil
+			}
 			return
 		}
 		i.prepared = true
