@@ -720,6 +720,18 @@ func (c *client) newBucketsReady(epoch int32) *pb.BucketAssignment {
 }
 
 func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
+	// If request has no TouchedGroups, send to proxy for preprocessing
+	if len(req.TouchedGroups) == 0 {
+		// Send to proxy (orderer 0) for GSN assignment
+		if config.Config.CrossOpProxyNodeID >= 0 {
+			fmt.Printf("[GUESS-TARGET] clSn=%d NO TouchedGroups, sending to proxy=%d\n", req.RequestId.ClientSn, config.Config.CrossOpProxyNodeID)
+			return []int32{config.Config.CrossOpProxyNodeID}
+		}
+		// Fallback: send to orderer 0 if proxy not configured
+		fmt.Printf("[GUESS-TARGET] clSn=%d NO TouchedGroups, sending to orderer 0 (default proxy)\n", req.RequestId.ClientSn)
+		return []int32{0}
+	}
+	
 	// PROXY MODE: Cross-ops sempre vão para o proxy configurado
 	if config.Config.CrossOpProxyNodeID >= 0 && len(req.TouchedGroups) > 1 {
 		return []int32{config.Config.CrossOpProxyNodeID}
