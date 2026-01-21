@@ -102,7 +102,7 @@ fi
 
 # localizar traces
 shopt -s nullglob
-trc_files=("$exp_dir"/slave-*/*.trc "$exp_dir"/slave-*/*client*.trc "$exp_dir"/*client*.trc)
+trc_files=("$exp_dir"/slave-*/*.trc "$exp_dir"/*.trc)
 shopt -u nullglob
 
 if [[ ${#trc_files[@]} -eq 0 ]]; then
