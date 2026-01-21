@@ -595,8 +595,8 @@ func (i *mpxInstance) ProposeIfDue() {
 		if selectedReq != nil {
 			// Remove request selecionado
 			fmt.Printf("[DEBUG] sn=%d removing selected request from bucket\n", i.sn)
+			request.Buckets[i.bucketIndex].Unlock() // ← UNLOCK ANTES de remover
 			request.Buckets[i.bucketId].Remove([]*request.Request{selectedReq})
-			request.Buckets[i.bucketId].Unlock()
 			fmt.Printf("[DEBUG] sn=%d creating batch with selected request\n", i.sn)
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 			if i.bucketId == 0 {
