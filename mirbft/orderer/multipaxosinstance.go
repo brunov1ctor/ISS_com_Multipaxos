@@ -831,11 +831,13 @@ func (i *mpxInstance) isInGroup(nodeID int32) bool {
 
 // tracePropose - Registra evento de proposta no sistema de tracing
 func tracePropose(sn int32, size int) {
+	fmt.Printf("[TRACE] PROPOSE sn=%d size=%d\n", sn, size)
 	tracing.MainTrace.Event(tracing.PROPOSE, int64(sn), int64(size))
 }
 
 // traceCommit - Registra evento de commit no sistema de tracing
 func traceCommit(sn int32, size int) {
+	fmt.Printf("[TRACE] COMMIT sn=%d size=%d\n", sn, size)
 	tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(size))
 }
 // validateBatchHomogeneity - Valida que todas as requests no batch pertencem ao mesmo grupo
