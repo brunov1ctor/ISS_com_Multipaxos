@@ -76,7 +76,7 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 
 	// Call the handler for each request received from the client
 	for req, err = srv.Recv(); err == nil; req, err = srv.Recv() {
-		fmt.Printf("[MESSENGER] Received request from client %d sn %d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
+		fmt.Printf("[MESSENGER][RECV] Received request from client %d sn %d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
 		logger.Trace().
 			Int32("clId", req.RequestId.ClientId).
 			Int32("clSn", req.RequestId.ClientSn).
@@ -89,7 +89,7 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 	}
 
 	// Log error message produced on termination of the above loop.
-	// TODO: Implement graceful shutdown.
+	fmt.Printf("[MESSENGER][LOOP-END] Request loop ended with error: %v (address=%s)\n", err, p.Addr.String())
 	logger.Info().Err(err).Str("address", p.Addr.String()).Msg("Connection terminated.")
 
 	// Send gRPC response message and close connection.
