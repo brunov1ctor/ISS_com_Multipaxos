@@ -483,8 +483,10 @@ func (c *client) submitRequest(seqNr int32) {
 	var destIDs []int32
 	if c.currentBucketAssignment != nil {
 		destIDs = c.guessTargetOrderers(req)
+		fmt.Printf("[CLIENT][SUBMIT] clSn=%d using bucket assignment, destIDs=%v\n", seqNr, destIDs)
 	} else {
 		destIDs = membership.AllNodeIDs()
+		fmt.Printf("[CLIENT][SUBMIT] clSn=%d NO bucket assignment, sending to all: destIDs=%v\n", seqNr, destIDs)
 	}
 
 	// Initialize request-related data structures.
@@ -499,14 +501,17 @@ func (c *client) submitRequest(seqNr int32) {
 
 	c.trace.Event(tracing.REQ_SEND, int64(seqNr), 0)
 
+	fmt.Printf("[CLIENT][SUBMIT] clSn=%d sending to %d orderers\n", seqNr, len(destIDs))
 	// Send message to all orderers.
 	for _, ordererID := range destIDs {
 		if atomic.LoadInt32(&c.stop) != 0 {
 			return
 		}
 		if c.reqSinks[ordererID] != nil {
+			fmt.Printf("[CLIENT][ENQUEUE] clSn=%d enqueueing to orderer=%d\n", seqNr, ordererID)
 			_ = safeSendReq(c.reqSinks[ordererID], req)
 		} else {
+			fmt.Printf("[CLIENT][WARN] clSn=%d orderer=%d reqSink is nil!\n", seqNr, ordererID)
 			c.log.Warn().Int32("ordererId", ordererID).Msg("Not sending request to orderer. No connection established.")
 		}
 	}
