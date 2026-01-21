@@ -237,12 +237,12 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:   randomRequestPayload,
-		Signature: nil,
+		Payload:      randomRequestPayload,
+		Signature:    nil,
+		GroupId:      1, // Default to group 1 for single-group requests
+		TouchedGroups: []uint32{1}, // Single-group request
 	}
 
-	// TouchedGroups será definido pelo servidor (PreprocessRequest)
-	
 	var err error
 	if config.Config.SignRequests {
 		req.Signature, err = crypto.Sign(request.Digest(req), c.privKey)
