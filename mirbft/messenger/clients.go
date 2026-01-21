@@ -168,13 +168,13 @@ func (ms *messengerServer) performClientHandshake(srv pb.Messenger_RequestServer
 	// Send a dummy response to the client.
 	// This is not an actual response, and only serves as an acknowledgment to the client that the connection has
 	// been registered at the server.
-	err := srv.Send(&pb.ClientResponse{
+	sendErr := srv.Send(&pb.ClientResponse{
 		ClientSn: -1,
 	})
-	if err != nil {
-		fmt.Printf("[MESSENGER][HANDSHAKE][ERROR] Failed to send dummy response: %v\n", err)
+	if sendErr != nil {
+		fmt.Printf("[MESSENGER][HANDSHAKE][ERROR] Failed to send dummy response: %v\n", sendErr)
 	}
-	return err
+	return sendErr
 }
 
 // Saves the client connection in clientConnections.
