@@ -26,14 +26,14 @@ import (
 )
 
 // handlerThreadIndex normaliza índice do canal para evitar panic com ClientId negativo
-func handlerThreadIndex(clientID int32, threads int) int {
+// Distribui por clientSn para evitar hotspot quando há poucos clientes
+func handlerThreadIndex(clientID int32, clientSn int32, threads int) int {
 	if threads <= 0 {
 		return 0
 	}
-	if clientID < 0 {
-		return 0
-	}
-	return int(clientID) % threads
+	// Hash simples: combina clientId e clientSn para distribuir melhor
+	hash := uint32(clientID)*31 + uint32(clientSn)
+	return int(hash % uint32(threads))
 }
 
 // ForwardRequestToNodes envia request para nós específicos (usado para cross-op)
@@ -42,7 +42,7 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 		if nodeID == membership.OwnID {
 			// Local: adiciona ao bucket
 			if config.Config.RequestHandlerThreads > 0 {
-				idx := handlerThreadIndex(req.RequestId.ClientId, config.Config.RequestHandlerThreads)
+				idx := handlerThreadIndex(req.RequestId.ClientId, req.RequestId.ClientSn, config.Config.RequestHandlerThreads)
 				requestInputChannels[idx] <- req
 			} else {
 				AddReqMsg(req)
@@ -79,7 +79,7 @@ func HandleRequest(req *pb.ClientRequest) {
 	}
 	
 	if config.Config.RequestHandlerThreads > 0 {
-		idx := handlerThreadIndex(req.RequestId.ClientId, config.Config.RequestHandlerThreads)
+		idx := handlerThreadIndex(req.RequestId.ClientId, req.RequestId.ClientSn, config.Config.RequestHandlerThreads)
 		fmt.Printf("[HANDLE-REQ] Adding to input channel %d\n", idx)
 		requestInputChannels[idx] <- req
 	} else {
