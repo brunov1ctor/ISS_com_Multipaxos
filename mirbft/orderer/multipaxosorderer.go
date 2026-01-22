@@ -157,17 +157,13 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			members := o.am.GetGroupMembers(groupID)
 			if members != nil && len(members) > 0 {
 				for _, nodeID := range members {
-					if nodeID != membership.OwnID {
-						messenger.EnqueueMsg(pm, nodeID)
-					}
+					messenger.EnqueueMsg(pm, nodeID)  // ✅ Envia para TODOS incluindo si mesmo
 				}
 				return
 			}
 		}
 		for _, nid := range membership.AllNodeIDs() {
-			if nid != membership.OwnID {
-				messenger.EnqueueMsg(pm, nid)
-			}
+			messenger.EnqueueMsg(pm, nid)  // ✅ Envia para TODOS incluindo si mesmo
 		}
 	}
 	o.segmentChan = o.mgr.SubscribeOrderer()
