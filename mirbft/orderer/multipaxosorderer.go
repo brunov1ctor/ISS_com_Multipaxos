@@ -404,12 +404,13 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		
 		// Grupo 0 (sequencer): TODOS os nós podem propor (round-robin ou todos)
 		// Outros grupos: apenas líder processa
-		if groupId == 0 {
-			fmt.Printf("[MPX][SEQUENCER] Group 0: All nodes can propose (ownID=%d, leader=%d)\n", membership.OwnID, groupLeader)
-			// Grupo 0: todos os nós participam ativamente
-		} else if groupLeader != membership.OwnID {
+		if groupId != 0 && groupLeader != membership.OwnID {
 			// Outros grupos: apenas líder propõe
+			fmt.Printf("[MPX][SKIP] Group %d: not leader (leader=%d, ownID=%d)\n", groupId, groupLeader, membership.OwnID)
 			continue
+		}
+		if groupId == 0 {
+			fmt.Printf("[MPX][SEQUENCER] Group 0: Node %d will propose (leader=%d)\n", membership.OwnID, groupLeader)
 		}
 		var groupIdx int32 = -1
 		for idx, gid := range allGroupIDs {
