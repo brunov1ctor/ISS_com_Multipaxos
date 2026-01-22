@@ -357,8 +357,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	o.segMu.Unlock()
 	var groupsToProcess []uint32
 	if o.ownedGroupID != 0 {
-		groupsToProcess = []uint32{o.ownedGroupID}
-		fmt.Printf("[MPX] runSegment: processing only owned group %d\n", o.ownedGroupID)
+		// Processa grupo owned + grupo 0 (sequenciador)
+		groupsToProcess = []uint32{0, o.ownedGroupID}
+		fmt.Printf("[MPX] runSegment: processing group 0 (sequencer) + owned group %d\n", o.ownedGroupID)
 	} else {
 		// Modo standalone: processa todos os grupos
 		groupsToProcess = o.am.GetDefinedGroups()
