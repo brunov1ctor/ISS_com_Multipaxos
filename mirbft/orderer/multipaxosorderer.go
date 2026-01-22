@@ -436,7 +436,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		go func(gid uint32, gIdx int32, bIdx int32) {
 			t := time.NewTicker(o.proposeEvery)
 			defer t.Stop()
-			currentSN := seg.FirstSN() + gIdx
+			// ✅ FIX: currentSN já está correto no seg.FirstSN() (SN intercalado)
+			// Cada segmento já começa no SN correto para seu grupo
+			currentSN := seg.FirstSN()
 			fmt.Printf("[MPX][TICKER] Started ticker for group %d, firstSN=%d, currentSN=%d, interval=%v\n", gid, seg.FirstSN(), currentSN, o.proposeEvery)
 			for {
 				select {
@@ -509,41 +511,25 @@ func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 	if numGroups == 0 {
 		numGroups = 1
 	}
-	for groupIdx, groupID := range groupIDs {
-		if groupID != 0 && !o.am.IsMember(groupID, membership.OwnID) {
-			fmt.Printf("[MPX] Filling empty batches for group %d (not a member)\n", groupID)
-			currentSN := seg.FirstSN() + int32(groupIdx)
-			for currentSN <= seg.LastSN() {
-				if mirlog.GetEntry(currentSN) == nil {
-					emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
-					shouldRespond := false
-					entry := &mirlog.Entry{
-						Sn:            currentSN,
-						Batch:         emptyBatch,
-						Digest:        []byte{},
-						ShouldRespond: &shouldRespond,
-					}
-					mirlog.CommitEntry(entry)
-				}
-				currentSN += numGroups
-			}
-			continue
-		}
-		lastGroupSN := seg.FirstSN() + int32(groupIdx)
-		for lastGroupSN <= seg.LastSN() {
-			lastGroupSN += numGroups
-		}
-		lastGroupSN -= numGroups // Volta para o último válido
-		for mirlog.GetEntry(lastGroupSN) == nil {
-			time.Sleep(10 * time.Millisecond)
-		}
-		fmt.Printf("[MPX] Group %d completed segment (lastSN=%d)\n", groupID, lastGroupSN)
+	
+	// ✅ FIX: killSegment deve processar apenas o grupo deste segmento
+	// Cada segmento é específico para um grupo (SN intercalado)
+	// Não deve iterar sobre todos os grupos
+	
+	// Aguarda até que o último SN do segmento seja commitado
+	lastSN := seg.LastSN()
+	for mirlog.GetEntry(lastSN) == nil {
+		time.Sleep(10 * time.Millisecond)
 	}
+	fmt.Printf("[MPX] Segment completed (lastSN=%d)\n", lastSN)
+	
+	// Aguarda checkpoint se necessário
 	checkpoints := mirlog.Checkpoints()
 	currentCheckpoint := mirlog.GetCheckpoint()
 	for currentCheckpoint == nil || currentCheckpoint.Sn < seg.LastSN() {
 		currentCheckpoint = <-checkpoints
 	}
+	
 	o.instMu.Lock()
 	if seg.LastSN() > o.last {
 		atomic.StoreInt32(&o.last, seg.LastSN())
