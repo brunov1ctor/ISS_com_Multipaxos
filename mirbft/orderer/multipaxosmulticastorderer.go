@@ -657,8 +657,8 @@ func (o *MultiPaxosMulticastOrderer) Mcast(groups []uint32, msg []byte) error {
 	// Obtém GSN global único via grupo 0
 	gsn := o.GetNextGSN()
 	
-	// NãO publica META aqui - será publicado pelo proxy no requesthandler
-	// Evita duplicação quando múltiplas réplicas processam
+	// ✅ FIX: Publica META para evitar deadlock no ADeliver
+	o.PublishGSNMetadata(gsn, groups)
 	
 	// TouchedGroups sempre setado
 	if len(groups) == 0 {

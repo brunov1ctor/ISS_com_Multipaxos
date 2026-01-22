@@ -179,6 +179,7 @@ func main() {
 	wg.Add(5) // messenger, checkpointer, orderer, manager, responder
 
 	// Start the messaging subsystem.
+	messenger.InitRequestWorkerPool()
 	go messenger.Start(&wg)
 	messenger.Connect()
 	logger.Info().Msg("Connected to all peers.")

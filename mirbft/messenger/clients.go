@@ -41,7 +41,27 @@ var (
 	bucketAssignmentMsg  *pb.BucketAssignment
 
 	ClientRequestHandler func(msg *pb.ClientRequest)
+	
+	// Worker pool para processar requests sem bloquear Recv()
+	incomingReqCh chan *pb.ClientRequest
+	workerPoolSize = 16 // Pool fixo de workers
 )
+
+// InitRequestWorkerPool inicializa pool de workers para processar requests
+func InitRequestWorkerPool() {
+	incomingReqCh = make(chan *pb.ClientRequest, 65536)
+	
+	for i := 0; i < workerPoolSize; i++ {
+		go func(workerID int) {
+			for req := range incomingReqCh {
+				if ClientRequestHandler != nil {
+					ClientRequestHandler(req)
+				}
+			}
+		}(i)
+	}
+	logger.Info().Int("workers", workerPoolSize).Int("queueSize", 65536).Msg("Request worker pool initialized")
+}
 
 // Implementation of the gRPC Request service (multi-request-multi-response) used by ordering clients.
 // On first client request (that it considers dummy and doesn't process normally), performs a handshake with the
@@ -94,7 +114,15 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 		if ClientRequestHandler == nil {
 			fmt.Printf("[MESSENGER][ERROR] ClientRequestHandler is nil!\n")
 		} else {
-			ClientRequestHandler(req)
+			// Enfileira para worker pool (não-bloqueante)
+			select {
+			case incomingReqCh <- req:
+				// Enfileirado com sucesso
+			default:
+				// Fila cheia - drop com log
+				fmt.Printf("[MESSENGER][DROP] Queue full, dropping request clId=%d clSn=%d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
+				logger.Warn().Int32("clId", req.RequestId.ClientId).Int32("clSn", req.RequestId.ClientSn).Msg("Request queue full, dropping")
+			}
 		}
 	}
 
