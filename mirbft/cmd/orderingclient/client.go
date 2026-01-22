@@ -237,10 +237,10 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:   randomRequestPayload,
-		Signature: nil,
-		GroupId:   1, // Default to group 1 for single-group requests
-		// TouchedGroups will be set by the proxy/preprocessor
+		Payload:       randomRequestPayload,
+		Signature:     nil,
+		GroupId:       1,
+		TouchedGroups: []uint32{1}, // Single-group request touches group 1
 	}
 
 	var err error
@@ -418,19 +418,20 @@ func (c *client) sendRequests(ordererID int32, clientStub pb.Messenger_RequestCl
 	ch := make(chan *pb.ClientRequest, c.sendBufferSize)
 
 	go func() {
+		c.log.Info().Int32("ordererID", ordererID).Msg("[CLIENT] sendRequests goroutine started")
 		// Send requests as long as there are any.
 		for req := range ch {
 			c.Lock()
 			c.sentTimestamps[req.RequestId.ClientSn] = time.Now().UnixNano() / 1000 // In us
 			c.Unlock()
-			fmt.Printf("[CLIENT][SEND] Sending request clSn=%d to orderer=%d\n", req.RequestId.ClientSn, ordererID)
+			c.log.Info().Int32("clSn", req.RequestId.ClientSn).Int32("ordererID", ordererID).Msg("[CLIENT] Sending request")
 			if err := clientStub.Send(req); err != nil {
 				c.log.Error().Err(err).
 					Int32("ordererId", ordererID).
 					Int32("clSeqNr", req.RequestId.ClientSn).
 					Msg("Failed sending request to ordering peer.")
 			} else {
-				fmt.Printf("[CLIENT][SEND-OK] Sent request clSn=%d to orderer=%d\n", req.RequestId.ClientSn, ordererID)
+				c.log.Info().Int32("clSn", req.RequestId.ClientSn).Int32("ordererID", ordererID).Msg("[CLIENT] Sent request OK")
 			}
 		}
 
@@ -483,10 +484,10 @@ func (c *client) submitRequest(seqNr int32) {
 	var destIDs []int32
 	if c.currentBucketAssignment != nil {
 		destIDs = c.guessTargetOrderers(req)
-		fmt.Printf("[CLIENT][SUBMIT] clSn=%d using bucket assignment, destIDs=%v\n", seqNr, destIDs)
+		c.log.Info().Int32("clSn", seqNr).Interface("destIDs", destIDs).Msg("[CLIENT] Using bucket assignment")
 	} else {
 		destIDs = membership.AllNodeIDs()
-		fmt.Printf("[CLIENT][SUBMIT] clSn=%d NO bucket assignment, sending to all: destIDs=%v\n", seqNr, destIDs)
+		c.log.Info().Int32("clSn", seqNr).Interface("destIDs", destIDs).Msg("[CLIENT] NO bucket assignment, sending to all")
 	}
 
 	// Initialize request-related data structures.
@@ -501,18 +502,17 @@ func (c *client) submitRequest(seqNr int32) {
 
 	c.trace.Event(tracing.REQ_SEND, int64(seqNr), 0)
 
-	fmt.Printf("[CLIENT][SUBMIT] clSn=%d sending to %d orderers\n", seqNr, len(destIDs))
+	c.log.Info().Int32("clSn", seqNr).Int("numDest", len(destIDs)).Msg("[CLIENT] Sending to orderers")
 	// Send message to all orderers.
 	for _, ordererID := range destIDs {
 		if atomic.LoadInt32(&c.stop) != 0 {
 			return
 		}
 		if c.reqSinks[ordererID] != nil {
-			fmt.Printf("[CLIENT][ENQUEUE] clSn=%d enqueueing to orderer=%d\n", seqNr, ordererID)
+			c.log.Info().Int32("clSn", seqNr).Int32("ordererID", ordererID).Msg("[CLIENT] Enqueueing to orderer")
 			_ = safeSendReq(c.reqSinks[ordererID], req)
 		} else {
-			fmt.Printf("[CLIENT][WARN] clSn=%d orderer=%d reqSink is nil!\n", seqNr, ordererID)
-			c.log.Warn().Int32("ordererId", ordererID).Msg("Not sending request to orderer. No connection established.")
+			c.log.Warn().Int32("clSn", seqNr).Int32("ordererID", ordererID).Msg("[CLIENT] reqSink is nil!")
 		}
 	}
 
@@ -724,11 +724,11 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 	if len(req.TouchedGroups) == 0 {
 		// Send to proxy (orderer 0) for GSN assignment
 		if config.Config.CrossOpProxyNodeID >= 0 {
-			fmt.Printf("[GUESS-TARGET] clSn=%d NO TouchedGroups, sending to proxy=%d\n", req.RequestId.ClientSn, config.Config.CrossOpProxyNodeID)
+			c.log.Info().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", config.Config.CrossOpProxyNodeID).Msg("NO TouchedGroups, sending to proxy")
 			return []int32{config.Config.CrossOpProxyNodeID}
 		}
 		// Fallback: send to orderer 0 if proxy not configured
-		fmt.Printf("[GUESS-TARGET] clSn=%d NO TouchedGroups, sending to orderer 0 (default proxy)\n", req.RequestId.ClientSn)
+		c.log.Info().Int32("clSn", req.RequestId.ClientSn).Msg("NO TouchedGroups, sending to orderer 0 (default proxy)")
 		return []int32{0}
 	}
 	
@@ -739,20 +739,20 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 	
 	// Calculate bucket using same hash as server: (clientId + clientSn) % maxBucketID+1
 	b := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(c.maxBucketID+1))
-	fmt.Printf("[GUESS-TARGET] clSn=%d bucket=%d maxBucket=%d\n", req.RequestId.ClientSn, b, c.maxBucketID)
+	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int("bucket", b).Int("maxBucket", c.maxBucketID).Msg("Calculated bucket")
 	
 	owner, ok := c.currentBucketAssignment[b]
 	if !ok {
-		fmt.Printf("[GUESS-TARGET][WARN] clSn=%d bucket=%d NOT FOUND, trying modulo fallback\n", req.RequestId.ClientSn, b)
+		c.log.Warn().Int32("clSn", req.RequestId.ClientSn).Int("bucket", b).Msg("Bucket NOT FOUND, trying fallback")
 		// Fallback: try bucket 0
 		owner, ok = c.currentBucketAssignment[0]
 		if !ok {
 			// Last resort: send to all orderers
-			fmt.Printf("[GUESS-TARGET][ERROR] No bucket assignment found, sending to all\n")
+			c.log.Error().Msg("No bucket assignment found, sending to all")
 			return membership.AllNodeIDs()
 		}
 	}
-	fmt.Printf("[GUESS-TARGET] clSn=%d bucket=%d -> orderer=%d\n", req.RequestId.ClientSn, b, owner)
+	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int("bucket", b).Int32("orderer", owner).Msg("Bucket -> orderer")
 
 	return []int32{owner}
 }
