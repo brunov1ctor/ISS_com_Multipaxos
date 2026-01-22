@@ -355,21 +355,13 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	stopCh := make(chan struct{})
 	o.currentSegCancel = func() { close(stopCh) }
 	o.segMu.Unlock()
-	var groupsToProcess []uint32
-	if o.ownedGroupID != 0 {
-		// Processa grupo owned + grupo 0 (sequenciador)
-		groupsToProcess = []uint32{0, o.ownedGroupID}
-		fmt.Printf("[MPX] runSegment: processing group 0 (sequencer) + owned group %d\n", o.ownedGroupID)
-	} else {
-		// Modo standalone: processa todos os grupos
-		groupsToProcess = o.am.GetDefinedGroups()
-		if len(groupsToProcess) == 0 {
-			groupsToProcess = []uint32{0}
-		}
-		fmt.Printf("[MPX] runSegment: processing groups %v (ownedGroupID=%d)\n", groupsToProcess, o.ownedGroupID)
-	}
+	
+	// ✅ FIX: Determina qual grupo este segmento pertence baseado no firstSN
 	allGroupIDs := o.am.GetDefinedGroups()
-	// Garante que grupo 0 está sempre incluído
+	if len(allGroupIDs) == 0 {
+		allGroupIDs = []uint32{0}
+	}
+	// Garante grupo 0 está incluído
 	hasGroup0 := false
 	for _, gid := range allGroupIDs {
 		if gid == 0 {
@@ -378,16 +370,39 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		}
 	}
 	if !hasGroup0 {
-		// Adiciona grupo 0 no início
 		allGroupIDs = append([]uint32{0}, allGroupIDs...)
 	}
-	if len(allGroupIDs) == 0 {
-		allGroupIDs = []uint32{0}
-	}
+	
+	// Identifica grupo do segmento pelo firstSN (SN intercalado)
+	firstSN := seg.FirstSN()
 	numGroups := int32(len(allGroupIDs))
 	if numGroups == 0 {
 		numGroups = 1
 	}
+	segmentGroupIdx := firstSN % numGroups
+	if segmentGroupIdx < 0 || segmentGroupIdx >= int32(len(allGroupIDs)) {
+		fmt.Printf("[MPX] Invalid segment groupIdx=%d for firstSN=%d, skipping\n", segmentGroupIdx, firstSN)
+		return
+	}
+	segmentGroupID := allGroupIDs[segmentGroupIdx]
+	fmt.Printf("[MPX] runSegment: firstSN=%d belongs to group %d (idx=%d of %d groups)\n", firstSN, segmentGroupID, segmentGroupIdx, numGroups)
+	
+	var groupsToProcess []uint32
+	if o.ownedGroupID != 0 {
+		// Modo multicast: processa apenas se for grupo owned ou grupo 0
+		if segmentGroupID == o.ownedGroupID || segmentGroupID == 0 {
+			groupsToProcess = []uint32{segmentGroupID}
+			fmt.Printf("[MPX] runSegment: processing segment for group %d (owned=%d)\n", segmentGroupID, o.ownedGroupID)
+		} else {
+			fmt.Printf("[MPX] runSegment: skipping segment for group %d (owned=%d)\n", segmentGroupID, o.ownedGroupID)
+			return
+		}
+	} else {
+		// Modo standalone: processa apenas o grupo deste segmento
+		groupsToProcess = []uint32{segmentGroupID}
+		fmt.Printf("[MPX] runSegment: processing segment for group %d (standalone mode)\n", segmentGroupID)
+	}
+	
 	for _, groupId := range groupsToProcess {
 		members := o.am.GetGroupMembers(groupId)
 		if members == nil {
@@ -412,16 +427,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		if groupId == 0 {
 			fmt.Printf("[MPX][SEQUENCER] Group 0: Node %d will propose (leader=%d)\n", membership.OwnID, groupLeader)
 		}
-		var groupIdx int32 = -1
-		for idx, gid := range allGroupIDs {
-			if gid == groupId {
-				groupIdx = int32(idx)
-				break
-			}
-		}
-		if groupIdx < 0 {
-			continue
-		}
+		var groupIdx int32 = segmentGroupIdx
 		// Calculate bucketIndex: for data groups, exclude group 0 from count
 		var bucketIdx int32
 		if groupId == 0 {
