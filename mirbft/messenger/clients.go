@@ -53,9 +53,13 @@ func InitRequestWorkerPool() {
 	
 	for i := 0; i < workerPoolSize; i++ {
 		go func(workerID int) {
+			fmt.Printf("[WORKER][%d] Started, handler=%v\n", workerID, ClientRequestHandler != nil)
 			for req := range incomingReqCh {
+				fmt.Printf("[WORKER][%d] Processing req clId=%d clSn=%d, handler=%v\n", workerID, req.RequestId.ClientId, req.RequestId.ClientSn, ClientRequestHandler != nil)
 				if ClientRequestHandler != nil {
 					ClientRequestHandler(req)
+				} else {
+					fmt.Printf("[WORKER][%d] Handler is nil, dropping req\n", workerID)
 				}
 			}
 		}(i)
