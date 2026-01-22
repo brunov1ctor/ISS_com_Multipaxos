@@ -422,7 +422,18 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		if groupIdx < 0 {
 			continue
 		}
-		go func(gid uint32, gIdx int32) {
+		// Calculate bucketIndex: for data groups, exclude group 0 from count
+		var bucketIdx int32
+		if groupId == 0 {
+			bucketIdx = 0 // Group 0 uses bucket 0
+		} else {
+			// For data groups, bucketIndex is position in data groups only
+			bucketIdx = groupIdx
+			if allGroupIDs[0] == 0 {
+				bucketIdx-- // Subtract 1 if group 0 is in the list
+			}
+		}
+		go func(gid uint32, gIdx int32, bIdx int32) {
 			t := time.NewTicker(o.proposeEvery)
 			defer t.Stop()
 			currentSN := seg.FirstSN() + gIdx
@@ -448,7 +459,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						inst = o.ensureInstance(currentSN)
 						inst.setSegment(seg)
 						inst.bucketId = gid
-						inst.bucketIndex = gIdx
+						inst.bucketIndex = bIdx
 						inst.SetMembers(members)
 						o.dispatcher.store(currentSN, inst)
 						inst.startWorkers(&o.stopWg)
@@ -486,7 +497,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst.ProposeIfDue()
 				}
 			}
-		}(groupId, groupIdx)
+		}(groupId, groupIdx, bucketIdx)
 	}
 }
 func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
