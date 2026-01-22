@@ -179,7 +179,7 @@ func (o *MultiPaxosMulticastOrderer) createGroupOrderers(mngr manager.Manager) {
 	for _, gid := range groupIDs {
 		groupOrderer := &MultiPaxosOrderer{}
 		groupOrderer.am = o.am
-		groupOrderer.ownedGroupID = gid
+		groupOrderer.ownedGroupID = 0 // Standalone mode: all orderers process all groups
 		groupOrderer.skipHandlerRegistration = true // Não registra handler global
 		// SN intercalado: cada grupo começa do seu slot no espaço global
 		groupOrderer.Init(mngr)
