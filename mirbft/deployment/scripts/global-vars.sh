@@ -87,7 +87,7 @@ remote_runtime_config_dir="${remote_runtime_config_dir:-$remote_base_dir/config}
 remote_tls_directory="${remote_tls_directory:-$remote_base_dir/tls-data}"
 
 # binários no cluster:
-remote_bin_dir="${remote_bin_dir:-/users/${remote_user}/go/bin}"
+remote_bin_dir="${remote_bin_dir:-${remote_work_dir}/bin}"
 
 # output pesado no cluster
 remote_experiment_output_dir="${remote_experiment_output_dir:-$remote_work_dir/experiment-output}"
