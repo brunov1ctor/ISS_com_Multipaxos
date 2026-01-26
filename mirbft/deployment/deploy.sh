@@ -281,3 +281,8 @@ export instance_info_file
 
 bash "$deploy_dir/scripts/deploy-remote.sh"
 
+echo "Generating result summary."
+scripts/analyze/summarize.sh $exp_data_dir/$csv_filename $exp_data_dir/experiment-output 2> /dev/null | tee $exp_data_dir/$result_summary_file
+
+echo "Done. Experiment data directory: $exp_data_dir"
+
