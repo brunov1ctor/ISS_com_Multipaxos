@@ -361,9 +361,12 @@ start_remote_slave() {
   # Comando remoto: dispara start-slave.sh em background via nohup
   # Logs vão para ${remote_work_dir}/logs/start-slave-${instance_id}.log
   local remote_cmd="
+    export remote_bin_dir='${remote_bin_dir}'
+    export remote_work_dir='${remote_work_dir}'
+    export remote_base_dir='${remote_base_dir}'
     cd '${remote_work_dir}'
     echo '[start-remote-slaves] Disparando slave ${instance_id} (tag=${tag}) em ${ctrl_ip}...' >> '${remote_work_dir}/logs/start-remote-slaves-${instance_id}.log'
-    /usr/bin/nohup '${remote_work_dir}/scripts/start-slave.sh' '${tag}' '${_master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \
+    bash '${remote_work_dir}/scripts/start-slave.sh' '${tag}' '${_master_ip}' '${ctrl_ip}' '${data_ip}' '${remote_exp_dir}' \
       >> '${remote_work_dir}/logs/start-slave-${instance_id}.log' 2>&1 < /dev/null &
     echo STARTED
   "
