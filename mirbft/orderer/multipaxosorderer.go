@@ -363,7 +363,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	
 	var groupsToProcess []uint32
 	if o.ownedGroupID != 0 {
-		// ✅ FIX: Processa apenas se for o grupo owned (sem exceção para grupo 0)
+		// Modo multicast dedicado: processa apenas grupo owned
 		if segmentGroupID == o.ownedGroupID {
 			groupsToProcess = []uint32{segmentGroupID}
 			fmt.Printf("[MPX] runSegment: processing segment for group %d (owned=%d)\n", segmentGroupID, o.ownedGroupID)
@@ -372,9 +372,14 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			return
 		}
 	} else {
-		// Modo standalone: processa apenas o grupo deste segmento
-		groupsToProcess = []uint32{segmentGroupID}
-		fmt.Printf("[MPX] runSegment: processing segment for group %d (standalone mode)\n", segmentGroupID)
+		// ✅ FIX: Modo standalone - processa segmento se for membro do grupo
+		if segmentGroupID == 0 || o.am.IsMember(segmentGroupID, membership.OwnID) {
+			groupsToProcess = []uint32{segmentGroupID}
+			fmt.Printf("[MPX] runSegment: processing segment for group %d (standalone, member)\n", segmentGroupID)
+		} else {
+			fmt.Printf("[MPX] runSegment: skipping segment for group %d (not a member)\n", segmentGroupID)
+			return
+		}
 	}
 	
 	for _, groupId := range groupsToProcess {
