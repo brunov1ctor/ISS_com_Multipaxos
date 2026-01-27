@@ -37,10 +37,15 @@ func handlerThreadIndex(clientID int32, clientSn int32, threads int) int {
 }
 
 // ForwardRequestToNodes envia request para nós específicos (usado para cross-op)
+// ✅ CORREÇÃO: Usa conexões gRPC existentes (mesma infraestrutura do client)
 func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
+	fmt.Printf("[FORWARD] Sending request clientId=%d clientSn=%d to nodes %v\n", 
+		req.RequestId.ClientId, req.RequestId.ClientSn, nodeIDs)
+	
 	for _, nodeID := range nodeIDs {
 		if nodeID == membership.OwnID {
 			// Local: adiciona ao bucket
+			fmt.Printf("[FORWARD] Local node %d: adding to bucket\n", nodeID)
 			if config.Config.RequestHandlerThreads > 0 {
 				idx := handlerThreadIndex(req.RequestId.ClientId, req.RequestId.ClientSn, config.Config.RequestHandlerThreads)
 				requestInputChannels[idx] <- req
@@ -48,9 +53,10 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 				AddReqMsg(req)
 			}
 		} else {
-			// Remoto: usa ClientRequestHandler diretamente
-			if messenger.ClientRequestHandler != nil {
-				messenger.ClientRequestHandler(req)
+			// ✅ CORREÇÃO: Envia via gRPC usando infraestrutura existente
+			fmt.Printf("[FORWARD] Remote node %d: sending via gRPC\n", nodeID)
+			if err := messenger.SendRequestToPeer(req, nodeID); err != nil {
+				fmt.Printf("[FORWARD][ERROR] Failed to send to node %d: %v\n", nodeID, err)
 			}
 		}
 	}

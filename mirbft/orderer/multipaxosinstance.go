@@ -189,20 +189,29 @@ func (i *mpxInstance) startWorkers(_ *sync.WaitGroup) {
 }
 func (i *mpxInstance) stopWorkers() {
 	i.mu.Lock()
+	defer i.mu.Unlock()
 	select {
 	case <-i.stopCh:
+		// Already closed
 	default:
 		close(i.stopCh)
 		close(i.msgCh)
 	}
-	i.mu.Unlock()
 	i.wg.Wait()
 }
 func (i *mpxInstance) enqueue(pm *pb.ProtocolMessage) {
 	select {
+	case <-i.stopCh:
+		return
 	case i.msgCh <- pm:
 	default:
-		go func() { i.msgCh <- pm }()
+		go func() {
+			select {
+			case <-i.stopCh:
+				return
+			case i.msgCh <- pm:
+			}
+		}()
 	}
 }
 func (i *mpxInstance) isClosed() bool {
@@ -564,7 +573,8 @@ func (i *mpxInstance) ProposeIfDue() {
 			expectedGSN = 1 // Fallback se não há multicast orderer
 		}
 		
-		request.Buckets[i.bucketIndex].Lock()
+		// ✅ CORREÇÃO: Usa bucketId consistentemente (não bucketIndex)
+		request.Buckets[i.bucketId].Lock()
 		
 		// Grupo 0 prioriza requests sistêmicas (GSN_REQUEST, META_STREAM)
 		var selectedReq *request.Request
@@ -593,10 +603,10 @@ func (i *mpxInstance) ProposeIfDue() {
 		}
 		
 		if selectedReq != nil {
-			// Remove request selecionado
-			fmt.Printf("[DEBUG] sn=%d removing selected request from bucket\n", i.sn)
-			request.Buckets[i.bucketIndex].Unlock() // ← UNLOCK ANTES de remover
-			request.Buckets[i.bucketId].Remove([]*request.Request{selectedReq})
+			// ✅ FIX: Remove dentro do mesmo lock para evitar race condition
+			fmt.Printf("[DEBUG] sn=%d removing selected request from bucket (within lock)\n", i.sn)
+			request.Buckets[i.bucketId].RemoveNoLock([]*request.Request{selectedReq})
+			request.Buckets[i.bucketId].Unlock()
 			fmt.Printf("[DEBUG] sn=%d creating batch with selected request\n", i.sn)
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 			if i.bucketId == 0 {
@@ -607,7 +617,7 @@ func (i *mpxInstance) ProposeIfDue() {
 			}
 		} else {
 			// Sem request adequado: propõe batch vazio
-			request.Buckets[i.bucketIndex].Unlock()
+			request.Buckets[i.bucketId].Unlock()
 			if i.bucketId == 0 {
 				fmt.Printf("[SYSTEM-PRIORITY][WARN] sn=%d group=0 NO system requests found, bucket is empty or has no system requests\n", i.sn)
 			} else {

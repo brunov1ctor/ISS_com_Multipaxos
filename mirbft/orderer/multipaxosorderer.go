@@ -226,19 +226,12 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		}
 		announcer.Announce(entry)
 		
-		// ✅ LIVENESS: Conecta callback de liveness
-		if GlobalMulticastOrderer != nil {
-			request.SetRequestReceivedMarker(GlobalMulticastOrderer.MarkRequestReceived)
-			request.SetRequestCacher(GlobalMulticastOrderer.CacheRequest)
-		}
-		
 		if o.ownedGroupID == 0 && len(b.Requests) > 0 {
 			for _, req := range b.Requests {
-				if isGSNRequest(req) && GlobalMulticastOrderer != nil {
-					GlobalMulticastOrderer.OnGroup0Commit(req)
-				} else if isMETAStream(req) && GlobalMulticastOrderer != nil {
-					// META stream: GSN metadata
-					GlobalMulticastOrderer.OnGroup0Commit(req)
+				if isGSNRequest(req) && GetGlobalMulticastOrderer() != nil {
+					GetGlobalMulticastOrderer().OnGroup0Commit(req)
+				} else if isMETAStream(req) && GetGlobalMulticastOrderer() != nil {
+					GetGlobalMulticastOrderer().OnGroup0Commit(req)
 				}
 			}
 		}
@@ -305,15 +298,9 @@ func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		// Seta bucketId e bucketIndex baseado na mensagem
 		if mpx != nil {
 			inst.bucketId = groupID
-			// Calcula bucketIndex baseado no groupID
-			allGroupIDs := o.am.GetDefinedGroups()
-			for idx, gid := range allGroupIDs {
-				if gid == groupID {
-					inst.bucketIndex = int32(idx)
-					fmt.Printf("[MPX][INST] sn=%d set bucketId=%d bucketIndex=%d from message\n", sn, groupID, idx)
-					break
-				}
-			}
+			// ✅ FIX: bucketIndex = groupId (not array position)
+			inst.bucketIndex = int32(groupID)
+			fmt.Printf("[MPX][INST] sn=%d set bucketId=%d bucketIndex=%d from message\n", sn, groupID, int32(groupID))
 		}
 		o.dispatcher.store(sn, inst)
 		inst.startWorkers(&o.stopWg)
@@ -352,20 +339,12 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	o.currentSegCancel = func() { close(stopCh) }
 	o.segMu.Unlock()
 	
-	// ✅ FIX: Determina qual grupo este segmento pertence baseado no firstSN
+	// ✅ FIX: Obtém lista ordenada de grupos (sempre inclui grupo 0)
 	allGroupIDs := o.am.GetDefinedGroups()
 	if len(allGroupIDs) == 0 {
 		allGroupIDs = []uint32{0}
-	}
-	// Garante grupo 0 está incluído
-	hasGroup0 := false
-	for _, gid := range allGroupIDs {
-		if gid == 0 {
-			hasGroup0 = true
-			break
-		}
-	}
-	if !hasGroup0 {
+	} else if allGroupIDs[0] != 0 {
+		// Garante grupo 0 no início se não estiver
 		allGroupIDs = append([]uint32{0}, allGroupIDs...)
 	}
 	
@@ -385,8 +364,8 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	
 	var groupsToProcess []uint32
 	if o.ownedGroupID != 0 {
-		// Modo multicast: processa apenas se for grupo owned ou grupo 0
-		if segmentGroupID == o.ownedGroupID || segmentGroupID == 0 {
+		// ✅ FIX: Processa apenas se for o grupo owned (sem exceção para grupo 0)
+		if segmentGroupID == o.ownedGroupID {
 			groupsToProcess = []uint32{segmentGroupID}
 			fmt.Printf("[MPX] runSegment: processing segment for group %d (owned=%d)\n", segmentGroupID, o.ownedGroupID)
 		} else {
@@ -419,17 +398,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			continue
 		}
 		var groupIdx int32 = segmentGroupIdx
-		// Calculate bucketIndex: for data groups, exclude group 0 from count
-		var bucketIdx int32
-		if groupId == 0 {
-			bucketIdx = 0 // Group 0 uses bucket 0
-		} else {
-			// For data groups, bucketIndex is position in data groups only
-			bucketIdx = groupIdx
-			if allGroupIDs[0] == 0 {
-				bucketIdx-- // Subtract 1 if group 0 is in the list
-			}
-		}
+		// Calculate bucketIndex: must match GroupId for correct bucket locking
+		// ✅ FIX: bucketIndex = groupId (not array position)
+		var bucketIdx int32 = int32(groupId)
 		go func(gid uint32, gIdx int32, bIdx int32) {
 			t := time.NewTicker(o.proposeEvery)
 			defer t.Stop()
@@ -486,9 +457,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						// Instância já existe, atualiza bucketIndex e bucketId se necessário
 						inst.mu.Lock()
 						if inst.bucketIndex < 0 {
-							inst.bucketIndex = gIdx
+							// ✅ FIX: bucketIndex = groupId (not array position)
+							inst.bucketIndex = int32(gid)
 							inst.bucketId = gid
-							fmt.Printf("[MPX][INST] sn=%d updated bucketIndex=%d bucketId=%d\n", currentSN, gIdx, gid)
+							fmt.Printf("[MPX][INST] sn=%d updated bucketIndex=%d bucketId=%d\n", currentSN, int32(gid), gid)
 						}
 						inst.mu.Unlock()
 					}
@@ -515,16 +487,29 @@ func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 	
 	// Aguarda até que o último SN do segmento seja commitado
 	lastSN := seg.LastSN()
+	timeout := time.After(30 * time.Second)
 	for mirlog.GetEntry(lastSN) == nil {
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-timeout:
+			logger.Warn().Int32("lastSN", lastSN).Msg("Timeout waiting for segment completion")
+			return
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	fmt.Printf("[MPX] Segment completed (lastSN=%d)\n", lastSN)
 	
 	// Aguarda checkpoint se necessário
 	checkpoints := mirlog.Checkpoints()
 	currentCheckpoint := mirlog.GetCheckpoint()
+	checkpointTimeout := time.After(60 * time.Second)
 	for currentCheckpoint == nil || currentCheckpoint.Sn < seg.LastSN() {
-		currentCheckpoint = <-checkpoints
+		select {
+		case currentCheckpoint = <-checkpoints:
+		case <-checkpointTimeout:
+			logger.Warn().Int32("lastSN", seg.LastSN()).Msg("Timeout waiting for checkpoint")
+			return
+		}
 	}
 	
 	o.instMu.Lock()

@@ -31,12 +31,14 @@ Garantias:
 package orderer
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"github.com/hyperledger-labs/mirbft/membership"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
+	logger "github.com/rs/zerolog/log"
 )
 const (
 	GROUP_GLOBAL = uint32(0)
@@ -48,8 +50,6 @@ type AtomicMulticast struct {
 	mu         sync.RWMutex                // Protege groups
 	groups     map[GroupID][]int32         // groupID -> lista de nós membros
 	sequencer  *MultiPaxosMulticastOrderer // Referência ao sequenciador GSN
-	delivered  map[uint32]map[uint64]bool  // grupo -> GSN -> já entregue?
-	deliveryMu sync.RWMutex                // Protege delivered
 }
 
 // GroupConfig - Estrutura para carregar configuração de grupos do YAML
@@ -58,8 +58,7 @@ type GroupConfig struct {
 }
 func NewAtomicMulticast() *AtomicMulticast {
 	am := &AtomicMulticast{
-		groups:     make(map[GroupID][]int32),
-		delivered:  make(map[uint32]map[uint64]bool),
+		groups: make(map[GroupID][]int32),
 	}
 	am.groups[0] = membership.AllNodeIDs()
 	return am
@@ -83,48 +82,10 @@ func (am *AtomicMulticast) AMulticast(req *pb.ClientRequest) error {
 	fmt.Printf("[AMCAST] Multicasting req gsn=%d to groups=%v\n", req.GSN, req.TouchedGroups)
 	return nil
 }
-func (am *AtomicMulticast) ADeliver(groupID uint32, req *pb.ClientRequest) bool {
-	// TODAS as requests têm GSN (ordem global)
-	gsn := req.GSN
-	if gsn == 0 {
-		fmt.Printf("[AMCAST][WARN] Request without GSN, rejecting\n")
-		return false
-	}
-	
-	// Verifica se este grupo é tocado pela request
-	touchesThisGroup := false
-	for _, gid := range req.TouchedGroups {
-		if gid == groupID {
-			touchesThisGroup = true
-			break
-		}
-	}
-	if !touchesThisGroup {
-		// Pula GSNs que não tocam este grupo (ordem global preservada)
-		fmt.Printf("[AMCAST] Skipping gsn=%d (doesn't touch group %d)\n", gsn, groupID)
-		return false
-	}
-	
-	// Verifica se já foi entregue neste grupo
-	am.deliveryMu.Lock()
-	if am.delivered[groupID] == nil {
-		am.delivered[groupID] = make(map[uint64]bool)
-	}
-	if am.delivered[groupID][gsn] {
-		am.deliveryMu.Unlock()
-		fmt.Printf("[AMCAST] Already delivered gsn=%d group=%d\n", gsn, groupID)
-		return false
-	}
-	am.delivered[groupID][gsn] = true
-	am.deliveryMu.Unlock()
-	
-	fmt.Printf("[AMCAST] Delivering gsn=%d to group=%d (global order)\n", gsn, groupID)
-	return true
-}
-func (am *AtomicMulticast) TryDeliverPending(groupID uint32) []*pb.ClientRequest {
-	// Sistema simplificado - sem pending complexo, apenas ordem GSN
-	return nil
-}
+
+// ✅ SIMPLIFICAÇÃO: AtomicMulticast mantida apenas para gerenciamento de grupos
+// Lógica de ADeliver está APENAS em MultiPaxosMulticastOrderer.ADeliver()
+// Não há ADeliver aqui para evitar duplicação de regras
 func (am *AtomicMulticast) DefineGroup(g GroupID, members ...int32) {
 	am.mu.Lock()
 	am.groups[g] = append([]int32{}, members...)
@@ -151,6 +112,7 @@ func (am *AtomicMulticast) GetDefinedGroups() []uint32 {
 	for gid := range am.groups {
 		groups = append(groups, uint32(gid))
 	}
+	// ✅ FIX: Ordenação determinística (grupo 0 sempre primeiro)
 	sort.Slice(groups, func(i, j int) bool { return groups[i] < groups[j] })
 	return groups
 }
@@ -167,9 +129,12 @@ func (am *AtomicMulticast) GetDataGroups() []uint32 {
 	return groups
 }
 func (am *AtomicMulticast) LoadGroupsFromYAML(filename string) error {
-	data, err := ioutil.ReadFile(filename)
+	if filename == "" {
+		return fmt.Errorf("filename cannot be empty")
+	}
+	data, err := ioutil.ReadFile(filepath.Clean(filename))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read file: %w", err)
 	}
 	var config GroupConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
@@ -198,24 +163,28 @@ func (am *AtomicMulticast) GetGroupLeader(g GroupID, segmentLeaders []int32) int
 	if members == nil || len(members) == 0 {
 		return -1
 	}
+	memberSet := make(map[int32]struct{}, len(members))
+	for _, member := range members {
+		memberSet[member] = struct{}{}
+	}
 	eligible := make([]int32, 0)
 	for _, leader := range segmentLeaders {
-		for _, member := range members {
-			if leader == member {
-				eligible = append(eligible, leader)
-				break
-			}
+		if _, ok := memberSet[leader]; ok {
+			eligible = append(eligible, leader)
 		}
 	}
 	if len(eligible) == 0 {
-		panic(fmt.Sprintf("FATAL: grupo %d não tem líderes elegíveis (segmentLeaders ∩ members = ∅)", g))
+		logger.Fatal().Uint32("groupID", uint32(g)).Msg("No eligible leaders for group")
 	}
 	return eligible[0]
 }
-func GetAvailableGroups() []uint32 {
-	data, err := ioutil.ReadFile("config/groups.yml")
+func GetAvailableGroups(configPath string) []uint32 {
+	if configPath == "" {
+		configPath = "config/groups.yml"
+	}
+	data, err := ioutil.ReadFile(filepath.Clean(configPath))
 	if err != nil {
-		panic(fmt.Sprintf("FATAL: config/groups.yml é obrigatório. Erro: %v", err))
+		logger.Fatal().Err(err).Str("path", configPath).Msg("Failed to read groups configuration")
 	}
 	var config GroupConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
@@ -227,7 +196,7 @@ func GetAvailableGroups() []uint32 {
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i] < groups[j] })
 	if len(groups) == 0 {
-		panic("FATAL: config/groups.yml não define nenhum grupo")
+		logger.Fatal().Str("path", configPath).Msg("No groups defined in configuration")
 	}
 	return groups
 }

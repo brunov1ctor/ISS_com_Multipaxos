@@ -17,6 +17,7 @@ package request
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -241,27 +242,77 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 	requestPreprocessor = fn
 }
 
-// ReplicaMapper - Mapeia payload para grupos tocados (paper-like)
-// Implementa lógica automática do proxy para decidir TouchedGroups
+// ReplicaMapper - Mapeia payload para grupos (particionamento por intervalo)
 func ReplicaMapper(payload []byte) []uint32 {
-	payloadStr := string(payload)
-	
-	// Requests sistêmicas sempre vão para grupo 0
-	if strings.HasPrefix(payloadStr, "SYSTEM:") {
-		return []uint32{0}
+	parts := strings.Fields(string(payload))
+	if len(parts) == 0 {
+		return []uint32{1}
 	}
 	
-	// ❌ PROBLEMA: Grupos 1,2,3,4 existem, mas lógica usa strings específicas
-	// Clientes normais não enviam "CROSS", "GROUP1", etc.
-	// Resultado: cai no hash-based que pode retornar grupo inexistente
-	
-	// Hash-based mapping para grupos de dados (1-4)
-	hash := crypto.Hash(payload)
-	groupCount := uint32(4) // Grupos 1, 2, 3, 4 (não conta grupo 0)
-	groupID := uint32(hash[0])%groupCount + 1 // Retorna 1, 2, 3 ou 4
-	
-	fmt.Printf("[REPLICA-MAPPER] Mapped payload to group %d (hash-based)\n", groupID)
-	return []uint32{groupID}
+	switch parts[0] {
+	case "GET", "PUT", "DELETE":
+		if len(parts) < 2 {
+			return []uint32{1}
+		}
+		return []uint32{keyToGroup(parts[1])}
+	case "RANGE":
+		if len(parts) < 3 {
+			return []uint32{1}
+		}
+		return rangeToGroups(parts[1], parts[2])
+	case "TX":
+		if len(parts) < 2 {
+			return []uint32{1}
+		}
+		return keysToGroups(strings.Split(parts[1], ","))
+	default:
+		return []uint32{1}
+	}
+}
+
+func keyToGroup(key string) uint32 {
+	if len(key) == 0 {
+		return 1
+	}
+	c := key[0]
+	if c >= 'a' && c <= 'z' {
+		c -= 32
+	}
+	if c >= 'A' && c <= 'F' {
+		return 1
+	} else if c >= 'G' && c <= 'M' {
+		return 2
+	} else if c >= 'N' && c <= 'T' {
+		return 3
+	}
+	return 4
+}
+
+func rangeToGroups(start, end string) []uint32 {
+	gStart := keyToGroup(start)
+	gEnd := keyToGroup(end)
+	if gStart > gEnd {
+		gStart, gEnd = gEnd, gStart
+	}
+	groups := make([]uint32, 0, gEnd-gStart+1)
+	for g := gStart; g <= gEnd; g++ {
+		groups = append(groups, g)
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i] < groups[j] })
+	return groups
+}
+
+func keysToGroups(keys []string) []uint32 {
+	seen := make(map[uint32]struct{})
+	for _, k := range keys {
+		seen[keyToGroup(k)] = struct{}{}
+	}
+	groups := make([]uint32, 0, len(seen))
+	for g := range seen {
+		groups = append(groups, g)
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i] < groups[j] })
+	return groups
 }
 
 // GetGroupMembersGetter retorna getter de membros (para watchdog)
@@ -271,7 +322,22 @@ func GetGroupMembersGetter() func(uint32) []int32 {
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
-	// TouchedGroups pode estar vazio (será preenchido pelo PreprocessRequest)
+	// ✅ 1) PROXY: Chama preprocessor ANTES de adicionar ao bucket
+	if requestPreprocessor != nil {
+		if requestPreprocessor(reqMsg) {
+			return nil // Preprocessor já tratou (GSN+META+fanout)
+		}
+	}
+	
+	// ✅ 3) LIVENESS: Marca request como recebida (para watchdog)
+	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
+		requestReceivedMarker(reqMsg.GSN, reqMsg.GroupId)
+	}
+	
+	// ✅ 3) LIVENESS: Cache request (se ainda não foi cacheada no proxy)
+	if reqMsg.GSN > 0 && requestCacher != nil {
+		requestCacher(reqMsg.GSN, reqMsg)
+	}
 	
 	// ✅ DEBUG: Log quando request é adicionada
 	payloadPreview := reqMsg.Payload
@@ -281,13 +347,6 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 	isSystem := strings.HasPrefix(string(reqMsg.Payload), "SYSTEM:")
 	fmt.Printf("[ADD-REQ] clientId=%d clientSn=%d groupId=%d gsn=%d touchedGroups=%v isSystem=%v payload=%s\n",
 		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
-	
-	// ✅ LIVENESS: Marca request como recebida se tem GSN
-	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
-		requestReceivedMarker(reqMsg.GSN, reqMsg.GroupId)
-	}
-	
-	opID := GenerateOpID(reqMsg)
 	
 	// ✅ DEBUG: Log bucket assignment
 	bucketNr := GetBucketNr(reqMsg)
@@ -302,7 +361,7 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		InFlight: false,
 		Next:     nil,
 		Prev:     nil,
-		OpID:     opID,
+		OpID:     GenerateOpID(reqMsg),
 		GSN:      reqMsg.GSN,
 	}
 	
