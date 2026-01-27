@@ -33,10 +33,15 @@ Garantias do Sistema:
 package orderer
 import (
 	"fmt"
+	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"github.com/hyperledger-labs/mirbft/config"
+	"github.com/hyperledger-labs/mirbft/crypto"
 	"github.com/hyperledger-labs/mirbft/log"
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
@@ -46,6 +51,8 @@ import (
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	logger "github.com/rs/zerolog/log"
 )
+
+const gsnStateFile = "/tmp/iss-Bruno/next_gsn.state"
 
 // Constantes para mensagens do sistema
 const (
@@ -67,7 +74,11 @@ func isMETAStream(req *pb.ClientRequest) bool {
 	return strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM)
 }
 
-var GlobalMulticastOrderer *MultiPaxosMulticastOrderer
+var globalMulticastOrderer *MultiPaxosMulticastOrderer
+
+func GetGlobalMulticastOrderer() *MultiPaxosMulticastOrderer {
+	return globalMulticastOrderer
+}
 type ForwardRequestFn func(req *pb.ClientRequest, members []int32)
 
 type MultiPaxosMulticastOrderer struct {
@@ -128,7 +139,7 @@ type PendingCommit struct {
 // Init - Inicializa o MultiPaxos Multicast Orderer
 // Cria um orderer MultiPaxos para cada grupo definido no YAML
 func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
-	GlobalMulticastOrderer = o
+	globalMulticastOrderer = o
 	o.mgr = mngr
 	o.initComponents()    // Inicializa componentes internos
 	o.loadGroups()        // Carrega grupos do arquivo YAML
@@ -146,6 +157,7 @@ func (o *MultiPaxosMulticastOrderer) initComponents() {
 	// SN intercalado: Apenas campos necessários (sem mapeamento SN→grupo)
 	o.gsnMetadata = make(map[uint64][]uint32)
 	o.gsnRequestsPending = make(map[uint64]chan uint64)
+	// ✅ RECUPERAÇÃO: nextGSN será reconstruído do log após Init()
 	o.nextGSN = 1
 	
 	// ✅ LIVENESS: Inicializa rastreamento de requests perdidas
@@ -165,7 +177,7 @@ func (o *MultiPaxosMulticastOrderer) loadGroups() {
 		o.groupsFilePath = "/tmp/iss-Bruno/config/groups.yml"
 	}
 	if err := o.am.LoadGroupsFromYAML(o.groupsFilePath); err != nil {
-		panic(fmt.Sprintf("FATAL: Failed to load groups from %s: %v", o.groupsFilePath, err))
+		logger.Fatal().Err(err).Str("file", o.groupsFilePath).Msg("Failed to load groups configuration")
 	}
 	o.am.UpdateSequencerGroup() // Grupo 0 = todos os nós
 	o.am.SetSequencer(o)
@@ -179,7 +191,7 @@ func (o *MultiPaxosMulticastOrderer) createGroupOrderers(mngr manager.Manager) {
 	for _, gid := range groupIDs {
 		groupOrderer := &MultiPaxosOrderer{}
 		groupOrderer.am = o.am
-		groupOrderer.ownedGroupID = 0 // Standalone mode: all orderers process all groups
+		groupOrderer.ownedGroupID = gid // ✅ FIX: Cada orderer gerencia apenas seu grupo
 		groupOrderer.skipHandlerRegistration = true // Não registra handler global
 		// SN intercalado: cada grupo começa do seu slot no espaço global
 		groupOrderer.Init(mngr)
@@ -205,6 +217,9 @@ func (o *MultiPaxosMulticastOrderer) setupHandlers() {
 	request.SetRequestPreprocessor(o.PreprocessRequest)
 	
 	logger.Info().Msg("[MULTICAST] Registered GSN/atomic multicast callbacks")
+	
+	// ✅ PERSISTÊNCIA: Carrega nextGSN do disco
+	o.loadNextGSN()
 	
 	go o.trackSegments()    // Monitora novos segmentos
 	go o.trackCheckpoints() // Monitora checkpoints para limpeza
@@ -343,10 +358,9 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		TouchedGroups: []uint32{0},
 	}
 	
-	// ✅ FIX: Adiciona diretamente ao bucket 0 ao invés de broadcast
-	fmt.Printf("[GSN-REQ][ADD] Adding GSN request reqID=%d directly to bucket 0 (clientId=%d clientSn=%d)\n", reqID, membership.OwnID, clientSn)
-	request.AddReqMsg(gsnReq)
-	fmt.Printf("[GSN-REQ][ADDED] reqID=%d added to bucket, waiting for response...\n", reqID)
+	// ✅ FIX: Envia para líder do grupo 0 (ou todos membros)
+	o.sendToGroup(gsnReq, 0)
+	fmt.Printf("[GSN-REQ][SENT] reqID=%d sent to group 0\n", reqID)
 	
 	select {
 	case gsn := <-respChan:
@@ -411,7 +425,9 @@ func (o *MultiPaxosMulticastOrderer) onGroup0Commit(reqID uint64) uint64 {
 	o.gsnMu.Lock()
 	gsn := o.nextGSN
 	o.nextGSN++
-	fmt.Printf("[GSN-SEQ][ASSIGN] reqID=%d assigned GSN=%d (nextGSN now=%d)\n", reqID, gsn, o.nextGSN)
+	// ✅ 4) PERSISTÊNCIA: Persiste nextGSN após incremento
+	o.persistNextGSN()
+	fmt.Printf("[GSN-SEQ][ASSIGN] reqID=%d assigned GSN=%d (nextGSN now=%d, persisted)\n", reqID, gsn, o.nextGSN)
 	o.gsnMu.Unlock()
 	
 	// ✅ ROBUSTEZ: Acorda apenas o canal correto com chave composta
@@ -442,46 +458,57 @@ func (o *MultiPaxosMulticastOrderer) cleanOldMappings(checkpointSN int32) {
 	fmt.Printf("[MULTICAST] Checkpoint %d (interleaved SN space)\n", checkpointSN)
 }
 
-// ADeliver - Verifica ordem sequencial GSN antes de entregar
-// ✅ ATOMIC GLOBAL ORDER: Implementa ordem total conforme artigo
-// Garante que operações sejam entregues na mesma ordem em todos os grupos
+// ADeliver - Verifica ordem crescente GSN antes de entregar
+// ✅ FIX: Permite gaps (GSNs que não tocam o grupo), exige apenas ordem crescente
 func (o *MultiPaxosMulticastOrderer) ADeliver(gsn uint64, groupID uint32, batch []byte) bool {
 	// ✅ BARREIRA META: Lê META primeiro para evitar inversão de locks
 	o.metaMu.RLock()
 	_, metaExists := o.gsnMetadata[gsn]
 	if !metaExists {
 		o.metaMu.RUnlock()
-		// ✅ DETERMINISMO: Bloqueia até META chegar (ordem global garantida)
-		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d waiting for META (deterministic order)\n", groupID, gsn)
+		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d waiting for META\n", groupID, gsn)
 		return false // Força espera por META
 	}
 	touches := o.gsnTouchesGroup(gsn, groupID)
 	o.metaMu.RUnlock()
 	
 	if !touches {
-		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d does not touch this group (META)\n", groupID, gsn)
+		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d does not touch this group\n", groupID, gsn)
 		return true // Não precisa processar
 	}
 	
-	// ✅ ORDEM SEQUENCIAL: Verifica se é o próximo GSN esperado
+	// ✅ FIX: Ordem crescente (não consecutiva) - permite gaps
 	o.expectedGSNMu.Lock()
 	defer o.expectedGSNMu.Unlock()
 	
-	expected, exists := o.expectedNextGSN[groupID]
+	lastDelivered, exists := o.expectedNextGSN[groupID]
 	if !exists {
-		o.expectedNextGSN[groupID] = 1
-		expected = 1
+		lastDelivered = 0
+		o.expectedNextGSN[groupID] = 0
 	}
 	
-	if gsn != expected {
-		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d != expected %d, buffering (sequential order)\n", groupID, gsn, expected)
-		return false // Não pode entregar ainda
+	// Verifica se GSN > lastDelivered
+	if gsn <= lastDelivered {
+		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d <= lastDelivered %d, skipping duplicate\n", groupID, gsn, lastDelivered)
+		return true // Já entregue
 	}
 	
-	fmt.Printf("[ATOMIC-ORDER] Group %d: Delivering GSN %d (sequential order verified)\n", groupID, gsn)
-	o.expectedNextGSN[groupID] = gsn + 1
+	// Verifica se existe algum GSN menor buffered
+	o.bufferMu.Lock()
+	if o.pendingCommits[groupID] != nil {
+		for bufferedGSN := range o.pendingCommits[groupID] {
+			if bufferedGSN > lastDelivered && bufferedGSN < gsn {
+				o.bufferMu.Unlock()
+				fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d buffering (waiting for %d)\n", groupID, gsn, bufferedGSN)
+				return false // Existe GSN menor pendente
+			}
+		}
+	}
+	o.bufferMu.Unlock()
 	
-	// Drena buffer após avançar expectedNextGSN
+	fmt.Printf("[ATOMIC-ORDER] Group %d: Delivering GSN %d (lastDelivered=%d)\n", groupID, gsn, lastDelivered)
+	o.expectedNextGSN[groupID] = gsn
+	
 	o.drainBuffer(groupID)
 	return true
 }
@@ -507,6 +534,8 @@ func (o *MultiPaxosMulticastOrderer) BufferCommit(gsn uint64, groupID uint32, ba
 	fmt.Printf("[BUFFER] Group %d: Buffered GSN %d (sn=%d)\n", groupID, gsn, sn)
 }
 
+// drainBuffer - Processa commits buffered em ordem crescente
+// ✅ FIX: Revalida META/touches através de ADeliver antes de entregar
 func (o *MultiPaxosMulticastOrderer) drainBuffer(groupID uint32) {
 	o.bufferMu.Lock()
 	defer o.bufferMu.Unlock()
@@ -515,41 +544,66 @@ func (o *MultiPaxosMulticastOrderer) drainBuffer(groupID uint32) {
 		return
 	}
 	
-	// Processa commits em ordem sequencial
+	// Processa commits em ordem crescente (não consecutiva)
 	for {
-		expected := o.expectedNextGSN[groupID]
-		pending, exists := o.pendingCommits[groupID][expected]
-		if !exists {
-			break // Não há próximo GSN no buffer
+		lastDelivered := o.expectedNextGSN[groupID]
+		
+		// Busca menor GSN > lastDelivered
+		var nextGSN uint64 = 0
+		for gsn := range o.pendingCommits[groupID] {
+			if gsn > lastDelivered && (nextGSN == 0 || gsn < nextGSN) {
+				nextGSN = gsn
+			}
 		}
 		
-		// Entrega commit buffered
-		fmt.Printf("[BUFFER] Group %d: Draining GSN %d (sn=%d)\n", groupID, expected, pending.sn)
+		if nextGSN == 0 {
+			break // Não há mais GSNs no buffer
+		}
+		
+		pending := o.pendingCommits[groupID][nextGSN]
+		
+		// ✅ FIX: Revalida através de ADeliver (verifica META/touches)
+		o.bufferMu.Unlock()
+		canDeliver := o.ADeliver(nextGSN, groupID, pending.batch)
+		o.bufferMu.Lock()
+		
+		if !canDeliver {
+			break // Ainda não pode entregar (META missing ou ordem errada)
+		}
+		
+		fmt.Printf("[BUFFER] Group %d: Draining GSN %d (sn=%d)\n", groupID, nextGSN, pending.sn)
 		pending.announce(pending.sn, pending.batch, pending.digest)
 		
-		// Remove do buffer e avança
-		delete(o.pendingCommits[groupID], expected)
-		o.expectedNextGSN[groupID] = expected + 1
+		delete(o.pendingCommits[groupID], nextGSN)
 	}
 }
 
 // RegisterGSNMetadata - META stream determinístico via grupo 0
-// ✅ LIVENESS: Registra requests esperadas para detectar perdas
-// ✅ ATOMIC GLOBAL ORDER: Garante que META chegue antes das requests
+// ✅ FIX: Tenta liberar commits buffered após registrar META
 func (o *MultiPaxosMulticastOrderer) RegisterGSNMetadata(gsn uint64, touchedGroups []uint32) {
 	o.metaMu.Lock()
-	defer o.metaMu.Unlock()
+	
+	// ✅ VALIDAÇÃO: Rejeita touchedGroups vazio (bug do chamador)
+	if len(touchedGroups) == 0 {
+		o.metaMu.Unlock()
+		logger.Error().
+			Uint64("gsn", gsn).
+			Msg("[META-STREAM][ERROR] Empty TouchedGroups; refusing to register META")
+		return
+	}
 	
 	// ✅ DEDUPLICACAO: Verifica se META já existe para este GSN
 	if _, exists := o.gsnMetadata[gsn]; exists {
+		o.metaMu.Unlock()
 		fmt.Printf("[META-STREAM][WARN] GSN %d metadata already exists, skipping\n", gsn)
 		return
 	}
 	
 	o.gsnMetadata[gsn] = make([]uint32, len(touchedGroups))
 	copy(o.gsnMetadata[gsn], touchedGroups)
+	o.metaMu.Unlock()
 	
-	fmt.Printf("[ATOMIC-ORDER] Registered META GSN %d -> groups %v (deterministic)\n", gsn, touchedGroups)
+	fmt.Printf("[ATOMIC-ORDER] Registered META GSN %d -> groups %v\n", gsn, touchedGroups)
 	
 	// ✅ LIVENESS: Registra requests esperadas para watchdog
 	o.missingMu.Lock()
@@ -563,12 +617,9 @@ func (o *MultiPaxosMulticastOrderer) RegisterGSNMetadata(gsn uint64, touchedGrou
 	}
 	o.missingMu.Unlock()
 	
-	// Processa todos os grupos para avançar expectedNextGSN se GSN não toca o grupo
-	allGroups := o.am.GetDefinedGroups()
-	for _, groupID := range allGroups {
-		if !o.gsnTouchesGroup(gsn, groupID) {
-			o.advanceGSNForGroup(groupID, gsn)
-		}
+	// ✅ FIX: Tenta liberar commits buffered deste GSN
+	for _, groupID := range touchedGroups {
+		o.tryDeliverAfterMeta(gsn, groupID)
 	}
 }
 
@@ -591,6 +642,30 @@ func (o *MultiPaxosMulticastOrderer) gsnTouchesGroup(gsn uint64, groupID uint32)
 	return false
 }
 
+// tryDeliverAfterMeta - Tenta entregar commit buffered após META chegar
+// ✅ FIX: Resolve deadlock quando commit chega antes do META
+func (o *MultiPaxosMulticastOrderer) tryDeliverAfterMeta(gsn uint64, groupID uint32) {
+	o.bufferMu.Lock()
+	pending, exists := o.pendingCommits[groupID][gsn]
+	o.bufferMu.Unlock()
+	
+	if !exists {
+		return // Não há commit buffered para este GSN
+	}
+	
+	fmt.Printf("[META-ARRIVED] Group %d: Trying to deliver buffered GSN %d\n", groupID, gsn)
+	
+	// Tenta entregar agora que META existe
+	if o.ADeliver(gsn, groupID, pending.batch) {
+		fmt.Printf("[META-ARRIVED] Group %d: Delivered buffered GSN %d (sn=%d)\n", groupID, gsn, pending.sn)
+		pending.announce(pending.sn, pending.batch, pending.digest)
+		
+		o.bufferMu.Lock()
+		delete(o.pendingCommits[groupID], gsn)
+		o.bufferMu.Unlock()
+	}
+}
+
 func (o *MultiPaxosMulticastOrderer) advanceGSNForGroup(groupID uint32, gsn uint64) {
 	o.expectedGSNMu.Lock()
 	defer o.expectedGSNMu.Unlock()
@@ -604,6 +679,7 @@ func (o *MultiPaxosMulticastOrderer) advanceGSNForGroup(groupID uint32, gsn uint
 	if gsn == expected {
 		fmt.Printf("[META-STREAM] Group %d: Skipping GSN %d (not touched)\n", groupID, gsn)
 		o.expectedNextGSN[groupID] = gsn + 1
+		// ✅ FIX: drainBuffer assume expectedGSNMu já segurado
 		o.drainBuffer(groupID)
 	}
 }
@@ -619,12 +695,12 @@ func (o *MultiPaxosMulticastOrderer) PublishGSNMetadata(gsn uint64, touchedGroup
 	o.publishedMeta[gsn] = true
 	o.publishedMu.Unlock()
 	
-	// ✅ GARANTIA ABSOLUTA: TouchedGroups nunca vazio para evitar travamento
+	// ✅ VALIDAÇÃO: Rejeita touchedGroups vazio (bug do chamador)
 	if len(touchedGroups) == 0 {
 		logger.Error().
 			Uint64("gsn", gsn).
-			Msg("[META-STREAM][CRITICAL] Empty TouchedGroups, using fallback group 0")
-		touchedGroups = []uint32{0} // Fallback crítico
+			Msg("[META-STREAM][ERROR] Empty TouchedGroups; refusing to publish META")
+		return
 	}
 	
 	// ✅ CORREÇÃO OVERFLOW: Usa contador separado para evitar int32 overflow
@@ -643,8 +719,8 @@ func (o *MultiPaxosMulticastOrderer) PublishGSNMetadata(gsn uint64, touchedGroup
 	
 	fmt.Printf("[META-STREAM] Publishing GSN %d -> groups %v to group 0 (proxy %d)\n", gsn, touchedGroups, membership.OwnID)
 	
-	// ✅ SIMPLE FIX: Add locally only - MultiPaxos consensus will propagate
-	request.AddReqMsg(metaReq)
+	// ✅ FIX: Envia para líder do grupo 0 (ou todos membros)
+	o.sendToGroup(metaReq, 0)
 }
 
 // Mcast - API black-box para multicast atômico
@@ -654,34 +730,80 @@ func (o *MultiPaxosMulticastOrderer) PublishGSNMetadata(gsn uint64, touchedGroup
 //   msg: dados da mensagem a ser enviada
 // Retorna: erro se houver falha na submissão
 func (o *MultiPaxosMulticastOrderer) Mcast(groups []uint32, msg []byte) error {
-	// Obtém GSN global único via grupo 0
-	gsn := o.GetNextGSN()
-	
-	// ✅ FIX: Publica META para evitar deadlock no ADeliver
-	o.PublishGSNMetadata(gsn, groups)
-	
-	// TouchedGroups sempre setado
+	// ✅ 1) Valida grupos ANTES de qualquer operação
 	if len(groups) == 0 {
 		return fmt.Errorf("groups cannot be empty")
 	}
 	
-	// Submete request para cada grupo tocado
+	// ✅ 2) Saneia: remove grupo 0, dedup e ordena
+	groups = sanitizeGroups(groups)
+	if len(groups) == 0 {
+		return fmt.Errorf("no valid data groups (group 0 is not allowed)")
+	}
+	
+	// ✅ 3) Obtém GSN e valida (timeout = 0)
+	gsn := o.GetNextGSN()
+	if gsn == 0 {
+		return fmt.Errorf("failed to get GSN (timeout)")
+	}
+	
+	// ✅ 4) Publica META apenas após validações
+	o.PublishGSNMetadata(gsn, groups)
+	
+	// ✅ 5) Submete request para cada grupo tocado
 	for _, groupID := range groups {
-		// ✅ CORREÇÃO OVERFLOW: Usa contador separado ao invés de GSN diretamente
 		mcastSn := atomic.AddUint32(&o.mcastSeqCounter, 1)
 		req := &pb.ClientRequest{
 			RequestId: &pb.RequestID{
-				ClientId: membership.OwnID, // ✅ ID único do proxy (não tamanho da mensagem)
-				ClientSn: int32(mcastSn),   // Contador atômico único
+				ClientId: membership.OwnID,
+				ClientSn: int32(mcastSn),
 			},
 			Payload:       msg,
-			TouchedGroups: groups, // Sempre setado (nunca vazio)
-			GSN:           gsn,    // Global Sequence Number
+			TouchedGroups: groups,
+			GSN:           gsn,
 			GroupId:       groupID,
 		}
-		request.AddReqMsg(req) // Adiciona à fila do grupo
+		o.sendToGroup(req, groupID)
 	}
 	return nil
+}
+
+// sanitizeGroups - Remove grupo 0, duplicatas e ordena
+func sanitizeGroups(in []uint32) []uint32 {
+	seen := make(map[uint32]struct{}, len(in))
+	out := make([]uint32, 0, len(in))
+	for _, g := range in {
+		if g == 0 {
+			continue // Grupo 0 é sequenciador, não grupo de dados
+		}
+		if _, ok := seen[g]; ok {
+			continue // Duplicata
+		}
+		seen[g] = struct{}{}
+		out = append(out, g)
+	}
+	// Ordena para determinismo
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// sendToGroup - Envia request para o grupo via fanout
+// ✅ CORREÇÃO CRÍTICA: SEMPRE faz fanout para TODOS os membros
+// Garante que o líder do grupo SEMPRE receba a request (liveness)
+func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {
+	members := o.am.GetGroupMembers(groupID)
+	if members == nil || len(members) == 0 {
+		fmt.Printf("[SEND] Group %d has no members, dropping\n", groupID)
+		return
+	}
+	
+	// ✅ SEMPRE faz fanout (garante que líder receba)
+	fmt.Printf("[SEND] Fanout to ALL members of group %d: %v\n", groupID, members)
+	if o.forwardRequestFn != nil {
+		o.forwardRequestFn(req, members)
+	} else {
+		request.ForwardRequestToNodes(req, members)
+	}
 }
 
 // ProxyInterceptor - Intercepta requests para processamento de GSN
@@ -722,30 +844,39 @@ func (o *MultiPaxosMulticastOrderer) PublishMETAOnce(gsn uint64, touchedGroups [
 	fmt.Printf("[PROXY-ONLY] Published META GSN %d -> groups %v\n", gsn, touchedGroups)
 }
 
-// ✅ LIVENESS: Marca request como recebida (para de esperar re-forward)
+// MarkRequestReceived - Marca request como recebida (para watchdog)
+// ✅ DEDUPLICAÇÃO: Evita processar mesma (GSN, GroupId) múltiplas vezes
 func (o *MultiPaxosMulticastOrderer) MarkRequestReceived(gsn uint64, groupID uint32) {
 	o.missingMu.Lock()
 	defer o.missingMu.Unlock()
 	
 	if groups, exists := o.missingRequests[gsn]; exists {
-		delete(groups, groupID)
-		if len(groups) == 0 {
-			delete(o.missingRequests, gsn)
+		if _, waiting := groups[groupID]; waiting {
+			delete(groups, groupID)
+			fmt.Printf("[LIVENESS] GSN %d received by group %d (stopped waiting)\n", gsn, groupID)
+			if len(groups) == 0 {
+				delete(o.missingRequests, gsn)
+				fmt.Printf("[LIVENESS] GSN %d received by all groups (cleanup)\n", gsn)
+			}
 		}
 	}
 }
 
-// ✅ LIVENESS: Cache request para re-forward
+// CacheRequest - Cache request para re-forward
+// ✅ DEDUPLICAÇÃO: Armazena apenas uma vez por GSN
 func (o *MultiPaxosMulticastOrderer) CacheRequest(gsn uint64, req *pb.ClientRequest) {
 	o.cacheMu.Lock()
 	defer o.cacheMu.Unlock()
-	o.requestCache[gsn] = req
-	fmt.Printf("[LIVENESS] Cached request GSN %d for re-forward\n", gsn)
+	
+	if _, exists := o.requestCache[gsn]; !exists {
+		o.requestCache[gsn] = req
+		fmt.Printf("[LIVENESS] Cached request GSN %d for re-forward\n", gsn)
+	}
 }
 
 // ✅ LIVENESS: Watchdog para detectar e re-forward requests perdidas
 func (o *MultiPaxosMulticastOrderer) reforwardWatchdog() {
-	ticker := time.NewTicker(5 * time.Second) // Verifica a cada 5s
+	ticker := time.NewTicker(30 * time.Second) // Verifica a cada 30s
 	defer ticker.Stop()
 	
 	for range ticker.C {
@@ -755,7 +886,7 @@ func (o *MultiPaxosMulticastOrderer) reforwardWatchdog() {
 		
 		for gsn, groups := range o.missingRequests {
 			for groupID, timestamp := range groups {
-				if now.Sub(timestamp) > 10*time.Second { // Timeout de 10s
+				if now.Sub(timestamp) > 60*time.Second { // Timeout de 60s
 					if toReforward[gsn] == nil {
 						toReforward[gsn] = make([]uint32, 0)
 					}
@@ -775,19 +906,74 @@ func (o *MultiPaxosMulticastOrderer) reforwardWatchdog() {
 
 // ✅ LIVENESS: Solicita re-forward de request perdida
 func (o *MultiPaxosMulticastOrderer) requestReforward(gsn uint64, groups []uint32) {
-	// Simplified approach: use existing MissingEntry mechanism
-	fmt.Printf("[LIVENESS] Requesting reforward for GSN %d groups %v (using MissingEntry)\n", gsn, groups)
-	// TODO: Implement using existing MissingEntry mechanism or add custom protobuf field
+	o.cacheMu.RLock()
+	req, exists := o.requestCache[gsn]
+	o.cacheMu.RUnlock()
+	
+	if !exists {
+		fmt.Printf("[LIVENESS][ERROR] GSN %d not in cache, cannot reforward\n", gsn)
+		return
+	}
+	
+	// Reenvia para cada grupo faltante
+	for _, groupID := range groups {
+		clone := &pb.ClientRequest{
+			RequestId:     req.RequestId,
+			Payload:       req.Payload,
+			Signature:     req.Signature,
+			Pubkey:        req.Pubkey,
+			GroupId:       groupID,
+			TouchedGroups: req.TouchedGroups,
+			GSN:           gsn,
+		}
+		fmt.Printf("[LIVENESS] Re-forwarding GSN %d to group %d\n", gsn, groupID)
+		o.sendToGroup(clone, groupID)
+		
+		// Atualiza timestamp
+		o.missingMu.Lock()
+		if o.missingRequests[gsn] != nil {
+			o.missingRequests[gsn][groupID] = time.Now()
+		}
+		o.missingMu.Unlock()
+	}
 }
 
 // Sign - Assina dados com chave privada do orderer (implementa interface Orderer)
 func (o *MultiPaxosMulticastOrderer) Sign(data []byte) ([]byte, error) {
-	return nil, nil
+	if membership.OwnPrivKey == nil {
+		return nil, fmt.Errorf("private key not initialized")
+	}
+	return crypto.Sign(data, membership.OwnPrivKey)
+}
+
+// loadNextGSN - Carrega nextGSN persistido do disco
+func (o *MultiPaxosMulticastOrderer) loadNextGSN() {
+	b, err := os.ReadFile(gsnStateFile)
+	if err == nil {
+		if v, err2 := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); err2 == nil && v > 0 {
+			o.nextGSN = v
+			fmt.Printf("[RECOVERY] Loaded nextGSN=%d from disk\n", v)
+			return
+		}
+	}
+	fmt.Printf("[RECOVERY] Starting with nextGSN=1 (no persisted state)\n")
+}
+
+// persistNextGSN - Persiste nextGSN no disco
+func (o *MultiPaxosMulticastOrderer) persistNextGSN() {
+	_ = os.WriteFile(gsnStateFile, []byte(fmt.Sprintf("%d\n", o.nextGSN)), 0644)
 }
 
 // CheckSig - Verifica assinatura de dados (implementa interface Orderer)
 func (o *MultiPaxosMulticastOrderer) CheckSig(data []byte, senderID int32, signature []byte) error {
-	return nil
+	if !config.Config.SignRequests {
+		return nil
+	}
+	pubKey := membership.GetPublicKey(senderID)
+	if pubKey == nil {
+		return fmt.Errorf("public key not found for node %d", senderID)
+	}
+	return crypto.CheckSig(data, pubKey, signature)
 }
 
 // HandleEntry - Processa entrada do log (implementa interface Orderer)
@@ -844,7 +1030,10 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	// ✅ Mapeia requisição para grupos usando ReplicaMapper
 	fmt.Printf("[PREPROCESS] Calling ReplicaMapper...\n")
 	req.TouchedGroups = request.ReplicaMapper(req.Payload)
-	fmt.Printf("[PREPROCESS] ReplicaMapper returned groups=%v\n", req.TouchedGroups)
+	
+	// ✅ DETERMINISMO: Ordena TouchedGroups (segunda camada de segurança)
+	sort.Slice(req.TouchedGroups, func(i, j int) bool { return req.TouchedGroups[i] < req.TouchedGroups[j] })
+	fmt.Printf("[PREPROCESS] ReplicaMapper returned groups=%v (sorted)\n", req.TouchedGroups)
 	
 	// ✅ VALIDAÇÃO: Remove grupo 0 se ReplicaMapper retornou (não deve acontecer)
 	for i := 0; i < len(req.TouchedGroups); i++ {
@@ -864,8 +1053,23 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	// ✅ SYNC: Processa GSN sincronamente para garantir adição aos buckets
 	fmt.Printf("[PREPROCESS] Getting GSN...\n")
 	gsn := o.GetNextGSN()
+	if gsn == 0 {
+		fmt.Printf("[PREPROCESS][ERROR] Failed to get GSN (timeout), rejecting request\n")
+		return true // Bloqueia requisição (GSN inválido)
+	}
 	fmt.Printf("[PREPROCESS] Got GSN=%d, publishing META...\n", gsn)
 	o.PublishGSNMetadata(gsn, req.TouchedGroups)
+	
+	// ✅ 2) LIVENESS: Cache template ANTES do fanout (para reforward)
+	templateReq := &pb.ClientRequest{
+		RequestId:     req.RequestId,
+		Payload:       req.Payload,
+		Signature:     req.Signature,
+		Pubkey:        req.Pubkey,
+		TouchedGroups: req.TouchedGroups,
+		GSN:           gsn,
+	}
+	o.CacheRequest(gsn, templateReq)
 	
 	fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, gsn)
 	
@@ -880,9 +1084,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 			TouchedGroups: req.TouchedGroups,
 			GSN:           gsn,
 		}
-		fmt.Printf("[PREPROCESS] Single-group: adding to group=%d\n", reqCopy.GroupId)
-		request.AddReqMsg(reqCopy)
-		return true // Já adicionou, não precisa processar de novo
+		fmt.Printf("[PREPROCESS] Single-group: sending to group=%d\n", reqCopy.GroupId)
+		o.sendToGroup(reqCopy, reqCopy.GroupId)
+		return true
 	}
 	
 	// ✅ Cross-op: clona para cada grupo
@@ -897,7 +1101,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 			TouchedGroups: req.TouchedGroups,
 			GSN:           gsn,
 		}
-		request.AddReqMsg(clone)
+		o.sendToGroup(clone, groupID)
 	}
 	
 	// Já adicionou aos buckets, não precisa processar de novo

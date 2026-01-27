@@ -45,6 +45,9 @@ var (
 	// Worker pool para processar requests sem bloquear Recv()
 	incomingReqCh chan *pb.ClientRequest
 	workerPoolSize = 16 // Pool fixo de workers
+	
+	// ✅ Conexões peer-to-peer para forwarding
+	peerRequestClients sync.Map // map[int32]pb.Messenger_RequestClient
 )
 
 // InitRequestWorkerPool inicializa pool de workers para processar requests
@@ -448,4 +451,73 @@ func performServerHandshake(cl pb.Messenger_RequestClient, ownClientID int32) {
 	if err != nil {
 		logger.Error().Msg("Failed to receive dummy response from server during handshake.")
 	}
+}
+
+// SendRequestToPeer - Envia ClientRequest para outro peer (reutiliza infraestrutura existente)
+// ✅ CORREÇÃO: Usa mesma lógica de ConnectToOrderers para peer-to-peer forwarding
+func SendRequestToPeer(req *pb.ClientRequest, destNodeID int32) error {
+	if destNodeID == membership.OwnID {
+		// Local: chama handler diretamente
+		if ClientRequestHandler != nil {
+			ClientRequestHandler(req)
+		}
+		return nil
+	}
+
+	// Remoto: usa conexão gRPC existente ou cria nova
+	clientVal, exists := peerRequestClients.Load(destNodeID)
+	if !exists {
+		// Lazy connection: conecta sob demanda
+		client, err := connectToPeerForRequests(destNodeID)
+		if err != nil {
+			return fmt.Errorf("failed to connect to peer %d: %w", destNodeID, err)
+		}
+		peerRequestClients.Store(destNodeID, client)
+		clientVal = client
+	}
+
+	client := clientVal.(pb.Messenger_RequestClient)
+	if err := client.Send(req); err != nil {
+		logger.Error().Err(err).Int32("destNodeID", destNodeID).Msg("Failed to send request to peer")
+		return err
+	}
+
+	return nil
+}
+
+// connectToPeerForRequests - Conecta a outro peer para forwarding (reutiliza lógica existente)
+func connectToPeerForRequests(peerID int32) (pb.Messenger_RequestClient, error) {
+	identity := membership.NodeIdentity(peerID)
+	addrString := fmt.Sprintf("%s:%d", identity.PrivateAddr, identity.Port)
+
+	logger.Info().Int32("peerId", peerID).Str("addr", addrString).Msg("Connecting to peer for forwarding")
+
+	// Reutiliza newGRPCClientConnection existente
+	conn, err := newGRPCClientConnection(addrString)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial peer: %w", err)
+	}
+
+	stub := pb.NewMessengerClient(conn)
+	client, err := stub.Request(context.Background())
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create Request stream: %w", err)
+	}
+
+	// Handshake (mesmo protocolo do client)
+	performServerHandshake(client, membership.OwnID)
+
+	// Start response receiver (discard responses)
+	go func() {
+		for {
+			_, err := client.Recv()
+			if err != nil {
+				logger.Debug().Err(err).Int32("peerID", peerID).Msg("Peer forwarding stream closed")
+				return
+			}
+		}
+	}()
+
+	return client, nil
 }
