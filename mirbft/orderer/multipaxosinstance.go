@@ -508,17 +508,17 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	if len(b.Requests) > 0 && len(b.Requests[0].TouchedGroups) > 0 {
 		// touchedGroups = b.Requests[0].TouchedGroups // Removed unused variable
 	}
-	if crossOpGSN > 0 && GlobalMulticastOrderer != nil {
+	if crossOpGSN > 0 && GetGlobalMulticastOrderer() != nil {
 		// Removida publicação redundante de META
 		// META é publicado apenas UMA vez pelo proxy no requesthandler.go
 		
 		// Ponto 3: Verifica ordem sequencial antes de entregar
-		if !GlobalMulticastOrderer.ADeliver(crossOpGSN, i.bucketId, i.lastVal.GetBatch()) {
+		if !GetGlobalMulticastOrderer().ADeliver(crossOpGSN, i.bucketId, i.lastVal.GetBatch()) {
 			fmt.Printf("[GSN-ALL] sn=%d gsn=%d out of order, buffering\n", i.sn, crossOpGSN)
 			// Buffer commit fora de ordem
 			if i.announce != nil {
 				digestBytes := i.lastDigest[:]
-				GlobalMulticastOrderer.BufferCommit(crossOpGSN, i.bucketId, i.lastVal.GetBatch(), i.announce, i.sn, digestBytes)
+				GetGlobalMulticastOrderer().BufferCommit(crossOpGSN, i.bucketId, i.lastVal.GetBatch(), i.announce, i.sn, digestBytes)
 			}
 			i.closed = true
 			traceCommit(i.sn, len(b.Requests))
@@ -561,14 +561,14 @@ func (i *mpxInstance) ProposeIfDue() {
 		// ✅ CORREÇÃO: Propõe apenas GSN esperado para evitar buffering excessivo
 		// Obtém expectedNextGSN para este grupo
 		var expectedGSN uint64
-		if GlobalMulticastOrderer != nil {
-			GlobalMulticastOrderer.expectedGSNMu.RLock()
-			expected, exists := GlobalMulticastOrderer.expectedNextGSN[i.bucketId]
+		if GetGlobalMulticastOrderer() != nil {
+			GetGlobalMulticastOrderer().expectedGSNMu.RLock()
+			expected, exists := GetGlobalMulticastOrderer().expectedNextGSN[i.bucketId]
 			if !exists {
 				expected = 1
 			}
 			expectedGSN = expected
-			GlobalMulticastOrderer.expectedGSNMu.RUnlock()
+			GetGlobalMulticastOrderer().expectedGSNMu.RUnlock()
 		} else {
 			expectedGSN = 1 // Fallback se não há multicast orderer
 		}
@@ -605,7 +605,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		if selectedReq != nil {
 			// ✅ FIX: Remove dentro do mesmo lock para evitar race condition
 			fmt.Printf("[DEBUG] sn=%d removing selected request from bucket (within lock)\n", i.sn)
-			request.Buckets[i.bucketId].RemoveNoLock([]*request.Request{selectedReq})
+			request.Buckets[i.bucketId].Remove([]*request.Request{selectedReq})
 			request.Buckets[i.bucketId].Unlock()
 			fmt.Printf("[DEBUG] sn=%d creating batch with selected request\n", i.sn)
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
