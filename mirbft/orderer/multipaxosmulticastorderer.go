@@ -969,9 +969,13 @@ func (o *MultiPaxosMulticastOrderer) CheckSig(data []byte, senderID int32, signa
 	if !config.Config.SignRequests {
 		return nil
 	}
-	pubKey := membership.AllPublicKeys()[senderID]
-	if pubKey == nil {
+	nodeIdentity := membership.NodeIdentity(senderID)
+	if nodeIdentity == nil || nodeIdentity.PubKey == nil {
 		return fmt.Errorf("public key not found for node %d", senderID)
+	}
+	pubKey, err := crypto.PublicKeyFromBytes(nodeIdentity.PubKey)
+	if err != nil {
+		return fmt.Errorf("failed to decode public key for node %d: %w", senderID, err)
 	}
 	return crypto.CheckSig(data, pubKey, signature)
 }
