@@ -16,6 +16,7 @@ package discovery
 
 import (
 	"context"
+	"sort"
 
 	logger "github.com/rs/zerolog/log"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
@@ -43,8 +44,59 @@ func RegisterPeer(serverAddrPort string, ownPublicIP string, ownPrivateIP string
 		logger.Fatal().Msg("RegisterPeer request failed.")
 	}
 
-	// Return discovered values.
-	return response.NewPeerId, response.Peers, response.PrivKey, response.TblsPubKey, response.TblsPrivKeyShare
+	// ✅ FIX: Recalcula IDs deterministicamente baseado em IPs ordenados
+	peers := response.Peers
+	
+	// Ordena peers por PublicAddr (determinístico)
+	sort.Slice(peers, func(i, j int) bool {
+		if peers[i].PublicAddr != peers[j].PublicAddr {
+			return peers[i].PublicAddr < peers[j].PublicAddr
+		}
+		return peers[i].PrivateAddr < peers[j].PrivateAddr
+	})
+	
+	// Detecta duplicatas
+	for i := 1; i < len(peers); i++ {
+		if peers[i].PublicAddr == peers[i-1].PublicAddr && peers[i].PrivateAddr == peers[i-1].PrivateAddr {
+			logger.Fatal().
+				Str("publicAddr", peers[i].PublicAddr).
+				Str("privateAddr", peers[i].PrivateAddr).
+				Msg("Duplicate peer address in discovery")
+		}
+	}
+	
+	// Encontra próprio índice na lista ordenada
+	ownIdx := -1
+	for i, p := range peers {
+		if p.PublicAddr == ownPublicIP && p.PrivateAddr == ownPrivateIP {
+			ownIdx = i
+			break
+		}
+	}
+	if ownIdx < 0 {
+		logger.Fatal().
+			Str("ownPublicIP", ownPublicIP).
+			Str("ownPrivateIP", ownPrivateIP).
+			Msg("Cannot find self in discovery peer list")
+	}
+	
+	// Reatribui IDs sequenciais baseado na ordem
+	for i := range peers {
+		peers[i].NodeId = int32(i)
+		peers[i].Port = PeerBasePort + (11 * int32(i))
+	}
+	
+	deterministicOwnID := int32(ownIdx)
+	
+	logger.Info().
+		Int32("discoveryID", response.NewPeerId).
+		Int32("deterministicID", deterministicOwnID).
+		Str("ownPublicIP", ownPublicIP).
+		Int("numPeers", len(peers)).
+		Msg("Recalculated deterministic peer ID")
+	
+	// Retorna ID determinístico
+	return deterministicOwnID, peers, response.PrivKey, response.TblsPubKey, response.TblsPrivKeyShare
 }
 
 func SyncPeer(serverAddrPort string, ownPeerID int32) {

@@ -81,10 +81,28 @@ func main() {
 	membership.OwnID = ownID
 	membership.OwnPrivKey = privateKey
 	membership.InitNodeIdentities(nodeIdentities)
+	
+	// ✅ VALIDAÇÃO: Verifica consistência do ID
+	if ownID < 0 || ownID >= int32(len(nodeIdentities)) {
+		logger.Fatal().
+			Int32("ownID", ownID).
+			Int("numPeers", len(nodeIdentities)).
+			Msg("Invalid ownID from discovery")
+	}
+	if nodeIdentities[ownID].PublicAddr != ownPublicIP {
+		logger.Fatal().
+			Int32("ownID", ownID).
+			Str("expectedPublicIP", ownPublicIP).
+			Str("actualPublicIP", nodeIdentities[ownID].PublicAddr).
+			Msg("OwnID mismatch: peer list inconsistent")
+	}
+	
 	logger.Info().
 		Int32("ownID", ownID).
+		Str("ownPublicIP", ownPublicIP).
+		Str("ownPrivateIP", ownPrivateIP).
 		Int("numPeers", len(nodeIdentities)).
-		Msg("Registered with discovery server.")
+		Msg("Registered with discovery server (deterministic ID).")
 
 	// Deserialize TBLS keys
 	TBLSPubKey, err := crypto.TBLSPubKeyFromBytes(serializedTBLSPubKey)
