@@ -623,9 +623,9 @@ func (i *mpxInstance) ProposeIfDue() {
 				fmt.Printf("[GSN-EXACT] sn=%d group=%d SELECTED and REMOVED expected gsn=%d from bucket\n", 
 					i.sn, i.bucketId, expectedGSN)
 			}
-			// ✅ CORREÇÃO CRÍTICA: Força proposta imediata após remover request
+			// ✅ CORREÇÃO CRÍTICA: Força nova proposta resetando apenas lastVal
+			// NÃO reseta phase para não perder promises já recebidos
 			i.lastVal = nil
-			i.phase = phaseInit
 		} else {
 			// Sem request adequado: propõe batch vazio
 			request.Buckets[i.bucketId].Unlock()
