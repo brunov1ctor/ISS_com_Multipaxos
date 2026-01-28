@@ -129,10 +129,13 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.proposeEvery = time.Duration(config.Config.BatchTimeout)
 	if o.am == nil {
 		o.am = NewAtomicMulticast()
-		o.ownedGroupID = 0 // Orderer standalone gerencia todos os grupos
-		fmt.Printf("[MPX] Init: created new AtomicMulticast\n")
+		// ✅ FIX: Só seta ownedGroupID=0 se ainda não foi configurado
+		if o.ownedGroupID == 0 {
+			o.ownedGroupID = 0 // Orderer standalone gerencia todos os grupos
+		}
+		fmt.Printf("[MPX] Init: created new AtomicMulticast (ownedGroupID=%d)\n", o.ownedGroupID)
 	} else {
-		fmt.Printf("[MPX] Init: reusing injected AtomicMulticast (groups=%v)\n", o.am.GetDefinedGroups())
+		fmt.Printf("[MPX] Init: reusing injected AtomicMulticast (groups=%v, ownedGroupID=%d)\n", o.am.GetDefinedGroups(), o.ownedGroupID)
 	}
 	o.emit = func(pm *pb.ProtocolMessage) {
 		mpx := pm.GetMultipaxos()
