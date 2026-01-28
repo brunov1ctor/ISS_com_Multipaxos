@@ -637,7 +637,14 @@ func (i *mpxInstance) ProposeIfDue() {
 			}
 		}
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
-			fmt.Printf("[DEBUG] sn=%d rb is nil or empty, creating empty batch\n", i.sn)
+			fmt.Printf("[DEBUG] sn=%d rb is nil or empty\n", i.sn)
+			// ✅ CORREÇÃO CRÍTICA: Grupo 0 NÃO propõe batch vazio
+			// Aguarda requests sistêmicas (GSN_REQUEST, META_STREAM)
+			if i.bucketId == 0 {
+				fmt.Printf("[MPX][INST] sn=%d group 0 waiting for system requests (no empty batch)\n", i.sn)
+				return
+			}
+			// Outros grupos podem propor batch vazio
 			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
 			batchBytes, err := proto.Marshal(emptyBatch)
 			if err != nil {
