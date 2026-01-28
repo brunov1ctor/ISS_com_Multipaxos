@@ -370,8 +370,12 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	
 	var groupsToProcess []uint32
 	if o.ownedGroupID != 0 {
-		// Modo multicast dedicado: processa apenas grupo owned
-		if segmentGroupID == o.ownedGroupID {
+		// Modo multicast dedicado
+		// ✅ CRITICAL: Grupo 0 é sequenciador GSN - TODOS devem processar
+		if segmentGroupID == 0 {
+			groupsToProcess = []uint32{0}
+			fmt.Printf("[MPX] runSegment: processing group 0 (GSN sequencer, all nodes)\n")
+		} else if segmentGroupID == o.ownedGroupID {
 			groupsToProcess = []uint32{segmentGroupID}
 			fmt.Printf("[MPX] runSegment: processing segment for group %d (owned=%d)\n", segmentGroupID, o.ownedGroupID)
 		} else {
