@@ -312,6 +312,10 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 				i.prepared = true
 				i.phase = phasePrepared
 				fmt.Printf("[MPX][INST] sn=%d QUORUM de promises atingido, entrando em steady-state\n", i.sn)
+				// ✅ FIX: Chama ProposeIfDue imediatamente após atingir quorum
+				i.mu.Unlock()
+				i.ProposeIfDue()
+				i.mu.Lock()
 			}
 		}
 	} else {
@@ -345,6 +349,10 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 		i.prepared = true
 		i.phase = phasePrepared
 		fmt.Printf("[MPX][INST] sn=%d QUORUM de promises atingido, entrando em steady-state\n", i.sn)
+		// ✅ FIX: Chama ProposeIfDue imediatamente após atingir quorum
+		i.mu.Unlock()
+		i.ProposeIfDue()
+		i.mu.Lock()
 	}
 }
 func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
