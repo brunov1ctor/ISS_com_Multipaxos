@@ -196,14 +196,14 @@ wait
 log_i "Reset remoto concluído."
 
 # === DIFUSÃO ATÔMICA SELETIVA: DEPLOY DE groups.yml ===
-# Copia groups.yml para /users (onde config.yml está)
-log_i "Copiando groups.yml para ${remote_base_dir}/config em todos os nós..."
+# Copia groups.yml para /tmp (onde o código procura)
+log_i "Copiando groups.yml para ${remote_work_dir}/config em todos os nós..."
 groups_yml_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../config" && pwd)/groups.yml"
 if [[ -f "${groups_yml_src}" ]]; then
   for ip in $(awk '{print $2}' "$instance_info_file"); do
     (
-      ssh $ssh_options "${remote_user}@${ip}" "mkdir -p ${remote_base_dir}/config" && \
-      scp $scp_options "${groups_yml_src}" "${remote_user}@${ip}:${remote_base_dir}/config/groups.yml"
+      ssh $ssh_options "${remote_user}@${ip}" "mkdir -p ${remote_work_dir}/config" && \
+      scp $scp_options "${groups_yml_src}" "${remote_user}@${ip}:${remote_work_dir}/config/groups.yml"
     ) &
   done
   wait
