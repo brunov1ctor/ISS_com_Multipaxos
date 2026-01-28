@@ -257,6 +257,15 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 	}
 }
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
+	// ✅ CORREÇÃO: Processa ClientRequest recebida via rede
+	if clientReq := pm.GetClientRequest(); clientReq != nil {
+		fmt.Printf("[MULTICAST] Received ClientRequest via network: clientId=%d groupId=%d\n", 
+			clientReq.RequestId.ClientId, clientReq.GroupId)
+		// Adiciona ao bucket local para processamento
+		request.AddRequest(clientReq)
+		return
+	}
+	
 	if missingEntry := pm.GetMissingEntry(); missingEntry != nil {
 		// SN intercalado: usa GroupId da request ao invés de mapear SN
 		var groupID uint32 = 0
@@ -797,8 +806,8 @@ func sanitizeGroups(in []uint32) []uint32 {
 	return out
 }
 
-// sendToGroup - Envia request para o grupo via fanout
-// ✅ CORREÇÃO CRÍTICA: SEMPRE faz fanout para TODOS os membros
+// sendToGroup - Envia request para o grupo via rede (messenger)
+// ✅ CORREÇÃO CRÍTICA: Envia via REDE para todos os membros
 // Garante que o líder do grupo SEMPRE receba a request (liveness)
 func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {
 	members := o.am.GetGroupMembers(groupID)
@@ -807,12 +816,18 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		return
 	}
 	
-	// ✅ SEMPRE faz fanout (garante que líder receba)
-	fmt.Printf("[SEND] Fanout to ALL members of group %d: %v\n", groupID, members)
-	if o.forwardRequestFn != nil {
-		o.forwardRequestFn(req, members)
-	} else {
-		request.ForwardRequestToNodes(req, members)
+	// ✅ Envia via REDE usando messenger para cada membro
+	fmt.Printf("[SEND] Sending via network to ALL members of group %d: %v\n", groupID, members)
+	for _, nodeID := range members {
+		// Cria mensagem de protocolo para enviar via rede
+		pm := &pb.ProtocolMessage{
+			SenderId: membership.OwnID,
+			Sn:       -1, // Request não tem SN ainda
+			Msg: &pb.ProtocolMessage_ClientRequest{
+				ClientRequest: req,
+			},
+		}
+		messenger.EnqueueMsg(pm, nodeID)
 	}
 }
 
