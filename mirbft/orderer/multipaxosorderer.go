@@ -407,15 +407,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
 		fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
 		
-		// ✅ CORREÇÃO CRÍTICA: Grupo 0 (sequenciador GSN) - TODOS os nós propõem
-		// Outros grupos: apenas líder propõe
-		if groupId != 0 && groupLeader != membership.OwnID {
+		// Apenas líder propõe (incluindo grupo 0)
+		if groupLeader != membership.OwnID {
 			fmt.Printf("[MPX][SKIP] Group %d: not leader (leader=%d, ownID=%d)\n", groupId, groupLeader, membership.OwnID)
 			continue
-		}
-		
-		if groupId == 0 {
-			fmt.Printf("[MPX][GROUP0] All nodes process group 0 (GSN sequencer)\n")
 		}
 		var groupIdx int32 = segmentGroupIdx
 		// Calculate bucketIndex: must match GroupId for correct bucket locking
