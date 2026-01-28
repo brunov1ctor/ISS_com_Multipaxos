@@ -611,9 +611,9 @@ func (i *mpxInstance) ProposeIfDue() {
 		}
 		
 		if selectedReq != nil {
-			// ✅ FIX: Remove dentro do mesmo lock para evitar race condition
+			// ✅ FIX: Usa removeNoLock para evitar deadlock (bucket já está locked)
 			fmt.Printf("[DEBUG] sn=%d removing selected request from bucket (within lock)\n", i.sn)
-			request.Buckets[i.bucketId].Remove([]*request.Request{selectedReq})
+			request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
 			request.Buckets[i.bucketId].Unlock()
 			fmt.Printf("[DEBUG] sn=%d creating batch with selected request\n", i.sn)
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}

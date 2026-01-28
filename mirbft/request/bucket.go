@@ -347,6 +347,13 @@ func (b *Bucket) Remove(reqs []*Request) {
 	}
 }
 
+// RemoveNoLock removes a single request without acquiring the lock.
+// ATTENTION: Bucket must be LOCKED when calling this method.
+// Use this when you already hold the bucket lock to avoid deadlock.
+func (b *Bucket) RemoveNoLock(req *Request) {
+	b.removeNoLock(req)
+}
+
 // Removes a request from the bucket without acquiring the bucket lock.
 // ATTENTION: Does not (and must not) remove the request from the index.
 //            The index can be cleaned up only after the client watermarks have been updated,
