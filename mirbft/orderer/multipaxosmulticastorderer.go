@@ -1018,13 +1018,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return false // Deixa processar normalmente
 	}
 	
-	// ✅ Se já tem TouchedGroups E GroupId, já foi preprocessado (clone de cross-op ou forwarded)
-	if len(req.TouchedGroups) > 0 && req.GroupId > 0 {
-		fmt.Printf("[PREPROCESS] Already processed (has TouchedGroups and GroupId), skipping\n")
-		return false
-	}
-	
-	// ✅ Se já tem GSN, foi forwarded de outro nó - não preprocessa de novo
+	// ✅ Se já tem GSN, foi preprocessado (forwarded de outro nó ou clone interno)
 	if req.GSN > 0 {
 		fmt.Printf("[PREPROCESS] Already has GSN=%d (forwarded), skipping\n", req.GSN)
 		return false
