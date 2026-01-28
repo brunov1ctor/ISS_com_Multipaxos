@@ -107,8 +107,8 @@ type MultiPaxosMulticastOrderer struct {
 	metaMu      sync.RWMutex
 	
 	// ADeliver ordem sequencial
-	expectedNextGSN map[uint32]uint64
-	expectedGSNMu   sync.RWMutex
+	lastDeliveredGSN map[uint32]uint64
+	expectedGSNMu    sync.RWMutex
 	
 	// Buffer para commits fora de ordem
 	pendingCommits map[uint32]map[uint64]*PendingCommit
@@ -151,7 +151,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 func (o *MultiPaxosMulticastOrderer) initComponents() {
 	o.am = NewAtomicMulticast()
 	o.groupOrderers = make(map[uint32]*MultiPaxosOrderer)
-	o.expectedNextGSN = make(map[uint32]uint64)
+	o.lastDeliveredGSN = make(map[uint32]uint64)
 	o.pendingCommits = make(map[uint32]map[uint64]*PendingCommit)
 	
 	// SN intercalado: Apenas campos necessários (sem mapeamento SN→grupo)
@@ -458,58 +458,66 @@ func (o *MultiPaxosMulticastOrderer) cleanOldMappings(checkpointSN int32) {
 	fmt.Printf("[MULTICAST] Checkpoint %d (interleaved SN space)\n", checkpointSN)
 }
 
-// ADeliver - Verifica ordem crescente GSN antes de entregar
-// ✅ FIX: Permite gaps (GSNs que não tocam o grupo), exige apenas ordem crescente
+// ADeliver - Verifica ordem determinística baseada em META antes de entregar
+// ✅ FIX: Só entrega quando gsn == nextTouchingGSN (determinístico via META)
 func (o *MultiPaxosMulticastOrderer) ADeliver(gsn uint64, groupID uint32, batch []byte) bool {
-	// ✅ BARREIRA META: Lê META primeiro para evitar inversão de locks
+	o.expectedGSNMu.Lock()
+	defer o.expectedGSNMu.Unlock()
+	
+	lastDelivered := o.lastDeliveredGSN[groupID]
+	
+	// Duplicata
+	if gsn <= lastDelivered {
+		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d <= lastDelivered %d, skipping\n", groupID, gsn, lastDelivered)
+		return true
+	}
+	
+	// Avança cursor pulando GSNs que não tocam o grupo (via META)
+	nextCandidate := lastDelivered + 1
+	for nextCandidate < gsn {
+		o.metaMu.RLock()
+		_, metaExists := o.gsnMetadata[nextCandidate]
+		touches := false
+		if metaExists {
+			touches = o.gsnTouchesGroup(nextCandidate, groupID)
+		}
+		o.metaMu.RUnlock()
+		
+		if !metaExists {
+			// META não existe - não pode pular
+			fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d blocked (waiting for META of %d)\n", groupID, gsn, nextCandidate)
+			return false
+		}
+		
+		if touches {
+			// GSN menor toca grupo - precisa esperar
+			fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d blocked (waiting for %d)\n", groupID, gsn, nextCandidate)
+			return false
+		}
+		
+		// Não toca - pode pular
+		nextCandidate++
+	}
+	
+	// Verifica se este GSN toca o grupo
 	o.metaMu.RLock()
 	_, metaExists := o.gsnMetadata[gsn]
 	if !metaExists {
 		o.metaMu.RUnlock()
 		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d waiting for META\n", groupID, gsn)
-		return false // Força espera por META
+		return false
 	}
 	touches := o.gsnTouchesGroup(gsn, groupID)
 	o.metaMu.RUnlock()
 	
 	if !touches {
-		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d does not touch this group\n", groupID, gsn)
-		return true // Não precisa processar
+		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d does not touch group\n", groupID, gsn)
+		return true
 	}
 	
-	// ✅ FIX: Ordem crescente (não consecutiva) - permite gaps
-	o.expectedGSNMu.Lock()
-	defer o.expectedGSNMu.Unlock()
-	
-	lastDelivered, exists := o.expectedNextGSN[groupID]
-	if !exists {
-		lastDelivered = 0
-		o.expectedNextGSN[groupID] = 0
-	}
-	
-	// Verifica se GSN > lastDelivered
-	if gsn <= lastDelivered {
-		fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d <= lastDelivered %d, skipping duplicate\n", groupID, gsn, lastDelivered)
-		return true // Já entregue
-	}
-	
-	// Verifica se existe algum GSN menor buffered
-	o.bufferMu.Lock()
-	if o.pendingCommits[groupID] != nil {
-		for bufferedGSN := range o.pendingCommits[groupID] {
-			if bufferedGSN > lastDelivered && bufferedGSN < gsn {
-				o.bufferMu.Unlock()
-				fmt.Printf("[ATOMIC-ORDER] Group %d: GSN %d buffering (waiting for %d)\n", groupID, gsn, bufferedGSN)
-				return false // Existe GSN menor pendente
-			}
-		}
-	}
-	o.bufferMu.Unlock()
-	
+	// gsn == nextCandidate e toca o grupo - pode entregar
 	fmt.Printf("[ATOMIC-ORDER] Group %d: Delivering GSN %d (lastDelivered=%d)\n", groupID, gsn, lastDelivered)
-	o.expectedNextGSN[groupID] = gsn
-	
-	o.drainBuffer(groupID)
+	o.lastDeliveredGSN[groupID] = gsn
 	return true
 }
 
@@ -534,8 +542,8 @@ func (o *MultiPaxosMulticastOrderer) BufferCommit(gsn uint64, groupID uint32, ba
 	fmt.Printf("[BUFFER] Group %d: Buffered GSN %d (sn=%d)\n", groupID, gsn, sn)
 }
 
-// drainBuffer - Processa commits buffered em ordem crescente
-// ✅ FIX: Revalida META/touches através de ADeliver antes de entregar
+// drainBuffer - Processa commits buffered em ordem determinística baseada em META
+// ✅ FIX: Usa mesma lógica do ADeliver - só entrega nextTouchingGSN
 func (o *MultiPaxosMulticastOrderer) drainBuffer(groupID uint32) {
 	o.bufferMu.Lock()
 	defer o.bufferMu.Unlock()
@@ -544,37 +552,53 @@ func (o *MultiPaxosMulticastOrderer) drainBuffer(groupID uint32) {
 		return
 	}
 	
-	// Processa commits em ordem crescente (não consecutiva)
+	// Processa em ordem determinística (não apenas "menor buffered")
 	for {
-		lastDelivered := o.expectedNextGSN[groupID]
+		o.expectedGSNMu.RLock()
+		lastDelivered := o.lastDeliveredGSN[groupID]
+		o.expectedGSNMu.RUnlock()
 		
-		// Busca menor GSN > lastDelivered
-		var nextGSN uint64 = 0
-		for gsn := range o.pendingCommits[groupID] {
-			if gsn > lastDelivered && (nextGSN == 0 || gsn < nextGSN) {
-				nextGSN = gsn
+		// Avança cursor pulando GSNs que não tocam o grupo (via META)
+		nextCandidate := lastDelivered + 1
+		for {
+			o.metaMu.RLock()
+			_, metaExists := o.gsnMetadata[nextCandidate]
+			touches := false
+			if metaExists {
+				touches = o.gsnTouchesGroup(nextCandidate, groupID)
 			}
+			o.metaMu.RUnlock()
+			
+			if !metaExists {
+				// META não existe - para (não pode pular)
+				return
+			}
+			
+			if touches {
+				// Este GSN toca o grupo - é o próximo candidato
+				break
+			}
+			
+			// Não toca - pula para próximo
+			nextCandidate++
 		}
 		
-		if nextGSN == 0 {
-			break // Não há mais GSNs no buffer
+		// Verifica se commit do nextCandidate está buffered
+		pending, exists := o.pendingCommits[groupID][nextCandidate]
+		if !exists {
+			// Commit ainda não chegou - para
+			return
 		}
 		
-		pending := o.pendingCommits[groupID][nextGSN]
-		
-		// ✅ FIX: Revalida através de ADeliver (verifica META/touches)
-		o.bufferMu.Unlock()
-		canDeliver := o.ADeliver(nextGSN, groupID, pending.batch)
-		o.bufferMu.Lock()
-		
-		if !canDeliver {
-			break // Ainda não pode entregar (META missing ou ordem errada)
-		}
-		
-		fmt.Printf("[BUFFER] Group %d: Draining GSN %d (sn=%d)\n", groupID, nextGSN, pending.sn)
+		// Entrega nextCandidate
+		fmt.Printf("[BUFFER] Group %d: Draining GSN %d (sn=%d)\n", groupID, nextCandidate, pending.sn)
 		pending.announce(pending.sn, pending.batch, pending.digest)
 		
-		delete(o.pendingCommits[groupID], nextGSN)
+		o.expectedGSNMu.Lock()
+		o.lastDeliveredGSN[groupID] = nextCandidate
+		o.expectedGSNMu.Unlock()
+		
+		delete(o.pendingCommits[groupID], nextCandidate)
 	}
 }
 
@@ -643,46 +667,21 @@ func (o *MultiPaxosMulticastOrderer) gsnTouchesGroup(gsn uint64, groupID uint32)
 }
 
 // tryDeliverAfterMeta - Tenta entregar commit buffered após META chegar
-// ✅ FIX: Resolve deadlock quando commit chega antes do META
+// ✅ FIX: Chama drainBuffer que processa em ordem sem deadlock
 func (o *MultiPaxosMulticastOrderer) tryDeliverAfterMeta(gsn uint64, groupID uint32) {
-	o.bufferMu.Lock()
-	pending, exists := o.pendingCommits[groupID][gsn]
-	o.bufferMu.Unlock()
+	o.bufferMu.RLock()
+	_, exists := o.pendingCommits[groupID][gsn]
+	o.bufferMu.RUnlock()
 	
 	if !exists {
 		return // Não há commit buffered para este GSN
 	}
 	
-	fmt.Printf("[META-ARRIVED] Group %d: Trying to deliver buffered GSN %d\n", groupID, gsn)
-	
-	// Tenta entregar agora que META existe
-	if o.ADeliver(gsn, groupID, pending.batch) {
-		fmt.Printf("[META-ARRIVED] Group %d: Delivered buffered GSN %d (sn=%d)\n", groupID, gsn, pending.sn)
-		pending.announce(pending.sn, pending.batch, pending.digest)
-		
-		o.bufferMu.Lock()
-		delete(o.pendingCommits[groupID], gsn)
-		o.bufferMu.Unlock()
-	}
+	fmt.Printf("[META-ARRIVED] Group %d: Trying to drain buffer after GSN %d META\n", groupID, gsn)
+	o.drainBuffer(groupID)
 }
 
-func (o *MultiPaxosMulticastOrderer) advanceGSNForGroup(groupID uint32, gsn uint64) {
-	o.expectedGSNMu.Lock()
-	defer o.expectedGSNMu.Unlock()
-	
-	expected, exists := o.expectedNextGSN[groupID]
-	if !exists {
-		o.expectedNextGSN[groupID] = 1
-		expected = 1
-	}
-	
-	if gsn == expected {
-		fmt.Printf("[META-STREAM] Group %d: Skipping GSN %d (not touched)\n", groupID, gsn)
-		o.expectedNextGSN[groupID] = gsn + 1
-		// ✅ FIX: drainBuffer assume expectedGSNMu já segurado
-		o.drainBuffer(groupID)
-	}
-}
+
 
 func (o *MultiPaxosMulticastOrderer) PublishGSNMetadata(gsn uint64, touchedGroups []uint32) {
 	// ✅ DEDUPLICACAO: Verifica se META já foi publicado para este GSN
