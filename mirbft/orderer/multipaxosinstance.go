@@ -559,15 +559,15 @@ func (i *mpxInstance) ProposeIfDue() {
 			return
 		}
 		// ✅ CORREÇÃO: Propõe apenas GSN esperado para evitar buffering excessivo
-		// Obtém expectedNextGSN para este grupo
+		// Obtém lastDeliveredGSN para este grupo
 		var expectedGSN uint64
 		if GetGlobalMulticastOrderer() != nil {
 			GetGlobalMulticastOrderer().expectedGSNMu.RLock()
-			expected, exists := GetGlobalMulticastOrderer().expectedNextGSN[i.bucketId]
+			expected, exists := GetGlobalMulticastOrderer().lastDeliveredGSN[i.bucketId]
 			if !exists {
-				expected = 1
+				expected = 0
 			}
-			expectedGSN = expected
+			expectedGSN = expected + 1
 			GetGlobalMulticastOrderer().expectedGSNMu.RUnlock()
 		} else {
 			expectedGSN = 1 // Fallback se não há multicast orderer
