@@ -126,7 +126,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.backlog = newMPXBacklog()
 	o.last = -1
 	o.maxBatchSize = int(config.Config.BatchSize)
-	o.proposeEvery = time.Duration(config.Config.BatchTimeout) * time.Millisecond
+	o.proposeEvery = config.Config.BatchTimeout
 	if o.am == nil {
 		o.am = NewAtomicMulticast()
 		// ✅ FIX: Só seta ownedGroupID=0 se ainda não foi configurado
