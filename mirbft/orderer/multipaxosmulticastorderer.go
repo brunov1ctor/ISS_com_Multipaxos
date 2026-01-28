@@ -396,8 +396,14 @@ func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 	
 	// GSN request (identificado por string no payload)
 	if isGSNRequest(req) {
-		// ✅ CORREÇÃO: Usa chave composta global do RequestId
-		reqID := makeGlobalRequestID(req.RequestId.ClientId, uint32(req.RequestId.ClientSn))
+		// ✅ CORREÇÃO: Extrai reqID do payload ao invés de reconstruir
+		payloadStr := string(req.Payload)
+		reqIDStr := strings.TrimPrefix(payloadStr, SYSTEM_GSN_REQUEST)
+		reqID, err := strconv.ParseUint(reqIDStr, 10, 64)
+		if err != nil {
+			fmt.Printf("[GSN-SEQ][ERROR] Failed to parse reqID from payload: %s\n", payloadStr)
+			return
+		}
 		gsn := o.onGroup0Commit(reqID)
 		fmt.Printf("[GSN-SEQ][GSN-ASSIGNED] reqID=%d -> GSN=%d (from proxy %d)\n", reqID, gsn, req.RequestId.ClientId)
 		return
