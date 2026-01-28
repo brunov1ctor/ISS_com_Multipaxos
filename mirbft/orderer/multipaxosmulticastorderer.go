@@ -396,7 +396,7 @@ func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 	
 	// GSN request (identificado por string no payload)
 	if isGSNRequest(req) {
-		// ✅ CORREÇÃO: Extrai reqID do payload ao invés de reconstruir
+		// ✅ CORREÇÃO: Extrai reqID do payload
 		payloadStr := string(req.Payload)
 		reqIDStr := strings.TrimPrefix(payloadStr, SYSTEM_GSN_REQUEST)
 		reqID, err := strconv.ParseUint(reqIDStr, 10, 64)
@@ -404,8 +404,33 @@ func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 			fmt.Printf("[GSN-SEQ][ERROR] Failed to parse reqID from payload: %s\n", payloadStr)
 			return
 		}
+		
+		// ✅ FIX CRÍTICO: Atribui GSN e responde ao nó que fez a request
 		gsn := o.onGroup0Commit(reqID)
 		fmt.Printf("[GSN-SEQ][GSN-ASSIGNED] reqID=%d -> GSN=%d (from proxy %d)\n", reqID, gsn, req.RequestId.ClientId)
+		
+		// ✅ CORREÇÃO: Se este nó é o proxy que fez a request, acorda o canal local
+		if req.RequestId.ClientId == membership.OwnID {
+			o.gsnReqMu.Lock()
+			respChan, exists := o.gsnRequestsPending[reqID]
+			if exists {
+				delete(o.gsnRequestsPending, reqID)
+				fmt.Printf("[GSN-SEQ][LOCAL] This node is the proxy, waking up local channel\n")
+				o.gsnReqMu.Unlock()
+				select {
+				case respChan <- gsn:
+					fmt.Printf("[GSN-SEQ][LOCAL] GSN %d delivered to local channel\n", gsn)
+				default:
+					fmt.Printf("[GSN-SEQ][LOCAL] Channel blocked\n")
+				}
+			} else {
+				o.gsnReqMu.Unlock()
+				fmt.Printf("[GSN-SEQ][LOCAL] reqID=%d not in pending map (already processed?)\n", reqID)
+			}
+		} else {
+			fmt.Printf("[GSN-SEQ][REMOTE] Request from proxy %d (not this node %d), no local channel to wake\n", 
+				req.RequestId.ClientId, membership.OwnID)
+		}
 		return
 	}
 	
@@ -426,35 +451,15 @@ func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
 	fmt.Printf("[GSN-SEQ][WARN] Group 0 committed unknown request type (payload=%s)\n", string(req.Payload[:payloadLen]))
 }
 // onGroup0Commit - Processa commit do grupo 0 (sequenciador GSN)
-// Atribui GSN sequencial e acorda proxies aguardando
+// Atribui GSN sequencial (não acorda canais - isso é feito em OnGroup0Commit)
 func (o *MultiPaxosMulticastOrderer) onGroup0Commit(reqID uint64) uint64 {
 	o.gsnMu.Lock()
 	gsn := o.nextGSN
 	o.nextGSN++
-	// ✅ 4) PERSISTÊNCIA: Persiste nextGSN após incremento
+	// ✅ PERSISTÊNCIA: Persiste nextGSN após incremento
 	o.persistNextGSN()
 	fmt.Printf("[GSN-SEQ][ASSIGN] reqID=%d assigned GSN=%d (nextGSN now=%d, persisted)\n", reqID, gsn, o.nextGSN)
 	o.gsnMu.Unlock()
-	
-	// ✅ ROBUSTEZ: Acorda apenas o canal correto com chave composta
-	o.gsnReqMu.Lock()
-	respChan, exists := o.gsnRequestsPending[reqID]
-	if exists {
-		delete(o.gsnRequestsPending, reqID) // Remove imediatamente
-		fmt.Printf("[GSN-SEQ][FOUND] reqID=%d found in pending map, sending GSN=%d\n", reqID, gsn)
-	} else {
-		fmt.Printf("[GSN-SEQ][NOT-FOUND] reqID=%d NOT in pending map (possible duplicate or late)\n", reqID)
-	}
-	o.gsnReqMu.Unlock()
-	
-	if exists {
-		select {
-		case respChan <- gsn:
-			fmt.Printf("[GSN-SEQ][DELIVERED] GSN %d delivered to reqID %d\n", gsn, reqID)
-		default:
-			fmt.Printf("[GSN-SEQ][WARN] Channel blocked for reqID %d\n", reqID)
-		}
-	}
 	
 	return gsn
 }
