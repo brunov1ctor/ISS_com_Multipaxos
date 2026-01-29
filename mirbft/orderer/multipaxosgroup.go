@@ -37,7 +37,6 @@ import (
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"github.com/hyperledger-labs/mirbft/membership"
-	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	logger "github.com/rs/zerolog/log"
 )
 const (
