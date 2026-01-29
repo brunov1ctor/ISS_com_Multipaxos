@@ -536,3 +536,23 @@ func extractGroupID(mpx *pb.MPxMsg) uint32 {
 	}
 	return 0
 }
+
+// GetActiveInstance - Retorna instância ativa para o grupo
+// ✅ LIVENESS: Usado para acordar líder quando request chega
+func (o *MultiPaxosOrderer) GetActiveInstance(groupID uint32) *mpxInstance {
+	o.firstSNMu.RLock()
+	currentSN := o.currentFirstSN
+	o.firstSNMu.RUnlock()
+	
+	if currentSN <= 0 {
+		return nil // Nenhum segmento ativo
+	}
+	
+	// Retorna instância do SN atual do grupo
+	inst, ok := o.dispatcher.load(currentSN)
+	if !ok || inst == nil {
+		return nil
+	}
+	
+	return inst
+}

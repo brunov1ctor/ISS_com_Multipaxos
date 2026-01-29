@@ -935,6 +935,31 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 	}
 }
 
+// NotifyNewRequest - Notifica líder quando request chega no bucket
+// ✅ LIVENESS: Acorda líder imediatamente sem depender de polling
+func (o *MultiPaxosMulticastOrderer) NotifyNewRequest(groupID uint32) {
+	// Verifica se este nó é líder do grupo
+	if !o.am.IsLeader(groupID, membership.OwnID) {
+		return
+	}
+	
+	// Obtém orderer do grupo
+	o.orderersMu.RLock()
+	groupOrderer := o.groupOrderers[groupID]
+	o.orderersMu.RUnlock()
+	
+	if groupOrderer == nil {
+		return
+	}
+	
+	// Obtém instância ativa do grupo
+	inst := groupOrderer.GetActiveInstance(groupID)
+	if inst != nil {
+		fmt.Printf("[NOTIFY] Group %d: Waking leader for new request\n", groupID)
+		inst.ProposeIfDue()
+	}
+}
+
 // PreprocessRequest - Preprocessa request para atomic multicast
 // Retorna true se já processou (não precisa processamento padrão)
 func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bool {
