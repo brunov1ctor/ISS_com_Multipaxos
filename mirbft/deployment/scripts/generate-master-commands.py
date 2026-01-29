@@ -301,15 +301,6 @@ def stopPeers(peers):
     output("")
 
 
-def stopPeerProcesses(expID, peers):
-    output("# stop orderingpeer processes (keep discoveryslave alive) [BEST-EFFORT]")
-    for p in peers:
-        output("exec-start {0} - pkill -INT -f (^|/)(orderingpeer)(\\\\s|$)".format(p))
-    output("wait for {0}".format(STOP_SLAVES_DELAY))
-    for p in peers:
-        output("sync {0}".format(p))
-    output("")
-
 
 def saveConfig(expID, slaves):
     output("# Save config (best-effort, ensure dir exists)")
@@ -378,10 +369,8 @@ def generateCommands(expID, peers, clients):
     startPeers(expID, list(peers))
     runClients(expID, list(clients))
 
-    # (ALTERAÇÃO MÍNIMA)
-    # Em vez de "stop" do framework (pode travar pra sempre),
-    # usamos o best-effort pkill -INT do orderingpeer e seguimos o pipeline.
-    stopPeerProcesses(expID, list(peers))
+    # Peers will be automatically killed by ExecWait timeout (SIGINT -> SIGKILL)
+    # No need for explicit stopPeerProcesses
 
     unsetBandwidth(expID, bandwidths)
 
