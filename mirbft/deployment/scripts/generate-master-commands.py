@@ -66,17 +66,14 @@ skipAllExisting = False
 def output(data: str):
     print(data, file=outFile)
 
-
 def waitForSlaves(slaves):
     output("# wait slaves")
     for s in slaves:
         output("wait for slaves {0} {1}".format(s, numSlaves[s]))
     output("")
 
-
 def _exp_slave_dir(expID: str) -> str:
     return f"{EXPERIMENT_OUTPUT_DIR}/{expID}/slave-__id__"
-
 
 def createLogDir(expID):
     output("# mkdir log dir")
@@ -84,7 +81,6 @@ def createLogDir(expID):
     output("exec-start __all__ - mkdir -p {0}".format(_exp_slave_dir(expID)))
     output("exec-wait __all__ {0}".format(FS_SETTLE_DELAY_MS))
     output("")
-
 
 def ensureConfigDir(slaves):
     output("# ensure config dir")
@@ -95,7 +91,6 @@ def ensureConfigDir(slaves):
     for s in slaves:
         output("sync {0}".format(s))
     output("")
-
 
 def pushConfigFiles(expID, slaves):
     output("# push config")
@@ -148,7 +143,6 @@ def pushConfigFiles(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
-
 def snapshotConfigNow(expID, slaves):
     output("# snapshot config (per-run)")
     for s in slaves:
@@ -174,7 +168,6 @@ def snapshotConfigNow(expID, slaves):
     for s in slaves:
         output("sync {0}".format(s))
     output("")
-
 
 def ensureTlsDataLink(expID, slaves):
     """
@@ -221,7 +214,6 @@ def ensureTlsDataLink(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
-
 def setBandwidth(expID, bandwidths):
     output("# set bandwidth")
     for s, bandwidth in bandwidths.items():
@@ -240,7 +232,6 @@ def setBandwidth(expID, bandwidths):
         output("sync {0}".format(s))
     output("")
 
-
 def unsetBandwidth(expID, bandwidths):
     output("# unset bandwidth")
     for s, bandwidth in bandwidths.items():
@@ -254,7 +245,6 @@ def unsetBandwidth(expID, bandwidths):
     for s in bandwidths:
         output("sync {0}".format(s))
     output("")
-
 
 def startPeers(expID, peers):
     numPeers = 0
@@ -271,7 +261,6 @@ def startPeers(expID, peers):
         )
     output("discover-wait")
     output("")
-
 
 def runClients(expID, clients):
     output("# run clients")
@@ -292,15 +281,12 @@ def runClients(expID, clients):
         output("sync {0}".format(c))
     output("")
 
-
 def stopPeers(peers):
     output("# stop peers (framework stop)")
     for p in peers:
         output("stop {0}".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
     output("")
-
-
 
 def saveConfig(expID, slaves):
     output("# Save config (best-effort, ensure dir exists)")
@@ -322,7 +308,6 @@ def saveConfig(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
-
 def submitLogs(expID, slaves):
     # DESATIVADO (não empacota/copiar logs pesados e não cria scp-output-*.log)
     output("# submit logs (DESATIVADO)")
@@ -330,17 +315,14 @@ def submitLogs(expID, slaves):
         output("exec-start {0} - true".format(s))
     output("")
 
-
 def updateStatus(value: str):
     output("# update status")
     output("write-file $status_file {0}".format(value))
     output("")
 
-
 def writeReadyFile():
     output("write-file $ready_file READY")
     output("")
-
 
 def generateCommands(expID, peers, clients):
     output("#========================================")
@@ -380,7 +362,6 @@ def generateCommands(expID, peers, clients):
     updateStatus(expID)
     output("")
 
-
 def deploy(tokens):
     global defaultMachine
     global deploymentSchedule
@@ -407,7 +388,6 @@ def deploy(tokens):
                     )
                 )
             tokens = tokens[2:]
-
 
 def run(expID, tokens):
     global lastFinished
@@ -488,7 +468,6 @@ def run(expID, tokens):
 
     lastFinished = expID
 
-
 deplType = sys.argv[1]
 if deplType not in {"local", "cloud", "remote"}:
     sys.exit("generate-master-commands.py: first argument must be one of 'local', 'cloud', and 'remote'")
@@ -531,4 +510,3 @@ with open(inFileName) as inFile:
             defaultBandwidth = tokens[1]
         else:
             sys.exit("generate-master-commands.py: unknown token: {0}".format(tokens[0]))
-

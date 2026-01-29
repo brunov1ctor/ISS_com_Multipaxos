@@ -242,12 +242,12 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 	}
 }
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
-	// ✅ CORREÇÃO: Processa ClientRequest recebida via rede
+	// ✅ FIX LOOP: Request via rede só adiciona ao bucket (não reprocessa)
 	if gsnForward := pm.GetGsnReqForward(); gsnForward != nil {
 		fmt.Printf("[MULTICAST] Received ClientRequest via network: clientId=%d groupId=%d\n", 
 			gsnForward.Req.RequestId.ClientId, gsnForward.Req.GroupId)
-		// Adiciona ao bucket local para processamento
-		request.HandleRequest(gsnForward.Req)
+		// ✅ Adiciona ao bucket SEM chamar PreprocessRequest de novo
+		request.AddRequest(gsnForward.Req)
 		return
 	}
 	
@@ -707,7 +707,7 @@ func sanitizeGroups(in []uint32) []uint32 {
 }
 
 // sendToGroup - Envia request para o grupo via rede (messenger)
-// ✅ CORREÇÃO CRÍTICA: Processa localmente se for membro, envia via rede para outros
+// ✅ FIX LOOP INFINITO: Adiciona ao bucket local SEM reprocessar
 // Garante que o líder do grupo SEMPRE receba a request (liveness)
 func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {
 	members := o.am.GetGroupMembers(groupID)
@@ -716,31 +716,19 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		return
 	}
 
-	// ✅ FIX: Verifica se sou membro do grupo
-	isMember := false
+	// ✅ FIX: Para cada membro do grupo
 	for _, nodeID := range members {
 		if nodeID == membership.OwnID {
-			isMember = true
-			break
+			// ✅ LOCAL: Adiciona ao bucket SEM chamar PreprocessRequest de novo
+			fmt.Printf("[SEND] Adding to local bucket for group %d (I am member)\n", groupID)
+			request.AddRequest(req) // Apenas adiciona ao bucket, não reprocessa
+			continue
 		}
-	}
-
-	if isMember {
-		// Processa localmente (adiciona ao bucket)
-		fmt.Printf("[SEND] Processing locally for group %d (I am member)\n", groupID)
-		request.HandleRequest(req)
-	}
-
-	// Envia via REDE apenas para OUTROS membros
-	fmt.Printf("[SEND] Sending via network to OTHER members of group %d\n", groupID)
-	for _, nodeID := range members {
-		if nodeID == membership.OwnID {
-			continue // Pula si mesmo (já processou localmente)
-		}
-		// Cria mensagem de protocolo para enviar via rede
+		
+		// ✅ REDE: Envia para outros membros
 		pm := &pb.ProtocolMessage{
 			SenderId: membership.OwnID,
-			Sn:       -1, // Request não tem SN ainda
+			Sn:       -1,
 			Msg: &pb.ProtocolMessage_GsnReqForward{
 				GsnReqForward: &pb.GSNReqForward{
 					Req: req,
