@@ -15,7 +15,11 @@
 package discovery
 
 import (
+	"bufio"
 	"net"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
@@ -45,6 +49,9 @@ type DiscoveryServer struct {
 	syncWg               sync.WaitGroup     // Used to wait for all peers to connect to each other.
 	doOnce               sync.Once          // Used to generate response that is sent to all peers.
 	keyGenOnce           sync.Once          // Used to generate the keys for the BLS threshold cryptosystem once, to be included in the response sent to all peers.
+
+	// ✅ Deterministic ID mapping from instance-info
+	ipToIDMap map[string]int32 // Maps IP address to fixed peer ID
 
 	// Fields related to master and slaves.
 	slaves sync.Map // Maps slave IDs to slaves. Used as map[int32]*slave
@@ -105,6 +112,9 @@ func NewDiscoveryServer() *DiscoveryServer {
 	// Initially not waiting for any command.
 	ds.waitingForCmd = -1
 	ds.maxCommandExitStatus = 0
+
+	// ✅ Initialize IP to ID map (will be populated from instance-info)
+	ds.ipToIDMap = make(map[string]int32)
 
 	// NOTE: The peerIdentities list is allocated in collectPeerIdentities.
 
@@ -196,3 +206,34 @@ func (ds *DiscoveryServer) resetPC(numPeers int) {
 	ds.keyGenOnce = sync.Once{}
 }
 
+
+// LoadIPToIDMapping loads deterministic IP to ID mapping from instance-info file
+// Format: each line is "ID publicIP privateIP"
+func (ds *DiscoveryServer) LoadIPToIDMapping(instanceInfoPath string) error {
+	file, err := os.Open(instanceInfoPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		id, err := strconv.ParseInt(parts[0], 10, 32)
+		if err != nil {
+			logger.Warn().Str("line", line).Msg("Invalid ID in instance-info")
+			continue
+		}
+		publicIP := parts[1]
+		ds.ipToIDMap[publicIP] = int32(id)
+		logger.Info().Int32("id", int32(id)).Str("ip", publicIP).Msg("Loaded IP to ID mapping")
+	}
+	return scanner.Err()
+}
