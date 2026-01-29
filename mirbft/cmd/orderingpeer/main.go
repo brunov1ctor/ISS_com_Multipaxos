@@ -286,8 +286,6 @@ func setOrderer(ordererType string, ownPrivateIP string, configFileName string) 
 
 func setCheckpointer(checkpointerType string) (chkp checkpoint.Checkpointer) {
 	switch checkpointerType {
-	case "Dummy":
-		chkp = checkpoint.NewDummyCheckpointer()
 	case "Simple":
 		chkp = checkpoint.NewSimpleCheckpointer()
 	case "Signing":
