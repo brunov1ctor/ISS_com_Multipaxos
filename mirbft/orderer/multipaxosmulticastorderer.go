@@ -707,7 +707,7 @@ func sanitizeGroups(in []uint32) []uint32 {
 }
 
 // sendToGroup - Envia request para o grupo via rede (messenger)
-// ✅ CORREÇÃO CRÍTICA: Envia via REDE para todos os membros
+// ✅ CORREÇÃO CRÍTICA: Processa localmente se for membro, envia via rede para outros
 // Garante que o líder do grupo SEMPRE receba a request (liveness)
 func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {
 	members := o.am.GetGroupMembers(groupID)
@@ -715,10 +715,28 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		fmt.Printf("[SEND] Group %d has no members, dropping\n", groupID)
 		return
 	}
-	
-	// ✅ Envia via REDE usando messenger para cada membro
-	fmt.Printf("[SEND] Sending via network to ALL members of group %d: %v\n", groupID, members)
+
+	// ✅ FIX: Verifica se sou membro do grupo
+	isMember := false
 	for _, nodeID := range members {
+		if nodeID == membership.OwnID {
+			isMember = true
+			break
+		}
+	}
+
+	if isMember {
+		// Processa localmente (adiciona ao bucket)
+		fmt.Printf("[SEND] Processing locally for group %d (I am member)\n", groupID)
+		request.HandleRequest(req)
+	}
+
+	// Envia via REDE apenas para OUTROS membros
+	fmt.Printf("[SEND] Sending via network to OTHER members of group %d\n", groupID)
+	for _, nodeID := range members {
+		if nodeID == membership.OwnID {
+			continue // Pula si mesmo (já processou localmente)
+		}
 		// Cria mensagem de protocolo para enviar via rede
 		pm := &pb.ProtocolMessage{
 			SenderId: membership.OwnID,
