@@ -208,7 +208,8 @@ func (ds *DiscoveryServer) resetPC(numPeers int) {
 
 
 // LoadIPToIDMapping loads deterministic IP to ID mapping from instance-info file
-// Format: each line is "ID publicIP privateIP"
+// Format: each line is "node-X publicIP privateIP role tag"
+// ID is extracted from node name (node-0 -> ID 0, node-1 -> ID 1, etc.)
 func (ds *DiscoveryServer) LoadIPToIDMapping(instanceInfoPath string) error {
 	file, err := os.Open(instanceInfoPath)
 	if err != nil {
@@ -223,17 +224,31 @@ func (ds *DiscoveryServer) LoadIPToIDMapping(instanceInfoPath string) error {
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) < 2 {
+		if len(parts) < 3 {
 			continue
 		}
-		id, err := strconv.ParseInt(parts[0], 10, 32)
-		if err != nil {
-			logger.Warn().Str("line", line).Msg("Invalid ID in instance-info")
-			continue
-		}
+		// parts[0] = node-X, parts[1] = publicIP, parts[2] = privateIP
+		nodeName := parts[0]
 		publicIP := parts[1]
-		ds.ipToIDMap[publicIP] = int32(id)
-		logger.Info().Int32("id", int32(id)).Str("ip", publicIP).Msg("Loaded IP to ID mapping")
+		
+		// Extract ID from node name (node-0 -> 0, node-1 -> 1, etc.)
+		if !strings.HasPrefix(nodeName, "node-") {
+			continue
+		}
+		idStr := strings.TrimPrefix(nodeName, "node-")
+		id, err := strconv.ParseInt(idStr, 10, 32)
+		if err != nil {
+			logger.Warn().Str("line", line).Msg("Invalid node name in instance-info")
+			continue
+		}
+		
+		// Skip node-0 (master), only map peers (node-1, node-2, etc.)
+		// Peer IDs start from 0, so node-1 -> ID 0, node-2 -> ID 1, etc.
+		if id > 0 {
+			peerID := int32(id - 1)
+			ds.ipToIDMap[publicIP] = peerID
+			logger.Info().Int32("peerID", peerID).Str("ip", publicIP).Str("node", nodeName).Msg("Loaded IP to ID mapping")
+		}
 	}
 	return scanner.Err()
 }
