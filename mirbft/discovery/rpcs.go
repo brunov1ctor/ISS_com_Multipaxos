@@ -41,8 +41,23 @@ func (ds *DiscoveryServer) RegisterPeer(ctx context.Context, req *pb.RegisterPee
 	}
 	addrPort := p.Addr.String()
 
-	// Assign new numeric ID to discovered peer.
-	newID := <-ds.peerIDs
+	// ✅ DETERMINISTIC ID ASSIGNMENT: Use IP to ID mapping if available
+	var newID int32
+	if mappedID, exists := ds.ipToIDMap[req.PublicAddr]; exists {
+		newID = mappedID
+		<-ds.peerIDs // Consume one ID to maintain count
+		logger.Info().
+			Str("publicAddr", req.PublicAddr).
+			Int32("fixedID", newID).
+			Msg("Assigned deterministic ID from instance-info")
+	} else {
+		// Fallback: dynamic ID assignment
+		newID = <-ds.peerIDs
+		logger.Warn().
+			Str("publicAddr", req.PublicAddr).
+			Int32("dynamicID", newID).
+			Msg("IP not in instance-info, using dynamic ID (may break groups.yml)")
+	}
 
 	logger.Info().
 		Int32("id", newID).

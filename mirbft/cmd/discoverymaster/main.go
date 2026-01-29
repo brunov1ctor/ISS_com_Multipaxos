@@ -85,6 +85,18 @@ func main() {
 	// Sobe servidor gRPC de discovery.
 	grpcServer := grpc.NewServer()
 	masterSrv := discovery.NewDiscoveryServer()
+	
+	// ✅ Load IP to ID mapping from instance-info if available
+	instanceInfoPath := os.Getenv("INSTANCE_INFO_PATH")
+	if instanceInfoPath == "" {
+		instanceInfoPath = "/tmp/iss-Bruno/config/instance-info" // Default path
+	}
+	if err := masterSrv.LoadIPToIDMapping(instanceInfoPath); err != nil {
+		logger.Warn().Err(err).Str("path", instanceInfoPath).Msg("Could not load instance-info, using dynamic IDs")
+	} else {
+		logger.Info().Str("path", instanceInfoPath).Msg("Loaded deterministic IP to ID mapping")
+	}
+	
 	go discovery.RunDiscoveryServer(port, grpcServer, masterSrv, &srvWg)
 
 	logger.Info().Str("port", port).Msg("Discovery gRPC server started.")
