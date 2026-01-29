@@ -974,8 +974,31 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ SIMPLIFICAÇÃO: Single-group NÃO usa GSN/META (baseline do artigo)
+	// ✅ CORREÇÃO: Single-group TAMBÉM precisa GSN quando há sequenciador dedicado (grupo 0)
+	// Isso garante que o grupo 0 processe todas as requisições e gere eventos de trace
 	if len(req.TouchedGroups) == 1 {
+		// Obtém GSN via grupo 0 (sequenciador)
+		fmt.Printf("[PREPROCESS] Single-group: getting GSN via sequencer...\n")
+		gsn := o.GetNextGSN()
+		if gsn == 0 {
+			fmt.Printf("[PREPROCESS][ERROR] Failed to get GSN (timeout), rejecting request\n")
+			return true
+		}
+		fmt.Printf("[PREPROCESS] Single-group: got GSN=%d, publishing META...\n", gsn)
+		o.PublishGSNMetadata(gsn, req.TouchedGroups)
+		
+		// Cache para reforward
+		templateReq := &pb.ClientRequest{
+			RequestId:     req.RequestId,
+			Payload:       req.Payload,
+			Signature:     req.Signature,
+			Pubkey:        req.Pubkey,
+			TouchedGroups: req.TouchedGroups,
+			GSN:           gsn,
+		}
+		o.CacheRequest(gsn, templateReq)
+		
+		// Envia para grupo de dados com GSN
 		reqCopy := &pb.ClientRequest{
 			RequestId:     req.RequestId,
 			Payload:       req.Payload,
@@ -983,9 +1006,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 			Pubkey:        req.Pubkey,
 			GroupId:       req.TouchedGroups[0],
 			TouchedGroups: req.TouchedGroups,
-			GSN:           0, // Single-group não precisa GSN
+			GSN:           gsn,
 		}
-		fmt.Printf("[PREPROCESS] Single-group: sending to group=%d (no GSN/META)\n", reqCopy.GroupId)
+		fmt.Printf("[PREPROCESS] Single-group: sending to group=%d WITH GSN=%d\n", reqCopy.GroupId, gsn)
 		o.sendToGroup(reqCopy, reqCopy.GroupId)
 		return true
 	}

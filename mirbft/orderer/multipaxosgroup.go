@@ -66,26 +66,7 @@ func NewAtomicMulticast() *AtomicMulticast {
 func (am *AtomicMulticast) SetSequencer(seq *MultiPaxosMulticastOrderer) {
 	am.sequencer = seq
 }
-func (am *AtomicMulticast) AMulticast(req *pb.ClientRequest) error {
-	if len(req.TouchedGroups) == 0 {
-		return fmt.Errorf("request has no touched groups")
-	}
-	if len(req.TouchedGroups) == 1 {
-		return nil
-	}
-	if am.sequencer == nil {
-		return fmt.Errorf("sequencer not set")
-	}
-	if req.GSN == 0 {
-		req.GSN = am.sequencer.GetNextGSN()
-	}
-	fmt.Printf("[AMCAST] Multicasting req gsn=%d to groups=%v\n", req.GSN, req.TouchedGroups)
-	return nil
-}
-
-// ✅ SIMPLIFICAÇÃO: AtomicMulticast mantida apenas para gerenciamento de grupos
-// Lógica de ADeliver está APENAS em MultiPaxosMulticastOrderer.ADeliver()
-// Não há ADeliver aqui para evitar duplicação de regras
+// AMulticast removed - logic is in PreprocessRequest()
 func (am *AtomicMulticast) DefineGroup(g GroupID, members ...int32) {
 	am.mu.Lock()
 	am.groups[g] = append([]int32{}, members...)
