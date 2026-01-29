@@ -974,31 +974,15 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ CORREÇÃO: Single-group TAMBÉM precisa GSN quando há sequenciador dedicado (grupo 0)
-	// Isso garante que o grupo 0 processe todas as requisições e gere eventos de trace
+	// ✅ VALIDAÇÃO: Requisições sistêmicas não devem chamar GetNextGSN recursivamente
+	if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
+		fmt.Printf("[PREPROCESS] System request detected, skipping preprocessing\n")
+		return false // Deixa sistema processar normalmente
+	}
+	
+	// ✅ CORREÇÃO: Single-group NÃO usa GSN (baseline do artigo)
+	// Apenas cross-group precisa de GSN para ordem global
 	if len(req.TouchedGroups) == 1 {
-		// Obtém GSN via grupo 0 (sequenciador)
-		fmt.Printf("[PREPROCESS] Single-group: getting GSN via sequencer...\n")
-		gsn := o.GetNextGSN()
-		if gsn == 0 {
-			fmt.Printf("[PREPROCESS][ERROR] Failed to get GSN (timeout), rejecting request\n")
-			return true
-		}
-		fmt.Printf("[PREPROCESS] Single-group: got GSN=%d, publishing META...\n", gsn)
-		o.PublishGSNMetadata(gsn, req.TouchedGroups)
-		
-		// Cache para reforward
-		templateReq := &pb.ClientRequest{
-			RequestId:     req.RequestId,
-			Payload:       req.Payload,
-			Signature:     req.Signature,
-			Pubkey:        req.Pubkey,
-			TouchedGroups: req.TouchedGroups,
-			GSN:           gsn,
-		}
-		o.CacheRequest(gsn, templateReq)
-		
-		// Envia para grupo de dados com GSN
 		reqCopy := &pb.ClientRequest{
 			RequestId:     req.RequestId,
 			Payload:       req.Payload,
@@ -1006,9 +990,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 			Pubkey:        req.Pubkey,
 			GroupId:       req.TouchedGroups[0],
 			TouchedGroups: req.TouchedGroups,
-			GSN:           gsn,
+			GSN:           0, // Single-group não precisa GSN
 		}
-		fmt.Printf("[PREPROCESS] Single-group: sending to group=%d WITH GSN=%d\n", reqCopy.GroupId, gsn)
+		fmt.Printf("[PREPROCESS] Single-group: sending to group=%d (no GSN/META)\n", reqCopy.GroupId)
 		o.sendToGroup(reqCopy, reqCopy.GroupId)
 		return true
 	}
