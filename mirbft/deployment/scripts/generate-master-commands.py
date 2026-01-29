@@ -291,14 +291,12 @@ def stopPeers(peers):
 def stopPeers(peers):
     """Stop orderingpeer without terminating discoveryslave.
     
-    CRITICAL: Don't use 'stop' command - it terminates the entire discoveryslave.
-    Use pkill with '|| true' to ensure exit 0 (pkill returns 1 if no process found).
+    CRITICAL: Use exec-signal to send SIGTERM to the running orderingpeer process.
+    This is the correct way to stop a process started with exec-start in the discovery framework.
     """
-    output("# stop peers (kill orderingpeer only, keep discoveryslave alive)")
+    output("# stop peers (send SIGTERM to orderingpeer)")
     for p in peers:
-        output("exec-start {0} - sh -c 'pkill -TERM orderingpeer || true'".format(p))
-    for p in peers:
-        output("exec-wait {0} 5000".format(p))
+        output("exec-signal {0} SIGTERM".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
     output("")
 
