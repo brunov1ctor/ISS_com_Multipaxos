@@ -46,23 +46,20 @@ var Crashed = false
 // Channels holding protocol messages to be sent to nodes, indexed by destination node ID.
 var peerConnections = make(map[int32]PeerConnection)
 
+// Canal compartilhado para requests (declarado em clients.go)
+var incomingReqCh chan *pb.ClientRequest
+
 // Message handlers. These variables hold functions the messenger calls on reception of messages of the corresponding
 // type. Modules using the messenger must assign functions to these variables before the messenger is started (Start())
 var CheckpointMsgHandler func(msg *pb.CheckpointMsg, senderID int32)
 var StateTransferMsgHandler func(msg *pb.ProtocolMessage)
 var OrdererMsgHandler func(msg *pb.ProtocolMessage)
-var ClientRequestHandler func(req *pb.ClientRequest)
 
 // HandleMessage é uma função pública para permitir que o multicast UDP chame diretamente
 func HandleMessage(msg *pb.ProtocolMessage) {
 	if OrdererMsgHandler != nil {
 		OrdererMsgHandler(msg)
 	}
-}
-
-// checkForHotStuffProposal - função auxiliar para debug (pode ser removida)
-func checkForHotStuffProposal(msg *pb.ProtocolMessage, logMsg string) {
-	// Função vazia para compatibilidade
 }
 
 type connectionTest struct {
@@ -141,9 +138,8 @@ func handleMessage(msg *pb.ProtocolMessage, srv pb.Messenger_ListenServer) (fini
 			}
 		}
 	case *pb.ProtocolMessage_GsnReqForward:
-		if ClientRequestHandler != nil {
-			ClientRequestHandler(m.GsnReqForward.Req)
-		}
+		// Usa handler do clients.go via import interno
+		handleClientRequest(m.GsnReqForward.Req)
 	case *pb.ProtocolMessage_Close:
 		logger.Info().Int32("peerId", msg.SenderId).Msg("Connection closed by gRPC client.")
 		return true
@@ -605,5 +601,18 @@ func testConnection(client pb.Messenger_ListenClient) *connectionTest {
 	} else {
 		logger.Error().Err(err).Msg("Failed receiving bandwidth test ack.")
 		return nil
+	}
+}
+
+// handleClientRequest - Função auxiliar para chamar o handler de ClientRequest
+// Evita dependência circular entre peers.go e clients.go
+func handleClientRequest(req *pb.ClientRequest) {
+	// Enfileira para worker pool (não-bloqueante)
+	select {
+	case incomingReqCh <- req:
+		// Enfileirado com sucesso
+	default:
+		// Fila cheia - drop com log
+		logger.Warn().Int32("clId", req.RequestId.ClientId).Int32("clSn", req.RequestId.ClientSn).Msg("Request queue full, dropping forwarded request")
 	}
 }
