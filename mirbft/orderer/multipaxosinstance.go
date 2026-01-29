@@ -552,7 +552,9 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	minInterval := i.proposeEvery / 5
+	// ✅ FIX: Rate limiting muito agressivo impedia propostas
+	// Reduzido de proposeEvery/5 para proposeEvery/20 para permitir polling mais frequente
+	minInterval := i.proposeEvery / 20
 	if time.Since(i.lastProposeAt) < minInterval {
 		return
 	}
