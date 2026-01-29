@@ -111,7 +111,8 @@ type mpxInstance struct {
 	acceptCount  int32              // Contador de accepts recebidos
 	acceptedFrom map[int32]struct{} // Nós que enviaram accepted
 	acceptRtxEvery   time.Duration  // Intervalo para retransmissão
-	lastAcceptAt     time.Time      // Última vez que enviou accept
+	lastAcceptAt     time.Time      // Última vez que enviou accept (para retransmissão)
+	roundStartAt     time.Time      // Início da rodada atual (para timeout de rodada)
 	prepSent bool                   // Se já enviou prepare
 	leader   int32                  // Líder atual desta instância
 	currentBallot int64             // Ballot atual
@@ -125,6 +126,7 @@ type mpxInstance struct {
 // Cada instância é responsável por um único SN e executa o protocolo completo
 // Parâmetros: parent (orderer), sn (sequence number), announce (callback), interval (timeout)
 func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ int, interval time.Duration) *mpxInstance {
+	now := time.Now()
 	inst := &mpxInstance{
 		parent:         parent,
 		sn:             sn,
@@ -132,9 +134,11 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ 
 		bucketIndex:    -1,
 		proposeEvery:   interval,
 		announce:       announce,
-		lastProposeAt:  time.Now(),
+		lastProposeAt:  now,
 		phase:          phaseInit,
 		acceptRtxEvery: interval * 2,
+		lastAcceptAt:   now,
+		roundStartAt:   now, // ✅ Inicializa início da rodada
 		msgCh:          make(chan *pb.ProtocolMessage, 8192),
 		stopCh:         make(chan struct{}),
 		promisedBallot: 0,
@@ -553,9 +557,13 @@ func (i *mpxInstance) ProposeIfDue() {
 		return
 	}
 	i.lastProposeAt = time.Now()
+	
+	// ✅ CORREÇÃO: Se já enviou ACCEPT, não tenta propor novamente
+	// Deixa tick() fazer retransmissão ou nova rodada
 	if i.phase >= phaseAcceptSent {
 		return
 	}
+	
 	var val *pb.MPxValue
 	reqs := 0
 	if i.lastVal == nil {
@@ -581,92 +589,54 @@ func (i *mpxInstance) ProposeIfDue() {
 			expectedGSN = 1 // Fallback se não há multicast orderer
 		}
 		
-		// ✅ CORREÇÃO: Usa bucketId consistentemente (não bucketIndex)
 		request.Buckets[i.bucketId].Lock()
 		
-		// Grupo 0 prioriza requests sistêmicas (GSN_REQUEST, META_STREAM)
 		var selectedReq *request.Request
 		if i.bucketId == 0 {
-			// ✅ DEBUG: Log estado do bucket antes de buscar
-			bucketLen := request.Buckets[i.bucketId].Len()
-			fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 bucketId=%d bucketLen=%d expectedGSN=%d\n", i.sn, i.bucketId, bucketLen, expectedGSN)
-			
-			// Grupo 0: busca primeiro request sistêmico
+			// Grupo 0: prioriza requests sistêmicas
 			systemReq := request.Buckets[i.bucketId].FindSystemRequest()
 			if systemReq != nil {
 				selectedReq = systemReq
-				payloadPreview := systemReq.Msg.Payload
-				if len(payloadPreview) > 50 {
-					payloadPreview = payloadPreview[:50]
-				}
-				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 FOUND system request: %s\n", i.sn, string(payloadPreview))
 			} else {
-				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 NO system request found, trying GSN=%d\n", i.sn, expectedGSN)
-				// Se não há system, busca GSN exato esperado
 				selectedReq = request.Buckets[i.bucketId].FindRequestWithGSN(expectedGSN)
 			}
 		} else {
-			// Outros grupos: busca GSN exato esperado
+			// ✅ CORREÇÃO: Grupos de dados suportam single-group (GSN=0)
+			// Tenta expectedGSN primeiro (cross-op), senão pega single-group FIFO
 			selectedReq = request.Buckets[i.bucketId].FindRequestWithGSN(expectedGSN)
+			if selectedReq == nil {
+				// Sem cross-op esperado: busca primeira single-group (GSN=0)
+				reqs := request.Buckets[i.bucketId].RemoveFirstSingleGroup(1, []*request.Request{})
+				if len(reqs) > 0 {
+					selectedReq = reqs[0]
+					request.Buckets[i.bucketId].Unlock()
+					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
+					i.lastVal = nil
+					fmt.Printf("[SINGLE-GROUP] sn=%d group=%d selected single-group request (GSN=0)\n", i.sn, i.bucketId)
+					goto buildBatch
+				}
+			}
 		}
 		
 		if selectedReq != nil {
-			// ✅ FIX: Usa removeNoLock para evitar deadlock (bucket já está locked)
-			fmt.Printf("[DEBUG] sn=%d removing selected request from bucket (within lock)\n", i.sn)
 			request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
 			request.Buckets[i.bucketId].Unlock()
-			fmt.Printf("[DEBUG] sn=%d creating batch with selected request\n", i.sn)
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-			if i.bucketId == 0 {
-				fmt.Printf("[SYSTEM-PRIORITY] sn=%d group=0 SELECTED and REMOVED system/expected request from bucket\n", i.sn)
-			} else {
-				fmt.Printf("[GSN-EXACT] sn=%d group=%d SELECTED and REMOVED expected gsn=%d from bucket\n", 
-					i.sn, i.bucketId, expectedGSN)
-			}
-			// ✅ CORREÇÃO CRÍTICA: Força nova proposta resetando apenas lastVal
-			// NÃO reseta phase para não perder promises já recebidos
 			i.lastVal = nil
 		} else {
-			// Sem request adequado: propõe batch vazio
 			request.Buckets[i.bucketId].Unlock()
-			if i.bucketId == 0 {
-				fmt.Printf("[SYSTEM-PRIORITY][WARN] sn=%d group=0 NO system requests found, bucket is empty or has no system requests\n", i.sn)
-			} else {
-				fmt.Printf("[GSN-EXACT][WARN] sn=%d group=%d NO request with expected gsn=%d, will propose empty batch\n", 
-					i.sn, i.bucketId, expectedGSN)
-			}
 		}
+		
+buildBatch:
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
-			fmt.Printf("[DEBUG] sn=%d rb is nil or empty\n", i.sn)
-			// ✅ CORREÇÃO CRÍTICA: Grupo 0 NÃO propõe batch vazio
-			// Aguarda requests sistêmicas (GSN_REQUEST, META_STREAM)
-			if i.bucketId == 0 {
-				fmt.Printf("[MPX][INST] sn=%d group 0 waiting for system requests (no empty batch)\n", i.sn)
-				return
-			}
-			// Outros grupos podem propor batch vazio
-			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
-			batchBytes, err := proto.Marshal(emptyBatch)
-			if err != nil {
-				return
-			}
-			if len(batchBytes) == 0 {
-				batchBytes = []byte{}
-			}
-			val = &pb.MPxValue{
-				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Batch: batchBytes,
-			}
-			i.lastVal = val
-			i.lastDigest = sha256.Sum256(batchBytes)
-			fmt.Printf("[MPX][INST] sn=%d proposing EMPTY batch (no requests)\n", i.sn)
+			// ✅ SIMPLIFICAÇÃO: NENHUM grupo propõe batch vazio
+			// Aguarda requests reais para evitar estados estranhos em debug
+			fmt.Printf("[MPX][INST] sn=%d group=%d waiting for requests (no empty batch)\n", i.sn, i.bucketId)
+			return
 		} else {
-			fmt.Printf("[DEBUG] sn=%d validating batch homogeneity\n", i.sn)
 			if !i.validateBatchHomogeneity(rb) {
-				fmt.Printf("[DEBUG] sn=%d batch validation FAILED, returning\n", i.sn)
 				return
 			}
-			fmt.Printf("[DEBUG] sn=%d batch validation OK, proceeding\n", i.sn)
 			batchMsg := rb.Message()
 			if len(batchMsg.Requests) > 0 && len(batchMsg.Requests[0].TouchedGroups) > 1 {
 				if len(batchMsg.Requests) != 1 {
@@ -760,7 +730,7 @@ func (i *mpxInstance) ProposeIfDue() {
 // tick - Gerencia timeouts e retransmissões da instância
 // Implementa dois níveis de timeout:
 // 1. Retransmissão de ACCEPT (acceptRtxEvery)
-// 2. Nova rodada com ballot maior (acceptRtxEvery * 3)
+// 2. Nova rodada com ballot maior (acceptRtxEvery * 3 desde roundStartAt)
 func (i *mpxInstance) tick(now time.Time) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -784,12 +754,13 @@ func (i *mpxInstance) tick(now time.Time) {
 			}
 			fmt.Printf("[MPX][INST] sn=%d resending ACCEPT (timeout)\n", i.sn)
 			i.parent.emit(pm)
-			i.lastAcceptAt = now
+			i.lastAcceptAt = now // ✅ Atualiza apenas relógio de retransmissão
 		}
 	}
 	
-	// Nível 2: Nova rodada com ballot maior (reeleição de líder)
-	if i.phase == phaseAcceptSent && i.acceptCount < i.quorum && now.Sub(i.lastAcceptAt) >= i.acceptRtxEvery*3 {
+	// Nível 2: Nova rodada com ballot maior (usa roundStartAt, não lastAcceptAt)
+	// ✅ CORREÇÃO: Usa roundStartAt para evitar que retransmissões resetem o timeout
+	if i.phase == phaseAcceptSent && i.acceptCount < i.quorum && now.Sub(i.roundStartAt) >= i.acceptRtxEvery*3 {
 		// Incrementa contador de rodadas no ballot
 		seenCounter := uint64(i.currentBallot) >> 32
 		i.currentBallot = int64((seenCounter + 1) << 32 | uint64(membership.OwnID))
@@ -801,6 +772,7 @@ func (i *mpxInstance) tick(now time.Time) {
 		i.promisedFrom = nil
 		i.acceptCount = 0
 		i.acceptedFrom = nil
+		i.roundStartAt = now // ✅ Reseta início da nova rodada
 		
 		fmt.Printf("[MPX][INST] sn=%d TIMEOUT: starting new round, ballot=%d\n", i.sn, i.currentBallot)
 		

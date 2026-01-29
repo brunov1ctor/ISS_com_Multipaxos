@@ -228,16 +228,14 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		}
 		announcer.Announce(entry)
 		
-		// ✅ FIX: Processa META/GSN do grupo 0 SEMPRE (não apenas em modo standalone)
-		// Todos os nós precisam processar META para ordem global determinística
+		// ✅ META stream: Processa META commitado pelo grupo 0
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
 			for _, req := range b.Requests {
-				if req.GroupId == 0 {
-					if isGSNRequest(req) {
-						GetGlobalMulticastOrderer().OnGroup0Commit(req)
-					} else if isMETAStream(req) {
-						GetGlobalMulticastOrderer().OnGroup0Commit(req)
-					}
+				if req.GroupId == 0 && isMETAStream(req) {
+					gsn := req.GSN
+					touchedGroups := req.TouchedGroups
+					GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, touchedGroups)
+					fmt.Printf("[META-STREAM][REGISTERED] GSN %d -> groups %v\n", gsn, touchedGroups)
 				}
 			}
 		}

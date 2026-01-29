@@ -56,20 +56,10 @@ const gsnStateFile = "/tmp/iss-Bruno/next_gsn.state"
 
 // Constantes para mensagens do sistema
 const (
-	SYSTEM_GSN_REQUEST = "SYSTEM:GSN_REQUEST:"
 	SYSTEM_META_STREAM = "SYSTEM:META_STREAM:"
 )
 
 // Funções auxiliares para identificar mensagens do sistema
-func isSystemMessage(req *pb.ClientRequest) bool {
-	payload := string(req.Payload)
-	return strings.HasPrefix(payload, "SYSTEM:")
-}
-
-func isGSNRequest(req *pb.ClientRequest) bool {
-	return strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST)
-}
-
 func isMETAStream(req *pb.ClientRequest) bool {
 	return strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM)
 }
@@ -79,14 +69,11 @@ var globalMulticastOrderer *MultiPaxosMulticastOrderer
 func GetGlobalMulticastOrderer() *MultiPaxosMulticastOrderer {
 	return globalMulticastOrderer
 }
-type ForwardRequestFn func(req *pb.ClientRequest, members []int32)
-
 type MultiPaxosMulticastOrderer struct {
 	groupOrderers map[uint32]*MultiPaxosOrderer
 	orderersMu    sync.RWMutex
 	am            *AtomicMulticast
 	mgr           manager.Manager
-	forwardRequestFn ForwardRequestFn
 	groupsFilePath   string
 	
 	// GSN Sequencer
@@ -211,7 +198,6 @@ func (o *MultiPaxosMulticastOrderer) setupHandlers() {
 	// Registra callbacks do request package para GSN/atomic multicast
 	request.SetGSNGenerator(o.GetNextGSN)
 	request.SetGroupMembersGetter(o.GetGroupMembers)
-	request.SetMETAPublisher(o.PublishGSNMetadata)
 	request.SetRequestReceivedMarker(o.MarkRequestReceived)
 	request.SetRequestCacher(o.CacheRequest)
 	request.SetRequestPreprocessor(o.PreprocessRequest)
@@ -239,9 +225,7 @@ func (o *MultiPaxosMulticastOrderer) trackCheckpoints() {
 		}
 	}
 }
-func (o *MultiPaxosMulticastOrderer) SetForwardRequestFn(fn ForwardRequestFn) {
-	o.forwardRequestFn = fn
-}
+
 func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
 	if o.am == nil {
 		o.am = NewAtomicMulticast()
@@ -386,91 +370,6 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		o.gsnReqMu.Unlock()
 		return 0
 	}
-}
-
-func (o *MultiPaxosMulticastOrderer) OnGroup0Commit(req *pb.ClientRequest) {
-	// ✅ DEBUG: Log todas as requests do grupo 0
-	payloadPreview := req.Payload
-	if len(payloadPreview) > 50 {
-		payloadPreview = payloadPreview[:50]
-	}
-	fmt.Printf("[GSN-SEQ][COMMIT] OnGroup0Commit called: clientId=%d clientSn=%d groupId=%d payload=%s\n", 
-		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, string(payloadPreview))
-	
-	// ✅ CORREÇÃO: Processa apenas requests do grupo 0 (sequenciador)
-	if req.GroupId != 0 {
-		fmt.Printf("[GSN-SEQ][SKIP] Request groupId=%d (not sequencer group 0)\n", req.GroupId)
-		return
-	}
-	
-	// GSN request (identificado por string no payload)
-	if isGSNRequest(req) {
-		// ✅ CORREÇÃO: Extrai reqID do payload
-		payloadStr := string(req.Payload)
-		reqIDStr := strings.TrimPrefix(payloadStr, SYSTEM_GSN_REQUEST)
-		reqID, err := strconv.ParseUint(reqIDStr, 10, 64)
-		if err != nil {
-			fmt.Printf("[GSN-SEQ][ERROR] Failed to parse reqID from payload: %s\n", payloadStr)
-			return
-		}
-		
-		// ✅ FIX CRÍTICO: Atribui GSN e responde ao nó que fez a request
-		gsn := o.onGroup0Commit(reqID)
-		fmt.Printf("[GSN-SEQ][GSN-ASSIGNED] reqID=%d -> GSN=%d (from proxy %d)\n", reqID, gsn, req.RequestId.ClientId)
-		
-		// ✅ CORREÇÃO: Se este nó é o proxy que fez a request, acorda o canal local
-		if req.RequestId.ClientId == membership.OwnID {
-			o.gsnReqMu.Lock()
-			respChan, exists := o.gsnRequestsPending[reqID]
-			if exists {
-				delete(o.gsnRequestsPending, reqID)
-				fmt.Printf("[GSN-SEQ][LOCAL] This node is the proxy, waking up local channel\n")
-				o.gsnReqMu.Unlock()
-				select {
-				case respChan <- gsn:
-					fmt.Printf("[GSN-SEQ][LOCAL] GSN %d delivered to local channel\n", gsn)
-				default:
-					fmt.Printf("[GSN-SEQ][LOCAL] Channel blocked\n")
-				}
-			} else {
-				o.gsnReqMu.Unlock()
-				fmt.Printf("[GSN-SEQ][LOCAL] reqID=%d not in pending map (already processed?)\n", reqID)
-			}
-		} else {
-			fmt.Printf("[GSN-SEQ][REMOTE] Request from proxy %d (not this node %d), no local channel to wake\n", 
-				req.RequestId.ClientId, membership.OwnID)
-		}
-		return
-	}
-	
-	// META stream (identificado por string no payload)
-	if isMETAStream(req) {
-		gsn := req.GSN
-		touchedGroups := req.TouchedGroups
-		o.RegisterGSNMetadata(gsn, touchedGroups)
-		fmt.Printf("[META-STREAM][REGISTERED] GSN %d -> groups %v (from proxy %d)\n", gsn, touchedGroups, req.RequestId.ClientId)
-		return
-	}
-	
-	// ✅ DEBUG: Request não reconhecida
-	payloadLen := len(req.Payload)
-	if payloadLen > 50 {
-		payloadLen = 50
-	}
-	fmt.Printf("[GSN-SEQ][WARN] Group 0 committed unknown request type (payload=%s)\n", string(req.Payload[:payloadLen]))
-}
-// onGroup0Commit - Processa commit do grupo 0 (sequenciador GSN)
-// Atribui GSN sequencial (não acorda canais - isso é feito em OnGroup0Commit)
-func (o *MultiPaxosMulticastOrderer) onGroup0Commit(reqID uint64) uint64 {
-	o.gsnMu.Lock()
-	gsn := o.nextGSN
-	o.nextGSN++
-	// ✅ PERSISTÊNCIA: Persiste nextGSN após incremento
-	o.persistNextGSN()
-	fmt.Printf("[GSN-SEQ][ASSIGN] reqID=%d assigned GSN=%d (nextGSN now=%d, persisted)\n", reqID, gsn, o.nextGSN)
-	o.gsnMu.Unlock()
-	
-	return gsn
 }
 
 func (o *MultiPaxosMulticastOrderer) cleanOldMappings(checkpointSN int32) {
@@ -1037,13 +936,6 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v payload=%s\n", 
 		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
-	// ✅ Mensagens sistêmicas (GSN_REQUEST, META_STREAM) vão direto para grupo 0
-	// NÃO preprocessa - já estão prontas
-	if isSystemMessage(req) {
-		fmt.Printf("[PREPROCESS] System message, skipping preprocessing\n")
-		return false // Deixa processar normalmente
-	}
-	
 	// ✅ Se já tem GSN, foi preprocessado (forwarded de outro nó ou clone interno)
 	if req.GSN > 0 {
 		fmt.Printf("[PREPROCESS] Already has GSN=%d (forwarded), skipping\n", req.GSN)
@@ -1073,8 +965,24 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ SYNC: Processa GSN sincronamente para garantir adição aos buckets
-	fmt.Printf("[PREPROCESS] Getting GSN...\n")
+	// ✅ SIMPLIFICAÇÃO: Single-group NÃO usa GSN/META (baseline do artigo)
+	if len(req.TouchedGroups) == 1 {
+		reqCopy := &pb.ClientRequest{
+			RequestId:     req.RequestId,
+			Payload:       req.Payload,
+			Signature:     req.Signature,
+			Pubkey:        req.Pubkey,
+			GroupId:       req.TouchedGroups[0],
+			TouchedGroups: req.TouchedGroups,
+			GSN:           0, // Single-group não precisa GSN
+		}
+		fmt.Printf("[PREPROCESS] Single-group: sending to group=%d (no GSN/META)\n", reqCopy.GroupId)
+		o.sendToGroup(reqCopy, reqCopy.GroupId)
+		return true
+	}
+	
+	// ✅ Cross-group: Obtém GSN e publica META
+	fmt.Printf("[PREPROCESS] Cross-group: getting GSN...\n")
 	gsn := o.GetNextGSN()
 	if gsn == 0 {
 		fmt.Printf("[PREPROCESS][ERROR] Failed to get GSN (timeout), rejecting request\n")
@@ -1094,23 +1002,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	}
 	o.CacheRequest(gsn, templateReq)
 	
-	fmt.Printf("[PREPROCESS] Mapped to groups=%v gsn=%d\n", req.TouchedGroups, gsn)
-	
-	// ✅ Single-group: adiciona diretamente
-	if len(req.TouchedGroups) == 1 {
-		reqCopy := &pb.ClientRequest{
-			RequestId:     req.RequestId,
-			Payload:       req.Payload,
-			Signature:     req.Signature,
-			Pubkey:        req.Pubkey,
-			GroupId:       req.TouchedGroups[0],
-			TouchedGroups: req.TouchedGroups,
-			GSN:           gsn,
-		}
-		fmt.Printf("[PREPROCESS] Single-group: sending to group=%d\n", reqCopy.GroupId)
-		o.sendToGroup(reqCopy, reqCopy.GroupId)
-		return true
-	}
+	fmt.Printf("[PREPROCESS] Cross-group: mapped to groups=%v gsn=%d\n", req.TouchedGroups, gsn)
 	
 	// ✅ Cross-op: clona para cada grupo
 	fmt.Printf("[PREPROCESS] Cross-op: cloning for %d groups\n", len(req.TouchedGroups))
