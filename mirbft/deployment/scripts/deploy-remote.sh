@@ -212,6 +212,11 @@ else
   log_w "groups.yml não encontrado em ${groups_yml_src}, rodando sem grupos (broadcast mode)."
 fi
 
+# === COPIA instance-info PARA MASTER (IDs determinísticos) ===
+log_i "Copiando instance-info para ${remote_work_dir}/config no master..."
+scp $scp_options "${instance_info_file}" "${remote_user}@${master_ip}:${remote_work_dir}/config/instance-info"
+log_i "instance-info copiado para o master."
+
 # === COPIA BINÁRIOS PARA DISCO LOCAL (evita SIGBUS em NFS) ===
 log_i "Copiando binários para ${remote_bin_dir} em todos os nós..."
 local_bin_dir="${GOBIN:-${HOME}/go/bin}"
