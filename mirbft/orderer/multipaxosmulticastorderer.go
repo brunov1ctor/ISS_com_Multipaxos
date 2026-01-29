@@ -247,7 +247,7 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		fmt.Printf("[MULTICAST] Received ClientRequest via network: clientId=%d groupId=%d\n", 
 			gsnForward.Req.RequestId.ClientId, gsnForward.Req.GroupId)
 		// ✅ Adiciona ao bucket SEM chamar PreprocessRequest de novo
-		request.AddRequest(gsnForward.Req)
+		request.AddReqMsg(gsnForward.Req)
 		return
 	}
 	
@@ -721,7 +721,7 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		if nodeID == membership.OwnID {
 			// ✅ LOCAL: Adiciona ao bucket SEM chamar PreprocessRequest de novo
 			fmt.Printf("[SEND] Adding to local bucket for group %d (I am member)\n", groupID)
-			request.AddRequest(req) // Apenas adiciona ao bucket, não reprocessa
+			request.AddReqMsg(req) // Apenas adiciona ao bucket, não reprocessa
 			continue
 		}
 		
