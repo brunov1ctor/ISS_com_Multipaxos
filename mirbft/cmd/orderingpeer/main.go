@@ -297,32 +297,5 @@ func setCheckpointer(checkpointerType string) (chkp checkpoint.Checkpointer) {
 		logger.Fatal().Str("checkpointerType", checkpointerType).Msg("Unsupported checkpointer type")
 	}
 	return chkp
-}	ord = &orderer.MultiPaxosMulticastOrderer{}
-		if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
-			groupsFile := os.Getenv("MIR_GROUPS_FILE")
-			if groupsFile == "" {
-				configDir := filepath.Dir(configFileName)
-				groupsFile = filepath.Join(configDir, "groups.yml")
-			}
-			if err := mcOrd.LoadGroupsFromYAML(groupsFile); err != nil {
-				logger.Warn().Err(err).Str("groupsFile", groupsFile).Msg("Could not load groups config")
-			}
-		}
-	default:
-		logger.Fatal().Str("ordererType", ordererType).Msg("Unsupported orderer type")
-	}
-	return ord
-}
-
-func setCheckpointer(managerType string) (chkp checkpoint.Checkpointer) {
-	switch managerType {
-	case "Simple":
-		chkp = checkpoint.NewSimpleCheckpointer()
-	case "Signing":
-		chkp = checkpoint.NewSigningCheckpointer()
-	default:
-		logger.Fatal().Str("checkpointerType", managerType).Msg("Unsupported checkpointer type")
-	}
-	return chkp
 }
 
