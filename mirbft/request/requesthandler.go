@@ -55,9 +55,16 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 		} else {
 			// ✅ CORREÇÃO: Envia via gRPC usando infraestrutura existente
 			fmt.Printf("[FORWARD] Remote node %d: sending via gRPC\n", nodeID)
-			if err := messenger.SendRequestToPeer(req, nodeID); err != nil {
-				fmt.Printf("[FORWARD][ERROR] Failed to send to node %d: %v\n", nodeID, err)
+			pm := &pb.ProtocolMessage{
+				SenderId: membership.OwnID,
+				Sn:       -1,
+				Msg: &pb.ProtocolMessage_GsnReqForward{
+					GsnReqForward: &pb.GSNReqForward{
+						Req: req,
+					},
+				},
 			}
+			messenger.EnqueueMsg(pm, nodeID)
 		}
 	}
 }

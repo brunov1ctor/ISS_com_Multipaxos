@@ -51,12 +51,18 @@ var peerConnections = make(map[int32]PeerConnection)
 var CheckpointMsgHandler func(msg *pb.CheckpointMsg, senderID int32)
 var StateTransferMsgHandler func(msg *pb.ProtocolMessage)
 var OrdererMsgHandler func(msg *pb.ProtocolMessage)
+var ClientRequestHandler func(req *pb.ClientRequest)
 
 // HandleMessage é uma função pública para permitir que o multicast UDP chame diretamente
 func HandleMessage(msg *pb.ProtocolMessage) {
 	if OrdererMsgHandler != nil {
 		OrdererMsgHandler(msg)
 	}
+}
+
+// checkForHotStuffProposal - função auxiliar para debug (pode ser removida)
+func checkForHotStuffProposal(msg *pb.ProtocolMessage, logMsg string) {
+	// Função vazia para compatibilidade
 }
 
 type connectionTest struct {
@@ -133,6 +139,10 @@ func handleMessage(msg *pb.ProtocolMessage, srv pb.Messenger_ListenServer) (fini
 			if err := srv.Send(&pb.BandwidthTestAck{}); err != nil {
 				logger.Error().Err(err).Int32("peerId", msg.SenderId).Msg("Failed to acknowledge bandwidth test message.")
 			}
+		}
+	case *pb.ProtocolMessage_GsnReqForward:
+		if ClientRequestHandler != nil {
+			ClientRequestHandler(m.GsnReqForward.Req)
 		}
 	case *pb.ProtocolMessage_Close:
 		logger.Info().Int32("peerId", msg.SenderId).Msg("Connection closed by gRPC client.")

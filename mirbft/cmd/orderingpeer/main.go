@@ -147,7 +147,6 @@ func main() {
 	if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
 		rsp.SetIsMemberFunc(mcOrd.IsMember)
 		rsp.SetGroupMembersFunc(mcOrd.GetGroupMembers)
-		mcOrd.SetForwardRequestFn(request.ForwardRequestToNodes)
 		request.SetProxyInterceptor(func(req *request.Request) {
 			if req.Msg != nil {
 				mcOrd.ProxyInterceptor(req.Msg.GSN, req.Msg.TouchedGroups, req.Msg)
@@ -280,6 +279,25 @@ func setOrderer(ordererType string, ownPrivateIP string, configFileName string) 
 		ord = &orderer.MultiPaxosOrderer{}
 	case "MultiPaxosMulticast":
 		ord = &orderer.MultiPaxosMulticastOrderer{}
+	default:
+		logger.Fatal().Str("ordererType", ordererType).Msg("Unsupported orderer type")
+	}
+	return ord
+}
+
+func setCheckpointer(checkpointerType string) (chkp checkpoint.Checkpointer) {
+	switch checkpointerType {
+	case "Dummy":
+		chkp = checkpoint.NewDummyCheckpointer()
+	case "Simple":
+		chkp = checkpoint.NewSimpleCheckpointer()
+	case "Signing":
+		chkp = checkpoint.NewSigningCheckpointer()
+	default:
+		logger.Fatal().Str("checkpointerType", checkpointerType).Msg("Unsupported checkpointer type")
+	}
+	return chkp
+}	ord = &orderer.MultiPaxosMulticastOrderer{}
 		if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
 			groupsFile := os.Getenv("MIR_GROUPS_FILE")
 			if groupsFile == "" {
