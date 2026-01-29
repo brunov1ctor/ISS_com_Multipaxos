@@ -57,6 +57,7 @@ const gsnStateFile = "/tmp/iss-Bruno/next_gsn.state"
 // Constantes para mensagens do sistema
 const (
 	SYSTEM_META_STREAM = "SYSTEM:META_STREAM:"
+	SYSTEM_GSN_REQUEST = "SYSTEM:GSN_REQUEST:"
 )
 
 // Funções auxiliares para identificar mensagens do sistema
@@ -242,11 +243,11 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 }
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	// ✅ CORREÇÃO: Processa ClientRequest recebida via rede
-	if clientReq := pm.GetClientRequest(); clientReq != nil {
+	if gsnForward := pm.GetGsnReqForward(); gsnForward != nil {
 		fmt.Printf("[MULTICAST] Received ClientRequest via network: clientId=%d groupId=%d\n", 
-			clientReq.RequestId.ClientId, clientReq.GroupId)
+			gsnForward.Req.RequestId.ClientId, gsnForward.Req.GroupId)
 		// Adiciona ao bucket local para processamento
-		request.AddRequest(clientReq)
+		request.HandleRequest(gsnForward.Req)
 		return
 	}
 	
@@ -722,8 +723,10 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		pm := &pb.ProtocolMessage{
 			SenderId: membership.OwnID,
 			Sn:       -1, // Request não tem SN ainda
-			Msg: &pb.ProtocolMessage_ClientRequest{
-				ClientRequest: req,
+			Msg: &pb.ProtocolMessage_GsnReqForward{
+				GsnReqForward: &pb.GSNReqForward{
+					Req: req,
+				},
 			},
 		}
 		messenger.EnqueueMsg(pm, nodeID)
