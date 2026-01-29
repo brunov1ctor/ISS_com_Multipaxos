@@ -46,9 +46,6 @@ var Crashed = false
 // Channels holding protocol messages to be sent to nodes, indexed by destination node ID.
 var peerConnections = make(map[int32]PeerConnection)
 
-// Canal compartilhado para requests (declarado em clients.go)
-var incomingReqCh chan *pb.ClientRequest
-
 // Message handlers. These variables hold functions the messenger calls on reception of messages of the corresponding
 // type. Modules using the messenger must assign functions to these variables before the messenger is started (Start())
 var CheckpointMsgHandler func(msg *pb.CheckpointMsg, senderID int32)
