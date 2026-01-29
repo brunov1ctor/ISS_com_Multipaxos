@@ -289,17 +289,14 @@ def stopPeers(peers):
     output("")
 
 def stopPeers(peers):
-    """Stop orderingpeer processes without terminating the slaves.
+    """Stop orderingpeer without terminating discoveryslave.
     
-    CRÍTICO: Não use 'stop' command aqui! O comando 'stop' termina o discoveryslave
-    inteiro, impedindo que experimentos subsequentes rodem. Ao invés disso, usamos
-    'pkill' para matar apenas o processo orderingpeer, mantendo o discoveryslave
-    rodando para o próximo experimento.
+    CRITICAL: Don't use 'stop' command - it terminates the entire discoveryslave.
+    Use pkill with '|| true' to ensure exit 0 (pkill returns 1 if no process found).
     """
     output("# stop peers (kill orderingpeer only, keep discoveryslave alive)")
     for p in peers:
-        # Envia SIGTERM para orderingpeer sem terminar o discoveryslave
-        output("exec-start {0} - pkill -TERM orderingpeer".format(p))
+        output("exec-start {0} - sh -c 'pkill -TERM orderingpeer || true'".format(p))
     for p in peers:
         output("exec-wait {0} 5000".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
