@@ -288,6 +288,13 @@ def stopPeers(peers):
     output("wait for {0}".format(SIGNAL_DELAY))
     output("")
 
+def stopPeers(peers):
+    output("# stop peers")
+    for p in peers:
+        output("stop {0}".format(p))
+    output("wait for {0}".format(SIGNAL_DELAY))
+    output("")
+
 def saveConfig(expID, slaves):
     output("# Save config (best-effort, ensure dir exists)")
     for s in slaves:
@@ -350,10 +357,7 @@ def generateCommands(expID, peers, clients):
     setBandwidth(expID, bandwidths)
     startPeers(expID, list(peers))
     runClients(expID, list(clients))
-
-    # Peers will be automatically killed by ExecWait timeout (SIGINT -> SIGKILL)
-    # No need for explicit stopPeerProcesses
-
+    stopPeers(list(peers))
     unsetBandwidth(expID, bandwidths)
 
     saveConfig(expID, slaves)
