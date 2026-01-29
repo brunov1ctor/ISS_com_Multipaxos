@@ -938,11 +938,6 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 // NotifyNewRequest - Notifica líder quando request chega no bucket
 // ✅ LIVENESS: Acorda líder imediatamente sem depender de polling
 func (o *MultiPaxosMulticastOrderer) NotifyNewRequest(groupID uint32) {
-	// Verifica se este nó é líder do grupo
-	if !o.am.IsLeader(groupID, membership.OwnID) {
-		return
-	}
-	
 	// Obtém orderer do grupo
 	o.orderersMu.RLock()
 	groupOrderer := o.groupOrderers[groupID]
@@ -952,11 +947,25 @@ func (o *MultiPaxosMulticastOrderer) NotifyNewRequest(groupID uint32) {
 		return
 	}
 	
+	// Verifica se este nó é líder do grupo
+	// Para grupo 0, todos os nós são membros, então verifica liderança diretamente
+	// Para outros grupos, verifica se é membro E líder
+	if groupID != 0 && !o.am.IsMember(groupID, membership.OwnID) {
+		return // Não é membro do grupo
+	}
+	
 	// Obtém instância ativa do grupo
 	inst := groupOrderer.GetActiveInstance(groupID)
 	if inst != nil {
-		fmt.Printf("[NOTIFY] Group %d: Waking leader for new request\n", groupID)
-		inst.ProposeIfDue()
+		// Verifica se é líder da instância
+		inst.mu.Lock()
+		isLeader := (inst.leader == membership.OwnID)
+		inst.mu.Unlock()
+		
+		if isLeader {
+			fmt.Printf("[NOTIFY] Group %d: Waking leader for new request\n", groupID)
+			inst.ProposeIfDue()
+		}
 	}
 }
 
