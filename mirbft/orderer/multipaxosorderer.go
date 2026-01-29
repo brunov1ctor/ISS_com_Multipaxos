@@ -99,28 +99,7 @@ type MultiPaxosOrderer struct {
 	currentFirstSN int32          // Primeiro SN do segmento atual
 	firstSNMu      sync.RWMutex   // Protege currentFirstSN
 }
-func (o *MultiPaxosOrderer) inferGroupIDFromSN(sn int32) uint32 {
-	if o.am == nil {
-		return 0
-	}
-	groupIDs := o.am.GetDataGroups()
-	if len(groupIDs) == 0 {
-		return 0
-	}
-	o.firstSNMu.RLock()
-	firstSN := o.currentFirstSN
-	o.firstSNMu.RUnlock()
-	numGroups := int32(len(groupIDs))
-	offset := sn - firstSN
-	if offset < 0 {
-		offset = 0
-	}
-	groupIdx := offset % numGroups
-	if groupIdx >= 0 && groupIdx < int32(len(groupIDs)) {
-		return groupIDs[groupIdx]
-	}
-	return 0
-}
+// inferGroupIDFromSN removed - not used (group determined by segment)
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.mgr = mgr
 	o.backlog = newMPXBacklog()
