@@ -552,10 +552,14 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	
+	fmt.Printf("[MPX][PROPOSE] sn=%d called, phase=%d prepared=%v\n", i.sn, i.phase, i.prepared)
+	
 	// ✅ FIX: Rate limiting muito agressivo impedia propostas
 	// Reduzido de proposeEvery/5 para proposeEvery/20 para permitir polling mais frequente
 	minInterval := i.proposeEvery / 20
 	if time.Since(i.lastProposeAt) < minInterval {
+		fmt.Printf("[MPX][PROPOSE] sn=%d rate limited (last=%v ago, min=%v)\n", i.sn, time.Since(i.lastProposeAt), minInterval)
 		return
 	}
 	i.lastProposeAt = time.Now()
@@ -593,6 +597,8 @@ func (i *mpxInstance) ProposeIfDue() {
 		
 		request.Buckets[i.bucketId].Lock()
 		
+		fmt.Printf("[MPX][PROPOSE] sn=%d bucketId=%d expectedGSN=%d checking bucket\n", i.sn, i.bucketId, expectedGSN)
+		
 		var selectedReq *request.Request
 		if i.bucketId == 0 {
 			// Grupo 0: prioriza requests sistêmicas
@@ -625,8 +631,10 @@ func (i *mpxInstance) ProposeIfDue() {
 			request.Buckets[i.bucketId].Unlock()
 			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 			i.lastVal = nil
+			fmt.Printf("[MPX][PROPOSE] sn=%d found request gsn=%d\n", i.sn, selectedReq.Msg.GSN)
 		} else {
 			request.Buckets[i.bucketId].Unlock()
+			fmt.Printf("[MPX][PROPOSE] sn=%d no request found\n", i.sn)
 		}
 		
 buildBatch:

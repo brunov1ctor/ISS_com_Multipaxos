@@ -360,20 +360,22 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 	ticker := time.NewTicker(o.proposeEvery)
 	defer ticker.Stop()
 	
-	fmt.Printf("[MPX][LOCAL-SN] Started ticker for group %d, interval=%v\n", groupId, o.proposeEvery)
+	// ✅ FIX: Líder = primeiro membro do grupo (determinístico)
+	isLeader := (membership.OwnID == members[0])
+	fmt.Printf("[MPX][LOCAL-SN] Group %d: ownID=%d leader=%d isLeader=%v\n", groupId, membership.OwnID, members[0], isLeader)
+	
+	if !isLeader {
+		fmt.Printf("[MPX][LOCAL-SN] Group %d: Not leader, exiting ticker\n", groupId)
+		return
+	}
+	
+	fmt.Printf("[MPX][LOCAL-SN] Group %d: Starting ticker loop (interval=%v)\n", groupId, o.proposeEvery)
 	
 	for {
 		select {
 		case <-ticker.C:
 			// ✅ Mapeia SN local → global: globalSN = localSN * numGroups + groupID
 			globalSN := localSN*numGroups + int32(groupId)
-			
-			// ✅ FIX: Líder = primeiro membro do grupo (determinístico)
-			isLeader := (membership.OwnID == members[0])
-			
-			if !isLeader {
-				continue
-			}
 			
 			// Verifica se globalSN já foi commitado
 			if mirlog.GetEntry(globalSN) != nil {
@@ -413,7 +415,7 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 				fmt.Printf("[MPX][LOCAL-SN] Group %d: localSN=%d → globalSN=%d (PREPARE sent)\n", groupId, localSN, globalSN)
 			}
 			
-			// Propõe se houver requests
+			// ✅ LIVENESS: Sempre chama tick e ProposeIfDue para processar requests
 			inst.tick(time.Now())
 			inst.ProposeIfDue()
 		}
