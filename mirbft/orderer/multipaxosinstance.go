@@ -592,7 +592,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		// ✅ PASSO 3: Round-robin entre todos os buckets do grupo
 		// Calcula numBuckets e numGroups
 		numBuckets := int32(len(request.Buckets))
-		numGroups := int32(5) // Hardcoded por enquanto (pode ser obtido dinamicamente)
+		numGroups := int32(request.GetNumGroups()) // ✅ Obtém dinamicamente
 		
 		// Inicializa nextBucketIdx se necessário
 		if i.nextBucketIdx == 0 && i.bucketId > 0 {

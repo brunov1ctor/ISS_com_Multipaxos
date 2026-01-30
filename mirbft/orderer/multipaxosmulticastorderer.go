@@ -202,6 +202,7 @@ func (o *MultiPaxosMulticastOrderer) setupHandlers() {
 	request.SetRequestReceivedMarker(o.MarkRequestReceived)
 	request.SetRequestCacher(o.CacheRequest)
 	request.SetRequestPreprocessor(o.PreprocessRequest)
+	request.SetNumGroupsGetter(o.GetNumGroups) // ✅ Injeta getter de numGroups
 	
 	logger.Info().Msg("[MULTICAST] Registered GSN/atomic multicast callbacks")
 	
@@ -327,6 +328,16 @@ func (o *MultiPaxosMulticastOrderer) GetOrdererForGroup(groupID uint32) *MultiPa
 // Combina nodeID + contador local para evitar colisões entre proxies
 func makeGlobalRequestID(nodeID int32, localCounter uint32) uint64 {
 	return uint64(nodeID)<<32 | uint64(localCounter)
+}
+
+// GetNumGroups - Retorna número de grupos definidos
+// ✅ DYNAMIC: Usado por GetBucketNr() para cálculo dinâmico
+func (o *MultiPaxosMulticastOrderer) GetNumGroups() int {
+	if o.am == nil {
+		return 5 // Fallback
+	}
+	groups := o.am.GetDefinedGroups()
+	return len(groups)
 }
 
 // GetNextGSN - Obtém próximo GSN via grupo 0 (sequenciador global)
