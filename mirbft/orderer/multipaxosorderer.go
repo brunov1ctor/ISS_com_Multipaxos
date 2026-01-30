@@ -108,9 +108,8 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.proposeEvery = config.Config.BatchTimeout
 	if o.am == nil {
 		o.am = NewAtomicMulticast()
-		// ✅ FIX: Só seta ownedGroupID=0 se ainda não foi configurado
 		if o.ownedGroupID == 0 {
-			o.ownedGroupID = 0 // Orderer standalone gerencia todos os grupos
+			o.ownedGroupID = 0
 		}
 		fmt.Printf("[MPX] Init: created new AtomicMulticast (ownedGroupID=%d)\n", o.ownedGroupID)
 	} else {
@@ -120,7 +119,6 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		mpx := pm.GetMultipaxos()
 		var groupID uint32
 		if mpx == nil {
-			// Envia para todos incluindo si mesmo
 			for _, nid := range membership.AllNodeIDs() {
 				messenger.EnqueueMsg(pm, nid)
 			}
@@ -128,7 +126,6 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		}
 		groupID = extractGroupID(mpx)
 		if groupID == 0 {
-			// Grupo 0: envia para todos incluindo si mesmo
 			for _, nid := range membership.AllNodeIDs() {
 				messenger.EnqueueMsg(pm, nid)
 			}
@@ -138,16 +135,18 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			members := o.am.GetGroupMembers(groupID)
 			if members != nil && len(members) > 0 {
 				for _, nodeID := range members {
-					messenger.EnqueueMsg(pm, nodeID)  // ✅ Envia para TODOS incluindo si mesmo
+					messenger.EnqueueMsg(pm, nodeID)
 				}
 				return
 			}
 		}
 		for _, nid := range membership.AllNodeIDs() {
-			messenger.EnqueueMsg(pm, nid)  // ✅ Envia para TODOS incluindo si mesmo
+			messenger.EnqueueMsg(pm, nid)
 		}
 	}
-	o.segmentChan = o.mgr.SubscribeOrderer()
+	// ✅ FIX: Nenhum grupo usa segment manager (SN local com mapeamento global)
+	o.segmentChan = nil
+	fmt.Printf("[MPX] Using local SN loop (no segments) ownedGroupID=%d\n", o.ownedGroupID)
 	if !o.skipHandlerRegistration {
 		messenger.OrdererMsgHandler = o.HandleMessage
 		fmt.Printf("[MPX] Registered global message handler\n")
@@ -226,20 +225,31 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 	o.startOnce.Do(func() {
 		fmt.Printf("[MPX] Start begin (ownedGroupID=%d)\n", o.ownedGroupID)
-		go func() {
-			for seg := range o.segmentChan {
-				logger.Info().
-					Int("segId", seg.SegID()).
-					Int32("length", seg.Len()).
-					Int32("firstSN", seg.FirstSN()).
-					Int32("lastSN", seg.LastSN()).
-					Int32("first leader", seg.Leaders()[0]).
-					Int32("len", seg.Len()).
-					Msgf("MultiPaxos received new segment: %+v", seg.SNs())
-				o.runSegment(seg)
-				go o.killSegment(seg)
-			}
-		}()
+		
+		// ✅ FIX: Grupos de dados usam SN local, standalone/grupo0 usa segmentos
+		if o.segmentChan != nil {
+			// Modo segment manager (standalone ou grupo 0)
+			go func() {
+				for seg := range o.segmentChan {
+					logger.Info().
+						Int("segId", seg.SegID()).
+						Int32("length", seg.Len()).
+						Int32("firstSN", seg.FirstSN()).
+						Int32("lastSN", seg.LastSN()).
+						Int32("first leader", seg.Leaders()[0]).
+						Int32("len", seg.Len()).
+						Msgf("MultiPaxos received new segment: %+v", seg.SNs())
+					o.runSegment(seg)
+					go o.killSegment(seg)
+				}
+			}()
+			fmt.Printf("[MPX] Started with segment manager\n")
+		} else {
+			// ✅ Modo SN local (grupos de dados)
+			go o.runLocalSNLoop()
+			fmt.Printf("[MPX] Started with local SN loop for group %d\n", o.ownedGroupID)
+		}
+		
 		fmt.Printf("[MPX] Start done\n")
 	})
 }
@@ -310,6 +320,106 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 		},
 	})
 }
+// runLocalSNLoop - Loop de SN local para grupos de dados (sem segment manager)
+// Cada grupo mantém seu próprio espaço SN local: 0,1,2,3...
+// Mas mapeia para SN global único: globalSN = localSN * numGroups + groupID
+// Ordem global é garantida por GSN/META
+func (o *MultiPaxosOrderer) runLocalSNLoop() {
+	groupId := o.ownedGroupID
+	members := o.am.GetGroupMembers(groupId)
+	if members == nil {
+		fmt.Printf("[MPX][LOCAL-SN] Group %d has NO members, exiting\n", groupId)
+		return
+	}
+	
+	// Verifica se é membro do grupo
+	if !o.am.IsMember(groupId, membership.OwnID) {
+		fmt.Printf("[MPX][LOCAL-SN] Not a member of group %d, exiting\n", groupId)
+		return
+	}
+	
+	// Calcula numGroups para mapeamento SN local → global
+	allGroupIDs := o.am.GetDefinedGroups()
+	if len(allGroupIDs) == 0 {
+		allGroupIDs = []uint32{0}
+	} else if allGroupIDs[0] != 0 {
+		allGroupIDs = append([]uint32{0}, allGroupIDs...)
+	}
+	numGroups := int32(len(allGroupIDs))
+	if numGroups == 0 {
+		numGroups = 1
+	}
+	
+	fmt.Printf("[MPX][LOCAL-SN] Starting local SN loop for group %d with %d members: %v (numGroups=%d)\n", groupId, len(members), members, numGroups)
+	
+	// SN local começa em 0
+	localSN := int32(0)
+	bucketIdx := int32(groupId)
+	
+	// Ticker para propostas periódicas
+	ticker := time.NewTicker(o.proposeEvery)
+	defer ticker.Stop()
+	
+	fmt.Printf("[MPX][LOCAL-SN] Started ticker for group %d, interval=%v\n", groupId, o.proposeEvery)
+	
+	for {
+		select {
+		case <-ticker.C:
+			// ✅ Mapeia SN local → global: globalSN = localSN * numGroups + groupID
+			globalSN := localSN*numGroups + int32(groupId)
+			
+			// ✅ FIX: Líder = primeiro membro do grupo (determinístico)
+			isLeader := (membership.OwnID == members[0])
+			
+			if !isLeader {
+				continue
+			}
+			
+			// Verifica se globalSN já foi commitado
+			if mirlog.GetEntry(globalSN) != nil {
+				localSN++
+				continue
+			}
+			
+			// Cria ou obtém instância usando globalSN
+			inst, ok := o.dispatcher.load(globalSN)
+			if !ok || inst == nil {
+				inst = o.ensureInstance(globalSN)
+				inst.bucketId = groupId
+				inst.bucketIndex = bucketIdx
+				inst.SetMembers(members)
+				o.dispatcher.store(globalSN, inst)
+				inst.startWorkers(&o.stopWg)
+				o.backlog.drainTo(globalSN, inst.enqueue)
+				
+				// Envia PREPARE
+				prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
+					Prepare: &pb.MPxPrepare{
+						Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
+						Ballot:  uint64(inst.currentBallot),
+						GroupId: groupId,
+					},
+				}}
+				pm := &pb.ProtocolMessage{
+					SenderId: membership.OwnID,
+					Sn:       globalSN,
+					Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
+				}
+				if o.emit != nil {
+					inst.enqueue(pm)
+					o.emit(pm)
+				}
+				inst.prepSent = true
+				fmt.Printf("[MPX][LOCAL-SN] Group %d: localSN=%d → globalSN=%d (PREPARE sent)\n", groupId, localSN, globalSN)
+			}
+			
+			// Propõe se houver requests
+			inst.tick(time.Now())
+			inst.ProposeIfDue()
+		}
+	}
+}
+
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	o.firstSNMu.Lock()
 	o.currentFirstSN = seg.FirstSN()
