@@ -380,11 +380,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			fmt.Printf("[MPX][SKIP] Group %d: not leader (leader=%d, ownID=%d)\n", groupId, groupLeader, membership.OwnID)
 			continue
 		}
-		var groupIdx int32 = segmentGroupIdx
 		// Calculate bucketIndex: must match GroupId for correct bucket locking
 		// ✅ FIX: bucketIndex = groupId (not array position)
 		var bucketIdx int32 = int32(groupId)
-		go func(gid uint32, gIdx int32, bIdx int32) {
+		go func(gid uint32, bIdx int32) {
 			t := time.NewTicker(o.proposeEvery)
 			defer t.Stop()
 			// ✅ FIX: currentSN já está correto no seg.FirstSN() (SN intercalado)
@@ -451,7 +450,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					inst.ProposeIfDue()
 				}
 			}
-		}(groupId, groupIdx, bucketIdx)
+		}(groupId, bucketIdx)
 	}
 }
 func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
