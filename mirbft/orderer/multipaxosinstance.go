@@ -117,6 +117,7 @@ type mpxInstance struct {
 	prepSent bool                   // Se já enviou prepare
 	leader   int32                  // Líder atual desta instância
 	currentBallot int64             // Ballot atual
+	inProposal bool                 // Debounce: evita build batch múltiplo no mesmo tick
 	
 	// Canais para processamento assíncrono
 	msgCh  chan *pb.ProtocolMessage // Canal de mensagens
@@ -555,12 +556,14 @@ func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	
-	fmt.Printf("[MPX][PROPOSE] sn=%d called, phase=%d prepared=%v\n", i.sn, i.phase, i.prepared)
+	if i.inProposal {
+		return
+	}
+	i.inProposal = true
+	defer func() { i.inProposal = false }()
 	
 	i.lastProposeAt = time.Now()
 	
-	// ✅ CORREÇÃO: Se já enviou ACCEPT, não tenta propor novamente
-	// Deixa tick() fazer retransmissão ou nova rodada
 	if i.phase >= phaseAcceptSent {
 		return
 	}
@@ -621,54 +624,57 @@ func (i *mpxInstance) ProposeIfDue() {
 					selectedReq = systemReq
 					request.Buckets[b].RemoveNoLock(selectedReq)
 					selectedBucket = b
-				} else {
-					selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
-					if selectedReq != nil {
-						request.Buckets[b].RemoveNoLock(selectedReq)
-						selectedBucket = b
-					}
+					request.Buckets[b].Unlock()
+					break
 				}
+				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
+				if selectedReq != nil {
+					request.Buckets[b].RemoveNoLock(selectedReq)
+					selectedBucket = b
+					request.Buckets[b].Unlock()
+					break
+				}
+				request.Buckets[b].Unlock()
 			} else {
-				// ✅ BATCHING: Grupos de dados drenam múltiplas requests
 				// Tenta expectedGSN primeiro (cross-op)
 				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
 				if selectedReq != nil {
 					request.Buckets[b].RemoveNoLock(selectedReq)
 					selectedBucket = b
-					break // Cross-op: apenas 1 request por batch
+					request.Buckets[b].Unlock()
+					break
 				}
 				
-				// Sem cross-op esperado: drena batch de single-group
-				// ✅ CORREÇÃO: Remove apenas o que cabe no batch (evita perda de requests)
+				// Single-group: drena até maxBatchSize TOTAL
 				if rb == nil {
 					rb = &request.Batch{Requests: make([]*request.Request, 0, i.parent.maxBatchSize)}
 				}
+				// Mudança 1: remaining = limite global - já coletado
 				remaining := i.parent.maxBatchSize - len(rb.Requests)
 				if remaining > 0 {
 					batchReqs := request.Buckets[b].RemoveFirstSingleGroup(remaining, []*request.Request{})
-					if len(batchReqs) > 0 {
-						rb.Requests = append(rb.Requests, batchReqs...)
-						fmt.Printf("[BATCH] sn=%d group=%d bucket=%d took=%d total=%d\n", 
-							i.sn, i.bucketId, b, len(batchReqs), len(rb.Requests))
-					}
+					rb.Requests = append(rb.Requests, batchReqs...)
+				}
+				request.Buckets[b].Unlock()
+				
+				// Mudança 1: Para quando remaining == 0
+				if len(rb.Requests) >= i.parent.maxBatchSize {
+					i.nextBucketIdx = (b + 1) % numBuckets
+					break
 				}
 			}
 			
-			request.Buckets[b].Unlock()
-			
-			// Se rb já foi setado e está cheio, para busca
-			if rb != nil && len(rb.Requests) >= i.parent.maxBatchSize {
+			// Grupo 0: unlock e break se encontrou
+			if i.bucketId == 0 && selectedReq != nil {
 				i.nextBucketIdx = (b + 1) % numBuckets
+				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 				break
 			}
 			
-			// Se encontrou request única (cross-op), para a busca
+			// Grupos de dados: unlock e break se cross-op
 			if selectedReq != nil {
 				i.nextBucketIdx = (b + 1) % numBuckets
 				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-				i.lastVal = nil
-				fmt.Printf("[CROSS-OP] sn=%d group=%d bucket=%d found request gsn=%d (round-robin)\n", 
-					i.sn, i.bucketId, selectedBucket, selectedReq.Msg.GSN)
 				break
 			}
 		}
@@ -746,12 +752,12 @@ func (i *mpxInstance) ProposeIfDue() {
 	if !i.prepared {
 		if i.promiseCount < i.quorum {
 			fmt.Printf("[MPX][INST] sn=%d aguardando quorum de promises (%d/%d)\n", i.sn, i.promiseCount, i.quorum)
-			// ✅ CORREÇÃO: Devolver request ao bucket se não conseguir propor
+			// ✅ CORREÇÃO: Devolver request ao bucket mas MANTER i.lastVal para próxima chamada
 			if i.lastReqBatch != nil {
 				fmt.Printf("[MPX][INST] sn=%d returning batch to bucket (no quorum)\n", i.sn)
 				i.lastReqBatch.Resurrect()
 				i.lastReqBatch = nil
-				i.lastVal = nil
+				// NÃO limpa i.lastVal - será reutilizado na próxima chamada
 			}
 			return
 		}
