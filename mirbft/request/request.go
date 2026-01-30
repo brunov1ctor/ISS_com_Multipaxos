@@ -83,6 +83,9 @@ var (
 	
 	// Preprocessor customizado (ex: atomic multicast)
 	requestPreprocessor func(*pb.ClientRequest) bool
+	
+	// ✅ DYNAMIC: Getter de numGroups (injected by orderer)
+	numGroupsGetter func() int
 )
 
 type watermarkRange struct {
@@ -242,6 +245,22 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 	requestPreprocessor = fn
 }
 
+// ✅ DYNAMIC: SetNumGroupsGetter configura getter de numGroups
+func SetNumGroupsGetter(fn func() int) {
+	numGroupsGetter = fn
+}
+
+// ✅ DYNAMIC: GetNumGroups retorna número de grupos (com fallback)
+func GetNumGroups() int {
+	if numGroupsGetter != nil {
+		n := numGroupsGetter()
+		if n > 0 {
+			return n
+		}
+	}
+	return 5 // Fallback para 5 grupos
+}
+
 // ReplicaMapper - Mapeia payload para grupos (particionamento por intervalo)
 func ReplicaMapper(payload []byte) []uint32 {
 	parts := strings.Fields(string(payload))
@@ -322,21 +341,16 @@ func GetGroupMembersGetter() func(uint32) []int32 {
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
-	// ✅ PASSO 2 (Opção B): Alinhar GroupId ao bucketGroup
-	// Calcula bucket por hash
+	// ✅ CORREÇÃO: GroupId já deve estar setado ANTES de calcular bucket
+	// Bucket é calculado A PARTIR do GroupId (não o contrário)
+	// GetBucketNr() usa req.GetGroupId() internamente
+	
+	// Calcula bucket usando GroupId já definido
 	bucketNr := GetBucketNr(reqMsg)
 	
-	// Deriva GroupId do bucket: bucketGroup = bucketId % numGroups
-	// Assumindo 5 grupos (0-4) fixos para atomic multicast
-	numGroups := 5
-	if len(Buckets) > 0 {
-		reqMsg.GroupId = uint32(bucketNr % numGroups)
-		reqMsg.TouchedGroups = []uint32{reqMsg.GroupId}
-	}
-	
 	// ✅ DEBUG: Log estado da request
-	fmt.Printf("[ADD-REQ][ENTRY] req=%p clientId=%d clientSn=%d bucket=%d groupId=%d touchedGroups=%v gsn=%d\n",
-		reqMsg, reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, bucketNr, reqMsg.GroupId, reqMsg.TouchedGroups, reqMsg.GSN)
+	fmt.Printf("[ADD-REQ][ENTRY] req=%p clientId=%d clientSn=%d groupId=%d bucket=%d touchedGroups=%v gsn=%d\n",
+		reqMsg, reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, bucketNr, reqMsg.TouchedGroups, reqMsg.GSN)
 	
 	// ✅ 3) LIVENESS: Marca request como recebida (para watchdog)
 	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
@@ -354,8 +368,8 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		payloadPreview = payloadPreview[:50]
 	}
 	isSystem := strings.HasPrefix(string(reqMsg.Payload), "SYSTEM:")
-	fmt.Printf("[ADD-REQ] clientId=%d clientSn=%d bucket=%d groupId=%d gsn=%d touchedGroups=%v isSystem=%v payload=%s\n",
-		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, bucketNr, reqMsg.GroupId, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
+	fmt.Printf("[ADD-REQ] clientId=%d clientSn=%d groupId=%d bucket=%d gsn=%d touchedGroups=%v isSystem=%v payload=%s\n",
+		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, bucketNr, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
 	
 	req := &Request{
 		Msg:      reqMsg,
@@ -518,11 +532,44 @@ func getBucket(req *pb.ClientRequest) *Bucket {
 }
 
 func GetBucketNr(req *pb.ClientRequest) int {
-	// Sempre distribui por hash (evita colapsar tudo no bucket = GroupId)
-	if len(Buckets) == 0 {
+	n := len(Buckets)
+	if n == 0 {
 		return 0
 	}
-	return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(len(Buckets)))
+	
+	// ✅ SOLUÇÃO: bucket dentro do grupo
+	// Fórmula: bucket = groupId + numGroups * hash
+	// Garante que grupo g só usa buckets onde b % numGroups == g
+	numGroups := GetNumGroups() // ✅ Obtém dinamicamente
+	if numGroups <= 0 {
+		numGroups = 1
+	}
+	
+	bucketsPerGroup := n / numGroups
+	if bucketsPerGroup <= 0 {
+		// Fallback: distribuição global se configuração inválida
+		return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(n))
+	}
+	
+	g := int(req.GetGroupId())
+	if g < 0 {
+		g = 0
+	}
+	if g >= numGroups {
+		g = g % numGroups
+	}
+	
+	// Hash dentro do grupo (0..bucketsPerGroup-1)
+	h := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(bucketsPerGroup))
+	
+	// Bucket final: g + numGroups * h
+	// Exemplos com 80 buckets, 5 grupos (16 buckets/grupo):
+	//   group 1, h=0 → 1 + 5*0 = 1
+	//   group 1, h=1 → 1 + 5*1 = 6
+	//   group 1, h=2 → 1 + 5*2 = 11
+	//   group 3, h=0 → 3 + 5*0 = 3
+	//   group 3, h=1 → 3 + 5*1 = 8
+	return g + numGroups*h
 }
 
 // IsMultiGroupRequest verifica se request toca múltiplos grupos (precisa atomic global order)
