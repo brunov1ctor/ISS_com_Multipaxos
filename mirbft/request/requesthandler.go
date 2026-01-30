@@ -92,7 +92,7 @@ func HandleRequest(req *pb.ClientRequest) {
 	}
 		AddReqMsg(req)
 }
-}
+
 
 // equalGroups verifica se dois slices de grupos são iguais como conjuntos
 // Normaliza ordem e remove duplicatas antes de comparar
