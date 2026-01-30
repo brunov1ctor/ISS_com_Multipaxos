@@ -629,40 +629,51 @@ func (i *mpxInstance) ProposeIfDue() {
 					}
 				}
 			} else {
-				// Grupos de dados: tenta expectedGSN primeiro, depois single-group
+				// ✅ BATCHING: Grupos de dados drenam múltiplas requests
+				// Tenta expectedGSN primeiro (cross-op)
 				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
 				if selectedReq != nil {
 					request.Buckets[b].RemoveNoLock(selectedReq)
 					selectedBucket = b
-				} else {
-					// Sem cross-op esperado: busca primeira single-group (GSN=0)
-					reqs := request.Buckets[b].RemoveFirstSingleGroup(1, []*request.Request{})
-					if len(reqs) > 0 {
-						selectedReq = reqs[0]
-						selectedBucket = b
-					}
+					break // Cross-op: apenas 1 request por batch
+				}
+				
+				// Sem cross-op esperado: drena batch de single-group
+				// ✅ THROUGHPUT: Remove até batchSize requests do bucket
+				maxBatch := i.parent.maxBatchSize
+				batchReqs := request.Buckets[b].RemoveFirstSingleGroup(maxBatch, []*request.Request{})
+				if len(batchReqs) > 0 {
+					// Cria batch com múltiplas requests
+					rb = &request.Batch{Requests: batchReqs}
+					selectedBucket = b
+					i.nextBucketIdx = (b + 1) % numBuckets
+					i.lastVal = nil
+					request.Buckets[b].Unlock()
+					fmt.Printf("[BATCH] sn=%d group=%d bucket=%d drained %d requests (round-robin)\n", 
+						i.sn, i.bucketId, selectedBucket, len(batchReqs))
+					break // Encontrou batch, para busca
 				}
 			}
 			
 			request.Buckets[b].Unlock()
 			
-			// Se encontrou request, para a busca
+			// Se rb já foi setado (batch de single-group), já encontrou
+			if rb != nil {
+				break
+			}
+			
+			// Se encontrou request única (cross-op), para a busca
 			if selectedReq != nil {
-				i.nextBucketIdx = (b + 1) % numBuckets // Atualiza para próximo bucket
+				i.nextBucketIdx = (b + 1) % numBuckets
 				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 				i.lastVal = nil
-				if selectedReq.Msg.GSN > 0 {
-					fmt.Printf("[MPX][PROPOSE] sn=%d group=%d bucket=%d found request gsn=%d (round-robin)\n", 
-						i.sn, i.bucketId, selectedBucket, selectedReq.Msg.GSN)
-				} else {
-					fmt.Printf("[SINGLE-GROUP] sn=%d group=%d bucket=%d selected single-group request (round-robin)\n", 
-						i.sn, i.bucketId, selectedBucket)
-				}
+				fmt.Printf("[CROSS-OP] sn=%d group=%d bucket=%d found request gsn=%d (round-robin)\n", 
+					i.sn, i.bucketId, selectedBucket, selectedReq.Msg.GSN)
 				break
 			}
 		}
 		
-		if selectedReq == nil {
+		if rb == nil && selectedReq == nil {
 			fmt.Printf("[MPX][PROPOSE] sn=%d group=%d no request found in any bucket (tried %d buckets)\n", 
 				i.sn, i.bucketId, numBuckets/numGroups)
 		}
