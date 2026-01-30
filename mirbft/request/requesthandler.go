@@ -88,17 +88,10 @@ func HandleRequest(req *pb.ClientRequest) {
 			fmt.Printf("[HANDLE-REQ] Preprocessor handled request, returning\n")
 			return // Preprocessor já processou
 		}
-		fmt.Printf("[HANDLE-REQ] Preprocessor returned false, continuing normal flow\n")
+		fmt.Printf("[HANDLE-REQ] Preprocessor returned false, req now: groupId=%d touchedGroups=%v\n", req.GroupId, req.TouchedGroups)
 	}
-	
-	if config.Config.RequestHandlerThreads > 0 {
-		idx := handlerThreadIndex(req.RequestId.ClientId, req.RequestId.ClientSn, config.Config.RequestHandlerThreads)
-		fmt.Printf("[HANDLE-REQ] Adding to input channel %d\n", idx)
-		requestInputChannels[idx] <- req
-	} else {
-		fmt.Printf("[HANDLE-REQ] Adding directly (no handler threads)\n")
 		AddReqMsg(req)
-	}
+}
 }
 
 // equalGroups verifica se dois slices de grupos são iguais como conjuntos
