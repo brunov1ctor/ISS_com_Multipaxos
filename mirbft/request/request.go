@@ -322,9 +322,21 @@ func GetGroupMembersGetter() func(uint32) []int32 {
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
+	// ✅ PASSO 2 (Opção B): Alinhar GroupId ao bucketGroup
+	// Calcula bucket por hash
+	bucketNr := GetBucketNr(reqMsg)
+	
+	// Deriva GroupId do bucket: bucketGroup = bucketId % numGroups
+	// Assumindo 5 grupos (0-4) fixos para atomic multicast
+	numGroups := 5
+	if len(Buckets) > 0 {
+		reqMsg.GroupId = uint32(bucketNr % numGroups)
+		reqMsg.TouchedGroups = []uint32{reqMsg.GroupId}
+	}
+	
 	// ✅ DEBUG: Log estado da request
-	fmt.Printf("[ADD-REQ][ENTRY] req=%p clientId=%d clientSn=%d groupId=%d touchedGroups=%v gsn=%d\n",
-		reqMsg, reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, reqMsg.TouchedGroups, reqMsg.GSN)
+	fmt.Printf("[ADD-REQ][ENTRY] req=%p clientId=%d clientSn=%d bucket=%d groupId=%d touchedGroups=%v gsn=%d\n",
+		reqMsg, reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, bucketNr, reqMsg.GroupId, reqMsg.TouchedGroups, reqMsg.GSN)
 	
 	// ✅ 3) LIVENESS: Marca request como recebida (para watchdog)
 	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
@@ -342,12 +354,8 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		payloadPreview = payloadPreview[:50]
 	}
 	isSystem := strings.HasPrefix(string(reqMsg.Payload), "SYSTEM:")
-	fmt.Printf("[ADD-REQ] clientId=%d clientSn=%d groupId=%d gsn=%d touchedGroups=%v isSystem=%v payload=%s\n",
-		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
-	
-	// ✅ DEBUG: Log bucket assignment
-	bucketNr := GetBucketNr(reqMsg)
-	fmt.Printf("[ADD-REQ] Assigning to bucket=%d (groupId=%d) numBuckets=%d\n", bucketNr, reqMsg.GroupId, len(Buckets))
+	fmt.Printf("[ADD-REQ] clientId=%d clientSn=%d bucket=%d groupId=%d gsn=%d touchedGroups=%v isSystem=%v payload=%s\n",
+		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, bucketNr, reqMsg.GroupId, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
 	
 	req := &Request{
 		Msg:      reqMsg,
@@ -368,9 +376,9 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 	
 	addedReq := Add(req)
 	if addedReq != nil {
-		fmt.Printf("[ADD-REQ] Successfully added to bucket=%d\n", bucketNr)
+		fmt.Printf("[ADD-REQ] Successfully added to bucket=%d group=%d\n", bucketNr, reqMsg.GroupId)
 	} else {
-		fmt.Printf("[ADD-REQ][WARN] Failed to add to bucket=%d\n", bucketNr)
+		fmt.Printf("[ADD-REQ][WARN] Failed to add to bucket=%d group=%d\n", bucketNr, reqMsg.GroupId)
 	}
 	return addedReq
 }

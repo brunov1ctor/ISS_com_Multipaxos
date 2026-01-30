@@ -88,6 +88,7 @@ type mpxInstance struct {
 	sn     int32                     // Sequence Number desta instância
 	bucketId uint32                 // ID do grupo (bucket)
 	bucketIndex int32               // Índice do bucket para requests
+	nextBucketIdx int32             // Próximo bucket a verificar (round-robin)
 	proposeEvery  time.Duration     // Intervalo entre propostas
 	announce      AnnounceFn        // Função para anunciar commits
 	lastProposeAt time.Time         // Última vez que propôs
@@ -132,6 +133,7 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ 
 		sn:             sn,
 		bucketId:       0,
 		bucketIndex:    -1,
+		nextBucketIdx:  0,
 		proposeEvery:   interval,
 		announce:       announce,
 		lastProposeAt:  now,
@@ -587,52 +589,82 @@ func (i *mpxInstance) ProposeIfDue() {
 			expectedGSN = 1 // Fallback se não há multicast orderer
 		}
 		
-		request.Buckets[i.bucketId].Lock()
+		// ✅ PASSO 3: Round-robin entre todos os buckets do grupo
+		// Calcula numBuckets e numGroups
+		numBuckets := int32(len(request.Buckets))
+		numGroups := int32(5) // Hardcoded por enquanto (pode ser obtido dinamicamente)
 		
-		fmt.Printf("[MPX][PROPOSE] sn=%d bucketId=%d expectedGSN=%d checking bucket\n", i.sn, i.bucketId, expectedGSN)
+		// Inicializa nextBucketIdx se necessário
+		if i.nextBucketIdx == 0 && i.bucketId > 0 {
+			i.nextBucketIdx = int32(i.bucketId)
+		}
 		
 		var selectedReq *request.Request
-		if i.bucketId == 0 {
-			// Grupo 0: prioriza requests sistêmicas
-			systemReq := request.Buckets[i.bucketId].FindSystemRequest()
-			if systemReq != nil {
-				selectedReq = systemReq
-				request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
-			} else {
-				selectedReq = request.Buckets[i.bucketId].FindRequestWithGSN(expectedGSN)
-				if selectedReq != nil {
-					request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
-				}
+		var selectedBucket int32 = -1
+		
+		// ✅ Itera por todos os buckets do grupo (round-robin)
+		for k := int32(0); k < numBuckets; k++ {
+			b := (i.nextBucketIdx + k) % numBuckets
+			
+			// Verifica se bucket pertence ao grupo: b % numGroups == groupId
+			if b % numGroups != int32(i.bucketId) {
+				continue
 			}
-			request.Buckets[i.bucketId].Unlock()
-			if selectedReq != nil {
-				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-				i.lastVal = nil
-				fmt.Printf("[MPX][PROPOSE] sn=%d found request gsn=%d\n", i.sn, selectedReq.Msg.GSN)
-			}
-		} else {
-			// ✅ CORREÇÃO: Grupos de dados suportam single-group (GSN=0)
-			// Tenta expectedGSN primeiro (cross-op), senão pega single-group FIFO
-			selectedReq = request.Buckets[i.bucketId].FindRequestWithGSN(expectedGSN)
-			if selectedReq != nil {
-				request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
-				request.Buckets[i.bucketId].Unlock()
-				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-				i.lastVal = nil
-				fmt.Printf("[MPX][PROPOSE] sn=%d found cross-op request gsn=%d\n", i.sn, selectedReq.Msg.GSN)
-			} else {
-				// Sem cross-op esperado: busca primeira single-group (GSN=0)
-				reqs := request.Buckets[i.bucketId].RemoveFirstSingleGroup(1, []*request.Request{})
-				request.Buckets[i.bucketId].Unlock()
-				if len(reqs) > 0 {
-					selectedReq = reqs[0]
-					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-					i.lastVal = nil
-					fmt.Printf("[SINGLE-GROUP] sn=%d group=%d selected single-group request (GSN=0)\n", i.sn, i.bucketId)
+			
+			// Tenta remover request deste bucket
+			request.Buckets[b].Lock()
+			
+			if i.bucketId == 0 {
+				// Grupo 0: prioriza requests sistêmicas
+				systemReq := request.Buckets[b].FindSystemRequest()
+				if systemReq != nil {
+					selectedReq = systemReq
+					request.Buckets[b].RemoveNoLock(selectedReq)
+					selectedBucket = b
 				} else {
-					fmt.Printf("[MPX][PROPOSE] sn=%d no request found (tried GSN=%d and single-group)\n", i.sn, expectedGSN)
+					selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
+					if selectedReq != nil {
+						request.Buckets[b].RemoveNoLock(selectedReq)
+						selectedBucket = b
+					}
+				}
+			} else {
+				// Grupos de dados: tenta expectedGSN primeiro, depois single-group
+				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
+				if selectedReq != nil {
+					request.Buckets[b].RemoveNoLock(selectedReq)
+					selectedBucket = b
+				} else {
+					// Sem cross-op esperado: busca primeira single-group (GSN=0)
+					reqs := request.Buckets[b].RemoveFirstSingleGroup(1, []*request.Request{})
+					if len(reqs) > 0 {
+						selectedReq = reqs[0]
+						selectedBucket = b
+					}
 				}
 			}
+			
+			request.Buckets[b].Unlock()
+			
+			// Se encontrou request, para a busca
+			if selectedReq != nil {
+				i.nextBucketIdx = (b + 1) % numBuckets // Atualiza para próximo bucket
+				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
+				i.lastVal = nil
+				if selectedReq.Msg.GSN > 0 {
+					fmt.Printf("[MPX][PROPOSE] sn=%d group=%d bucket=%d found request gsn=%d (round-robin)\n", 
+						i.sn, i.bucketId, selectedBucket, selectedReq.Msg.GSN)
+				} else {
+					fmt.Printf("[SINGLE-GROUP] sn=%d group=%d bucket=%d selected single-group request (round-robin)\n", 
+						i.sn, i.bucketId, selectedBucket)
+				}
+				break
+			}
+		}
+		
+		if selectedReq == nil {
+			fmt.Printf("[MPX][PROPOSE] sn=%d group=%d no request found in any bucket (tried %d buckets)\n", 
+				i.sn, i.bucketId, numBuckets/numGroups)
 		}
 		
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
