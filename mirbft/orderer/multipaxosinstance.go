@@ -573,13 +573,12 @@ func (i *mpxInstance) ProposeIfDue() {
 	var val *pb.MPxValue
 	reqs := 0
 	if i.lastVal == nil {
-		if i.seg == nil || i.bucketIndex < 0 {
+		// ✅ FIX: Verifica apenas bucketIndex (seg pode ser nil em runLocalSNLoop)
+		if i.bucketIndex < 0 {
+			fmt.Printf("[MPX][PROPOSE] sn=%d bucketIndex not set, skipping\n", i.sn)
 			return
 		}
 		var rb *request.Batch
-		if i.seg == nil || i.bucketIndex < 0 {
-			return
-		}
 		// ✅ CORREÇÃO: Propõe apenas GSN esperado para evitar buffering excessivo
 		// Obtém lastDeliveredGSN para este grupo
 		var expectedGSN uint64
