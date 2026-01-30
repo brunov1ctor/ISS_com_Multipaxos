@@ -331,12 +331,16 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		allGroupIDs = append([]uint32{0}, allGroupIDs...)
 	}
 	
-	// Identifica grupo do segmento pelo firstSN (SN intercalado)
+	// ✅ FIX CRÍTICO: No modo multicast, cada MultiPaxosOrderer gerencia APENAS seu ownedGroupID
+	// O manager envia TODOS os segmentos para TODOS os orderers, mas cada um deve processar
+	// apenas os segmentos do SEU grupo (baseado em SN intercalado)
 	firstSN := seg.FirstSN()
 	numGroups := int32(len(allGroupIDs))
 	if numGroups == 0 {
 		numGroups = 1
 	}
+	
+	// Calcula qual grupo este segmento pertence (SN intercalado)
 	segmentGroupIdx := firstSN % numGroups
 	if segmentGroupIdx < 0 || segmentGroupIdx >= int32(len(allGroupIDs)) {
 		fmt.Printf("[MPX] Invalid segment groupIdx=%d for firstSN=%d, skipping\n", segmentGroupIdx, firstSN)
@@ -345,16 +349,21 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	segmentGroupID := allGroupIDs[segmentGroupIdx]
 	fmt.Printf("[MPX] runSegment: firstSN=%d belongs to group %d (idx=%d of %d groups)\n", firstSN, segmentGroupID, segmentGroupIdx, numGroups)
 	
-	var groupsToProcess []uint32
-	// ✅ FIX: Processa segmento se for membro do grupo (ignora ownedGroupID)
-	// Cada nó pode ser membro de múltiplos grupos
-	if segmentGroupID == 0 || o.am.IsMember(segmentGroupID, membership.OwnID) {
-		groupsToProcess = []uint32{segmentGroupID}
-		fmt.Printf("[MPX] runSegment: processing segment for group %d (member)\n", segmentGroupID)
-	} else {
+	// ✅ FIX: Processa apenas se este orderer gerencia este grupo
+	if o.ownedGroupID != segmentGroupID {
+		fmt.Printf("[MPX] runSegment: skipping segment for group %d (ownedGroupID=%d)\n", segmentGroupID, o.ownedGroupID)
+		return
+	}
+	
+	// ✅ FIX: Verifica se é membro do grupo antes de processar
+	if segmentGroupID != 0 && !o.am.IsMember(segmentGroupID, membership.OwnID) {
 		fmt.Printf("[MPX] runSegment: skipping segment for group %d (not a member)\n", segmentGroupID)
 		return
 	}
+	
+	var groupsToProcess []uint32
+	groupsToProcess = []uint32{segmentGroupID}
+	fmt.Printf("[MPX] runSegment: processing segment for group %d (ownedGroupID=%d, member=true)\n", segmentGroupID, o.ownedGroupID)
 	
 	for _, groupId := range groupsToProcess {
 		members := o.am.GetGroupMembers(groupId)
