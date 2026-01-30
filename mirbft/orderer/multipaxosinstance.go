@@ -639,26 +639,26 @@ func (i *mpxInstance) ProposeIfDue() {
 				}
 				
 				// Sem cross-op esperado: drena batch de single-group
-				// ✅ THROUGHPUT: Remove até batchSize requests do bucket
-				maxBatch := i.parent.maxBatchSize
-				batchReqs := request.Buckets[b].RemoveFirstSingleGroup(maxBatch, []*request.Request{})
-				if len(batchReqs) > 0 {
-					// Cria batch com múltiplas requests
-					rb = &request.Batch{Requests: batchReqs}
-					selectedBucket = b
-					i.nextBucketIdx = (b + 1) % numBuckets
-					i.lastVal = nil
-					request.Buckets[b].Unlock()
-					fmt.Printf("[BATCH] sn=%d group=%d bucket=%d drained %d requests (round-robin)\n", 
-						i.sn, i.bucketId, selectedBucket, len(batchReqs))
-					break // Encontrou batch, para busca
+				// ✅ CORREÇÃO: Remove apenas o que cabe no batch (evita perda de requests)
+				if rb == nil {
+					rb = &request.Batch{Requests: make([]*request.Request, 0, i.parent.maxBatchSize)}
+				}
+				remaining := i.parent.maxBatchSize - len(rb.Requests)
+				if remaining > 0 {
+					batchReqs := request.Buckets[b].RemoveFirstSingleGroup(remaining, []*request.Request{})
+					if len(batchReqs) > 0 {
+						rb.Requests = append(rb.Requests, batchReqs...)
+						fmt.Printf("[BATCH] sn=%d group=%d bucket=%d took=%d total=%d\n", 
+							i.sn, i.bucketId, b, len(batchReqs), len(rb.Requests))
+					}
 				}
 			}
 			
 			request.Buckets[b].Unlock()
 			
-			// Se rb já foi setado (batch de single-group), já encontrou
-			if rb != nil {
+			// Se rb já foi setado e está cheio, para busca
+			if rb != nil && len(rb.Requests) >= i.parent.maxBatchSize {
+				i.nextBucketIdx = (b + 1) % numBuckets
 				break
 			}
 			
