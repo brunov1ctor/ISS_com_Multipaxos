@@ -331,23 +331,19 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		allGroupIDs = append([]uint32{0}, allGroupIDs...)
 	}
 	
-	// ✅ FIX CRÍTICO: No modo multicast, cada MultiPaxosOrderer gerencia APENAS seu ownedGroupID
-	// O manager envia TODOS os segmentos para TODOS os orderers, mas cada um deve processar
-	// apenas os segmentos do SEU grupo (baseado em SN intercalado)
+	// ✅ FIX CRÍTICO: SN intercalado - grupo = firstSN % numGroups
+	// Manager envia segmentos sequenciais (0,1,2,3,4,5...) para TODOS os orderers
+	// Cada orderer processa apenas SNs do SEU grupo (ownedGroupID)
 	firstSN := seg.FirstSN()
 	numGroups := int32(len(allGroupIDs))
 	if numGroups == 0 {
 		numGroups = 1
 	}
 	
-	// Calcula qual grupo este segmento pertence (SN intercalado)
-	segmentGroupIdx := firstSN % numGroups
-	if segmentGroupIdx < 0 || segmentGroupIdx >= int32(len(allGroupIDs)) {
-		fmt.Printf("[MPX] Invalid segment groupIdx=%d for firstSN=%d, skipping\n", segmentGroupIdx, firstSN)
-		return
-	}
-	segmentGroupID := allGroupIDs[segmentGroupIdx]
-	fmt.Printf("[MPX] runSegment: firstSN=%d belongs to group %d (idx=%d of %d groups)\n", firstSN, segmentGroupID, segmentGroupIdx, numGroups)
+	// ✅ FIX: Grupo = firstSN % numGroups (não usa allGroupIDs como array)
+	// Exemplo: firstSN=1, numGroups=5 → segmentGroupID=1
+	segmentGroupID := uint32(firstSN % numGroups)
+	fmt.Printf("[MPX] runSegment: firstSN=%d belongs to group %d (%d groups total)\n", firstSN, segmentGroupID, numGroups)
 	
 	// ✅ FIX: Processa apenas se este orderer gerencia este grupo
 	if o.ownedGroupID != segmentGroupID {
