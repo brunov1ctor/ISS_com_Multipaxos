@@ -322,12 +322,9 @@ func GetGroupMembersGetter() func(uint32) []int32 {
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
-	// ✅ 1) PROXY: Chama preprocessor ANTES de adicionar ao bucket
-	if requestPreprocessor != nil {
-		if requestPreprocessor(reqMsg) {
-			return nil // Preprocessor já tratou (GSN+META+fanout)
-		}
-	}
+	// ✅ DEBUG: Log estado da request
+	fmt.Printf("[ADD-REQ][ENTRY] req=%p clientId=%d clientSn=%d groupId=%d touchedGroups=%v gsn=%d\n",
+		reqMsg, reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, reqMsg.TouchedGroups, reqMsg.GSN)
 	
 	// ✅ 3) LIVENESS: Marca request como recebida (para watchdog)
 	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
