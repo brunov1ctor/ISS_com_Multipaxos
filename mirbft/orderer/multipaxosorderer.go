@@ -225,7 +225,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 }
 func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 	o.startOnce.Do(func() {
-		fmt.Printf("[MPX] Start begin\n")
+		fmt.Printf("[MPX] Start begin (ownedGroupID=%d)\n", o.ownedGroupID)
 		go func() {
 			for seg := range o.segmentChan {
 				logger.Info().
@@ -322,68 +322,58 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	o.currentSegCancel = func() { close(stopCh) }
 	o.segMu.Unlock()
 	
-	// ✅ FIX: Obtém lista ordenada de grupos (sempre inclui grupo 0)
+	// ✅ FIX: SN intercalado - cada orderer processa apenas SEU grupo
+	// Calcula qual grupo este segmento pertence
+	firstSN := seg.FirstSN()
 	allGroupIDs := o.am.GetDefinedGroups()
 	if len(allGroupIDs) == 0 {
 		allGroupIDs = []uint32{0}
 	} else if allGroupIDs[0] != 0 {
-		// Garante grupo 0 no início se não estiver
 		allGroupIDs = append([]uint32{0}, allGroupIDs...)
 	}
-	
-	// ✅ FIX CRÍTICO: SN intercalado - grupo = firstSN % numGroups
-	// Manager envia segmentos sequenciais (0,1,2,3,4,5...) para TODOS os orderers
-	// Cada orderer processa apenas SNs do SEU grupo (ownedGroupID)
-	firstSN := seg.FirstSN()
 	numGroups := int32(len(allGroupIDs))
 	if numGroups == 0 {
 		numGroups = 1
 	}
 	
-	// ✅ FIX: Grupo = firstSN % numGroups (não usa allGroupIDs como array)
-	// Exemplo: firstSN=1, numGroups=5 → segmentGroupID=1
+	// ✅ FIX CRÍTICO: Grupo = firstSN % numGroups
 	segmentGroupID := uint32(firstSN % numGroups)
-	fmt.Printf("[MPX] runSegment: firstSN=%d belongs to group %d (%d groups total)\n", firstSN, segmentGroupID, numGroups)
 	
 	// ✅ FIX: Processa apenas se este orderer gerencia este grupo
 	if o.ownedGroupID != segmentGroupID {
-		fmt.Printf("[MPX] runSegment: skipping segment for group %d (ownedGroupID=%d)\n", segmentGroupID, o.ownedGroupID)
+		fmt.Printf("[MPX] runSegment: firstSN=%d belongs to group %d, skipping (ownedGroupID=%d)\n", firstSN, segmentGroupID, o.ownedGroupID)
 		return
 	}
 	
-	// ✅ FIX: Verifica se é membro do grupo antes de processar
-	if segmentGroupID != 0 && !o.am.IsMember(segmentGroupID, membership.OwnID) {
-		fmt.Printf("[MPX] runSegment: skipping segment for group %d (not a member)\n", segmentGroupID)
+	groupId := o.ownedGroupID
+	fmt.Printf("[MPX] runSegment: firstSN=%d processing for group %d\n", firstSN, groupId)
+	
+	// ✅ Verifica se é membro do grupo antes de processar
+	if groupId != 0 && !o.am.IsMember(groupId, membership.OwnID) {
+		fmt.Printf("[MPX][SEGMENT] Skipping group %d (not a member)\n", groupId)
 		return
 	}
 	
-	var groupsToProcess []uint32
-	groupsToProcess = []uint32{segmentGroupID}
-	fmt.Printf("[MPX] runSegment: processing segment for group %d (ownedGroupID=%d, member=true)\n", segmentGroupID, o.ownedGroupID)
+	members := o.am.GetGroupMembers(groupId)
+	if members == nil {
+		fmt.Printf("[MPX][CRITICAL] Group %d has NO members, skipping\n", groupId)
+		return
+	}
+	fmt.Printf("[MPX][SEGMENT] Processing group %d with %d members: %v\n", groupId, len(members), members)
 	
-	for _, groupId := range groupsToProcess {
-		members := o.am.GetGroupMembers(groupId)
-		if members == nil {
-			fmt.Printf("[MPX][CRITICAL] Group %d has NO members, skipping\n", groupId)
-			continue
-		}
-		fmt.Printf("[MPX][SEGMENT] Processing group %d with %d members: %v\n", groupId, len(members), members)
-		if groupId != 0 && !o.am.IsMember(groupId, membership.OwnID) {
-			fmt.Printf("[MPX][SEGMENT] Skipping group %d (not a member)\n", groupId)
-			continue
-		}
-		groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
-		fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
-		
-		// Apenas líder propõe (incluindo grupo 0)
-		if groupLeader != membership.OwnID {
-			fmt.Printf("[MPX][SKIP] Group %d: not leader (leader=%d, ownID=%d)\n", groupId, groupLeader, membership.OwnID)
-			continue
-		}
-		// Calculate bucketIndex: must match GroupId for correct bucket locking
-		// ✅ FIX: bucketIndex = groupId (not array position)
-		var bucketIdx int32 = int32(groupId)
-		go func(gid uint32, bIdx int32) {
+	groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
+	fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
+	
+	// Apenas líder propõe (incluindo grupo 0)
+	if groupLeader != membership.OwnID {
+		fmt.Printf("[MPX][SKIP] Group %d: not leader (leader=%d, ownID=%d)\n", groupId, groupLeader, membership.OwnID)
+		return
+	}
+	
+	// Calculate bucketIndex: must match GroupId for correct bucket locking
+	// ✅ FIX: bucketIndex = groupId (not array position)
+	var bucketIdx int32 = int32(groupId)
+	go func(gid uint32, bIdx int32) {
 			t := time.NewTicker(o.proposeEvery)
 			defer t.Stop()
 			// ✅ FIX: currentSN já está correto no seg.FirstSN() (SN intercalado)
@@ -451,7 +441,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				}
 			}
 		}(groupId, bucketIdx)
-	}
 }
 func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 	groupIDs := o.am.GetDefinedGroups()
