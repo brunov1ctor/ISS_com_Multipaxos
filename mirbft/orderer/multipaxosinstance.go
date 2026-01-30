@@ -555,13 +555,6 @@ func (i *mpxInstance) ProposeIfDue() {
 	
 	fmt.Printf("[MPX][PROPOSE] sn=%d called, phase=%d prepared=%v\n", i.sn, i.phase, i.prepared)
 	
-	// ✅ FIX: Rate limiting muito agressivo impedia propostas
-	// Reduzido de proposeEvery/5 para proposeEvery/20 para permitir polling mais frequente
-	minInterval := i.proposeEvery / 20
-	if time.Since(i.lastProposeAt) < minInterval {
-		fmt.Printf("[MPX][PROPOSE] sn=%d rate limited (last=%v ago, min=%v)\n", i.sn, time.Since(i.lastProposeAt), minInterval)
-		return
-	}
 	i.lastProposeAt = time.Now()
 	
 	// ✅ CORREÇÃO: Se já enviou ACCEPT, não tenta propor novamente
