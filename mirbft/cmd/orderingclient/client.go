@@ -239,8 +239,8 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		},
 		Payload:       randomRequestPayload,
 		Signature:     nil,
-		GroupId:       1,
-		TouchedGroups: []uint32{1}, // Single-group request touches group 1
+		GroupId:       0,
+		TouchedGroups: nil, // Let proxy assign groups
 	}
 
 	var err error
