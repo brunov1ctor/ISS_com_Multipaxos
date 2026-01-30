@@ -604,39 +604,44 @@ func (i *mpxInstance) ProposeIfDue() {
 			systemReq := request.Buckets[i.bucketId].FindSystemRequest()
 			if systemReq != nil {
 				selectedReq = systemReq
+				request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
 			} else {
 				selectedReq = request.Buckets[i.bucketId].FindRequestWithGSN(expectedGSN)
+				if selectedReq != nil {
+					request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
+				}
+			}
+			request.Buckets[i.bucketId].Unlock()
+			if selectedReq != nil {
+				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
+				i.lastVal = nil
+				fmt.Printf("[MPX][PROPOSE] sn=%d found request gsn=%d\n", i.sn, selectedReq.Msg.GSN)
 			}
 		} else {
 			// ✅ CORREÇÃO: Grupos de dados suportam single-group (GSN=0)
 			// Tenta expectedGSN primeiro (cross-op), senão pega single-group FIFO
 			selectedReq = request.Buckets[i.bucketId].FindRequestWithGSN(expectedGSN)
-			if selectedReq == nil {
+			if selectedReq != nil {
+				request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
+				request.Buckets[i.bucketId].Unlock()
+				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
+				i.lastVal = nil
+				fmt.Printf("[MPX][PROPOSE] sn=%d found cross-op request gsn=%d\n", i.sn, selectedReq.Msg.GSN)
+			} else {
 				// Sem cross-op esperado: busca primeira single-group (GSN=0)
 				reqs := request.Buckets[i.bucketId].RemoveFirstSingleGroup(1, []*request.Request{})
+				request.Buckets[i.bucketId].Unlock()
 				if len(reqs) > 0 {
 					selectedReq = reqs[0]
-					request.Buckets[i.bucketId].Unlock()
 					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 					i.lastVal = nil
 					fmt.Printf("[SINGLE-GROUP] sn=%d group=%d selected single-group request (GSN=0)\n", i.sn, i.bucketId)
-					goto buildBatch
+				} else {
+					fmt.Printf("[MPX][PROPOSE] sn=%d no request found (tried GSN=%d and single-group)\n", i.sn, expectedGSN)
 				}
 			}
 		}
 		
-		if selectedReq != nil {
-			request.Buckets[i.bucketId].RemoveNoLock(selectedReq)
-			request.Buckets[i.bucketId].Unlock()
-			rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-			i.lastVal = nil
-			fmt.Printf("[MPX][PROPOSE] sn=%d found request gsn=%d\n", i.sn, selectedReq.Msg.GSN)
-		} else {
-			request.Buckets[i.bucketId].Unlock()
-			fmt.Printf("[MPX][PROPOSE] sn=%d no request found\n", i.sn)
-		}
-		
-buildBatch:
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			// ✅ SIMPLIFICAÇÃO: NENHUM grupo propõe batch vazio
 			// Aguarda requests reais para evitar estados estranhos em debug
