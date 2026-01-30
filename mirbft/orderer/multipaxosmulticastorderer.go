@@ -1017,18 +1017,11 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	// ✅ CORREÇÃO: Single-group NÃO usa GSN (baseline do artigo)
 	// Apenas cross-group precisa de GSN para ordem global
 	if len(req.TouchedGroups) == 1 {
-		reqCopy := &pb.ClientRequest{
-			RequestId:     req.RequestId,
-			Payload:       req.Payload,
-			Signature:     req.Signature,
-			Pubkey:        req.Pubkey,
-			GroupId:       req.TouchedGroups[0],
-			TouchedGroups: req.TouchedGroups,
-			GSN:           0, // Single-group não precisa GSN
-		}
-		fmt.Printf("[PREPROCESS] Single-group: sending to group=%d (no GSN/META)\n", reqCopy.GroupId)
-		o.sendToGroup(reqCopy, reqCopy.GroupId)
-		return true
+		// Seta GroupId para o único grupo tocado
+		req.GroupId = req.TouchedGroups[0]
+		req.GSN = 0 // Single-group não precisa GSN
+		fmt.Printf("[PREPROCESS] Single-group: group=%d (no GSN/META), allowing AddReqMsg\n", req.GroupId)
+		return false // ✅ FIX: Permite AddReqMsg adicionar ao bucket
 	}
 	
 	// ✅ Cross-group: Obtém GSN e publica META
