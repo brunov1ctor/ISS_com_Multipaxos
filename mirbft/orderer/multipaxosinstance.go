@@ -32,6 +32,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 	"google.golang.org/protobuf/proto"
@@ -520,6 +521,71 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		fmt.Printf("[MPX][INST] sn=%d onCommit unmarshal error: %v\n", i.sn, err)
 		return
 	}
+	
+	if i.bucketId == 0 && GetGlobalMulticastOrderer() != nil {
+		for _, req := range b.Requests {
+			payload := string(req.Payload)
+			
+			if strings.HasPrefix(payload, "SYSTEM:GSN_REQUEST:") {
+				var reqID uint64
+				var requester int32
+				n, _ := fmt.Sscanf(payload, "SYSTEM:GSN_REQUEST:%d:%d", &reqID, &requester)
+				if n < 2 {
+					continue
+				}
+				
+				gmo := GetGlobalMulticastOrderer()
+				gmo.gsnMu.Lock()
+				gsn := gmo.nextGSN
+				gmo.nextGSN++
+				gmo.persistNextGSN()
+				gmo.gsnMu.Unlock()
+				
+				if requester == membership.OwnID {
+					gmo.gsnReqMu.Lock()
+					if ch, exists := gmo.gsnRequestsPending[reqID]; exists {
+						ch <- gsn
+						delete(gmo.gsnRequestsPending, reqID)
+					}
+					gmo.gsnReqMu.Unlock()
+					fmt.Printf("[GSN-SERVER] GSN=%d for reqID=%d (local)\n", gsn, reqID)
+				} else {
+					resp := &pb.ProtocolMessage{
+						SenderId: membership.OwnID,
+						Sn:       -1,
+						Msg: &pb.ProtocolMessage_GsnReqForward{
+							GsnReqForward: &pb.GSNReqForward{
+								Req: &pb.ClientRequest{
+									Payload: []byte(fmt.Sprintf("SYSTEM:GSN_RESPONSE:%d:%d", reqID, gsn)),
+								},
+							},
+						},
+					}
+					messenger.EnqueueMsg(resp, requester)
+					fmt.Printf("[GSN-SERVER] GSN=%d for reqID=%d (remote node=%d)\n", gsn, reqID, requester)
+				}
+			}
+			
+			if strings.HasPrefix(payload, "SYSTEM:META_STREAM:") {
+				var gsn uint64
+				n, _ := fmt.Sscanf(payload, "SYSTEM:META_STREAM:%d", &gsn)
+				if n < 1 || len(req.TouchedGroups) == 0 {
+					continue
+				}
+				GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, req.TouchedGroups)
+				fmt.Printf("[META-SERVER] GSN=%d -> groups=%v\n", gsn, req.TouchedGroups)
+			}
+		}
+		
+		if i.announce != nil {
+			digestBytes := sha256.Sum256(innerBatch)
+			i.announce(i.sn, innerBatch, digestBytes[:])
+		}
+		i.closed = true
+		traceCommit(i.sn, len(b.Requests))
+		return
+	}
+	
 	if len(b.Requests) > 0 && len(b.Requests[0].TouchedGroups) > 0 {
 		// touchedGroups = b.Requests[0].TouchedGroups // Removed unused variable
 	}

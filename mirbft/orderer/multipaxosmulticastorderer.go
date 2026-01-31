@@ -243,11 +243,30 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 	}
 }
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
-	// ✅ FIX LOOP: Request via rede só adiciona ao bucket (não reprocessa)
+	// ✅ CORREÇÃO #2: Parser de SYSTEM:GSN_RESPONSE (fast-path)
 	if gsnForward := pm.GetGsnReqForward(); gsnForward != nil {
+		payload := string(gsnForward.Req.Payload)
+		
+		// ✅ Fast-path: Se é resposta de GSN, completa pending e retorna
+		if strings.HasPrefix(payload, "SYSTEM:GSN_RESPONSE:") {
+			var reqID uint64
+			var gsn uint64
+			n, _ := fmt.Sscanf(payload, "SYSTEM:GSN_RESPONSE:%d:%d", &reqID, &gsn)
+			if n == 2 {
+				o.gsnReqMu.Lock()
+				if ch, exists := o.gsnRequestsPending[reqID]; exists {
+					ch <- gsn
+					delete(o.gsnRequestsPending, reqID)
+					fmt.Printf("[GSN-CLIENT] Received GSN=%d for reqID=%d (via GsnReqForward)\n", gsn, reqID)
+				}
+				o.gsnReqMu.Unlock()
+				return // ✅ Não adiciona ao bucket
+			}
+		}
+		
+		// ✅ Request normal: adiciona ao bucket
 		fmt.Printf("[MULTICAST] Received ClientRequest via network: clientId=%d groupId=%d\n", 
 			gsnForward.Req.RequestId.ClientId, gsnForward.Req.GroupId)
-		// ✅ Adiciona ao bucket SEM chamar PreprocessRequest de novo
 		request.AddReqMsg(gsnForward.Req)
 		return
 	}
@@ -358,7 +377,7 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 			ClientId: membership.OwnID,
 			ClientSn: int32(clientSn),
 		},
-		Payload:       []byte(fmt.Sprintf("%s%d", SYSTEM_GSN_REQUEST, reqID)),
+		Payload:       []byte(fmt.Sprintf("%s%d:%d", SYSTEM_GSN_REQUEST, reqID, membership.OwnID)),
 		GroupId:       0,
 		TouchedGroups: []uint32{0},
 	}
