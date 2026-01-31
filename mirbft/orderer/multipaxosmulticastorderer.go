@@ -1069,20 +1069,12 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ CORREÇÃO: Single-group também usa sendToGroup() para encaminhamento correto
-	// Proxy encaminha para membros do grupo mesmo quando não é membro
+	// ✅ Single-group: Marca como preprocessado e deixa AddReqMsg processar
 	if len(req.TouchedGroups) == 1 {
-		// Seta GroupId para o único grupo tocado
 		req.GroupId = req.TouchedGroups[0]
-		req.GSN = 0 // Single-group não precisa GSN
-		fmt.Printf("[PREPROCESS] Single-group: group=%d (no GSN/META), forwarding via sendToGroup\n", req.GroupId)
-		
-		// ✅ FIX: Usa sendToGroup() para encaminhar corretamente
-		// Se proxy é membro: adiciona localmente
-		// Se proxy NÃO é membro: encaminha via rede para membros
-		o.sendToGroup(req, req.GroupId)
-		
-		return true // Já enviou (não precisa AddReqMsg de novo)
+		req.GSN = 1 // Marca como preprocessado
+		fmt.Printf("[PREPROCESS] Single-group: group=%d (no GSN/META needed)\n", req.GroupId)
+		return false // Deixa AddReqMsg processar normalmente
 	}
 	
 	// ✅ Cross-group: Obtém GSN e publica META
