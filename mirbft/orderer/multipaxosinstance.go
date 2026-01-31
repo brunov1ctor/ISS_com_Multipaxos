@@ -603,7 +603,6 @@ func (i *mpxInstance) ProposeIfDue() {
 		}
 		
 		var selectedReq *request.Request
-		var selectedBucket int32 = -1
 		
 		// ✅ Itera por todos os buckets do grupo (round-robin)
 		for k := int32(0); k < numBuckets; k++ {
@@ -623,14 +622,12 @@ func (i *mpxInstance) ProposeIfDue() {
 				if systemReq != nil {
 					selectedReq = systemReq
 					request.Buckets[b].RemoveNoLock(selectedReq)
-					selectedBucket = b
 					request.Buckets[b].Unlock()
 					break
 				}
 				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
 				if selectedReq != nil {
 					request.Buckets[b].RemoveNoLock(selectedReq)
-					selectedBucket = b
 					request.Buckets[b].Unlock()
 					break
 				}
@@ -640,7 +637,6 @@ func (i *mpxInstance) ProposeIfDue() {
 				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
 				if selectedReq != nil {
 					request.Buckets[b].RemoveNoLock(selectedReq)
-					selectedBucket = b
 					request.Buckets[b].Unlock()
 					break
 				}
