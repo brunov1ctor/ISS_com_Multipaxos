@@ -1,0 +1,18 @@
+# Client Workload Configuration
+# Defines operation types and their distribution
+
+workload:
+  # Single-group operations 
+  - type: GET
+    weight: 80
+    pattern: "K{seqNr:08d}"
+  
+  # Multi-group operations - offset +1000 evita colisões de hash
+  - type: TX
+    weight: 20
+    pattern: "K{seqNr:08d},K{seqNr+1000:08d}"
+  
+  # Optional: Range queries (disabled by default)
+  # - type: RANGE
+  #   weight: 0
+  #   pattern: "RANGE K{seqNr:08d} K{seqNr+10000:08d}"

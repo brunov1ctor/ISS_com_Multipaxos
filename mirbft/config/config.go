@@ -115,7 +115,24 @@ type configuration struct {
 
 	// Proxy configuration for cross-op GSN assignment
 	CrossOpProxyNodeID int32 `yaml:"CrossOpProxyNodeID"` // Node ID that acts as proxy for cross-op GSN assignment. Set to -1 to disable (all nodes assign GSN).
+
+	// Workload configuration
+	WorkloadFile string `yaml:"WorkloadFile"` // Path to workload.yml file
 }
+
+type WorkloadOp struct {
+	Type    string `yaml:"type"`
+	Weight  int    `yaml:"weight"`
+	Pattern string `yaml:"pattern"`
+}
+
+type WorkloadConfig struct {
+	Workload []WorkloadOp `yaml:"workload"`
+}
+
+var Workload WorkloadConfig
+var workloadWeights []int
+var workloadTotalWeight int
 
 func LoadFile(configFileName string) {
 	f, err := ioutil.ReadFile(configFileName)
@@ -181,6 +198,7 @@ func LoadFile(configFileName string) {
 	logger.Debug().Int("RequestInputChannelBuffer", Config.RequestInputChannelBuffer).Msg("Config")
 	logger.Debug().Str("BatchVerifier", Config.BatchVerifier).Msg("Config")
 	logger.Debug().Int32("CrossOpProxyNodeID", Config.CrossOpProxyNodeID).Msg("Config")
+	logger.Debug().Str("WorkloadFile", Config.WorkloadFile).Msg("Config")
 
 	Config.LoggingLevel = setLoggingLevel(Config.LoggingLevelStr)
 
@@ -204,5 +222,40 @@ func setLoggingLevel(level string) zerolog.Level {
 		logger.Fatal().Msg("Unsupported logging level")
 	}
 	return zerolog.NoLevel
+}
+
+func LoadWorkload(workloadFile string) {
+	f, err := ioutil.ReadFile(workloadFile)
+	if err != nil {
+		logger.Fatal().Err(err).Str("workloadFile", workloadFile).Msg("Could not read workload file.")
+	}
+
+	err = yaml.Unmarshal(f, &Workload)
+	if err != nil {
+		logger.Fatal().Err(err).Str("workloadFile", workloadFile).Msg("Could not unmarshal workload file.")
+	}
+
+	// Build cumulative weights for selection
+	workloadWeights = make([]int, len(Workload.Workload))
+	workloadTotalWeight = 0
+	for i, op := range Workload.Workload {
+		workloadTotalWeight += op.Weight
+		workloadWeights[i] = workloadTotalWeight
+		logger.Info().Str("type", op.Type).Int("weight", op.Weight).Str("pattern", op.Pattern).Msg("Loaded workload operation")
+	}
+}
+
+func SelectWorkloadOp(seqNr int32) *WorkloadOp {
+	if len(Workload.Workload) == 0 {
+		return nil
+	}
+	// Deterministic selection based on seqNr modulo total weight
+	selection := int(seqNr) % workloadTotalWeight
+	for i, cumWeight := range workloadWeights {
+		if selection < cumWeight {
+			return &Workload.Workload[i]
+		}
+	}
+	return &Workload.Workload[0]
 }
 
