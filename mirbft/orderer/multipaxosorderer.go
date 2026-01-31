@@ -107,11 +107,14 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.maxBatchSize = int(config.Config.BatchSize)
 	o.proposeEvery = config.Config.BatchTimeout
 	if o.am == nil {
-		o.am = NewAtomicMulticast()
-		if o.ownedGroupID == 0 {
-			o.ownedGroupID = 0
+		// ✅ FIX: Usa AtomicMulticast global compartilhado
+		if GetGlobalMulticastOrderer() != nil {
+			o.am = GetGlobalMulticastOrderer().am
+			fmt.Printf("[MPX] Init: using shared AtomicMulticast from global orderer (groups=%v, ownedGroupID=%d)\n", o.am.GetDefinedGroups(), o.ownedGroupID)
+		} else {
+			o.am = NewAtomicMulticast()
+			fmt.Printf("[MPX] Init: created new AtomicMulticast (ownedGroupID=%d)\n", o.ownedGroupID)
 		}
-		fmt.Printf("[MPX] Init: created new AtomicMulticast (ownedGroupID=%d)\n", o.ownedGroupID)
 	} else {
 		fmt.Printf("[MPX] Init: reusing injected AtomicMulticast (groups=%v, ownedGroupID=%d)\n", o.am.GetDefinedGroups(), o.ownedGroupID)
 	}
@@ -196,6 +199,9 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			groupId := b.Requests[0].GetGroupId()
 			// Responde apenas se for membro do grupo (incluindo grupo 0)
 			shouldRespond = o.am.IsMember(groupId, membership.OwnID)
+			fmt.Printf("[MPX][ANNOUNCE] sn=%d groupId=%d ownID=%d shouldRespond=%v\n", sn, groupId, membership.OwnID, shouldRespond)
+		} else {
+			fmt.Printf("[MPX][ANNOUNCE] sn=%d NO REQUESTS or NO AM, shouldRespond=%v\n", sn, shouldRespond)
 		}
 		entry := &mirlog.Entry{
 			Sn:             sn,
