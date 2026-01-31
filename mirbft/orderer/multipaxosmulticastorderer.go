@@ -1015,6 +1015,20 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return false
 	}
 	
+	// ✅ FILTRO GERAL: Bloqueia TODAS mensagens SYSTEM:* de virarem carga de aplicação
+	// Apenas GSN_REQUEST e META_STREAM devem entrar no consenso (grupo 0)
+	if strings.HasPrefix(string(req.Payload), "SYSTEM:") {
+		// Permite apenas mensagens sistêmicas conhecidas para grupo 0
+		if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || 
+		   strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
+			fmt.Printf("[PREPROCESS] System request for group 0, allowing\n")
+			return false // Deixa sistema processar normalmente
+		}
+		// Bloqueia outras mensagens SYSTEM:* (ex: SYSTEM:GSN_RESPONSE já tratada no HandleMessage)
+		fmt.Printf("[PREPROCESS] Blocking unknown SYSTEM:* message (not for consensus)\n")
+		return true // Bloqueia
+	}
+	
 	// ✅ Mapeia requisição para grupos usando ReplicaMapper
 	fmt.Printf("[PREPROCESS] Calling ReplicaMapper...\n")
 	req.TouchedGroups = request.ReplicaMapper(req.Payload)
@@ -1036,12 +1050,6 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	if len(req.TouchedGroups) == 0 {
 		fmt.Printf("[PREPROCESS][ERROR] No valid data groups, rejecting request\n")
 		return true // Bloqueia requisição inválida
-	}
-	
-	// ✅ VALIDAÇÃO: Requisições sistêmicas não devem chamar GetNextGSN recursivamente
-	if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
-		fmt.Printf("[PREPROCESS] System request detected, skipping preprocessing\n")
-		return false // Deixa sistema processar normalmente
 	}
 	
 	// ✅ CORREÇÃO: Single-group NÃO usa GSN (baseline do artigo)

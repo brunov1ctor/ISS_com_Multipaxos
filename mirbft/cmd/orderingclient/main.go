@@ -19,10 +19,6 @@ var (
 
 	// Used to initialize membership only once.
 	membershipInitializer sync.Once
-
-	// Random byte array used as request payload.
-	// Only generated once and used by all the clients in this process for all requests.
-	randomRequestPayload []byte
 )
 
 // CRASH MODEL (CSMR): Aceita primeira resposta (não BFT)
@@ -79,10 +75,6 @@ func main() {
 	// Get number of clients and number of requests / client.
 	numClients := config.Config.ClientsPerProcess
 	numRequests := config.Config.RequestsPerClient
-
-	// Generate random request payload
-	randomRequestPayload = make([]byte, config.Config.RequestPayloadSize)
-	rand.Read(randomRequestPayload)
 
 	logger.Info().
 		Int("numClients", numClients).
