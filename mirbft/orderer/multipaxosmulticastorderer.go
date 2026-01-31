@@ -264,10 +264,11 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			}
 		}
 		
-		// ✅ Request normal: adiciona ao bucket
-		fmt.Printf("[MULTICAST] Received ClientRequest via network: clientId=%d groupId=%d\n", 
-			gsnForward.Req.RequestId.ClientId, gsnForward.Req.GroupId)
-		request.AddReqMsg(gsnForward.Req)
+		// Forwarded request: NÃO adicionar ao bucket (já foi adicionado no proxy)
+		// Apenas marca como recebida para liveness
+		if gsnForward.Req.GSN > 0 && gsnForward.Req.GroupId > 0 {
+			o.MarkRequestReceived(gsnForward.Req.GSN, gsnForward.Req.GroupId)
+		}
 		return
 	}
 	
