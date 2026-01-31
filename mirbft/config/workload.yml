@@ -6,8 +6,8 @@
 #   {seqNr+N:08d}     - Sequence number + offset N
 #
 # Examples:
-#   seqNr=5:  "K{seqNr:08d}"                    -> "K00000005"
-#   seqNr=5:  "K{seqNr:08d},K{seqNr+1000:08d}" -> "K00000005,K00001005"
+#   seqNr=5:  "GET K{seqNr:08d}"                    -> "GET K00000005"
+#   seqNr=5:  "TX K{seqNr:08d},K{seqNr+1000:08d}"  -> "TX K00000005,K00001005"
 #
 # Group mapping:
 #   Single key (GET)     -> single-group operation
@@ -15,11 +15,9 @@
 
 workload:
   # Single-group operations (80%)
-  - type: GET
-    weight: 80
-    pattern: "K{seqNr:08d}"
+  - weight: 80
+    pattern: "GET K{seqNr:08d}"
   
-  # Multi-group operations (20%) - offset +1000 evita colisões de hash
-  - type: TX
-    weight: 20
-    pattern: "K{seqNr:08d},K{seqNr+1000:08d}"
+  # Multi-group operations (20%) - offset +1000 avoids hash collisions
+  - weight: 20
+    pattern: "TX K{seqNr:08d},K{seqNr+1000:08d}"

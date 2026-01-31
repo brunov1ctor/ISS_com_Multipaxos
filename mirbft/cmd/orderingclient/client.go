@@ -241,7 +241,7 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	if op != nil {
 		// Use workload pattern
 		basePayload = expandPattern(op.Pattern, seqNr)
-		c.log.Debug().Int32("seqNr", seqNr).Str("opType", op.Type).Str("payload", basePayload).Msg("Using workload operation")
+		c.log.Debug().Int32("seqNr", seqNr).Str("payload", basePayload).Msg("Using workload operation")
 	} else {
 		// Fallback: simple GET
 		key := fmt.Sprintf("K%08d", seqNr)
