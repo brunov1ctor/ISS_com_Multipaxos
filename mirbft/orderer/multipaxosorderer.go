@@ -192,11 +192,10 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			digest = crypto.Hash(batchBytes)
 		}
 		shouldRespond := true
-		if len(b.Requests) > 0 {
+		if len(b.Requests) > 0 && o.am != nil {
 			groupId := b.Requests[0].GetGroupId()
-			if groupId != 0 && o.am != nil {
-				shouldRespond = o.am.IsMember(groupId, membership.OwnID)
-			}
+			// Responde apenas se for membro do grupo (incluindo grupo 0)
+			shouldRespond = o.am.IsMember(groupId, membership.OwnID)
 		}
 		entry := &mirlog.Entry{
 			Sn:             sn,
