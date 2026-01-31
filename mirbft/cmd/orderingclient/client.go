@@ -241,10 +241,12 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	if op != nil {
 		// Use workload pattern
 		basePayload = expandPattern(op.Pattern, seqNr)
+		c.log.Debug().Int32("seqNr", seqNr).Str("opType", op.Type).Str("payload", basePayload).Msg("Using workload operation")
 	} else {
 		// Fallback: simple GET
 		key := fmt.Sprintf("K%08d", seqNr)
 		basePayload = "GET " + key
+		c.log.Warn().Int32("seqNr", seqNr).Msg("Workload not loaded, using fallback GET")
 	}
 	
 	// Add padding to reach configured payload size
@@ -264,6 +266,8 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		GroupId:       0,
 		TouchedGroups: request.ReplicaMapper(payload),
 	}
+	
+	c.log.Debug().Int32("seqNr", seqNr).Interface("touchedGroups", req.TouchedGroups).Str("payload", string(payload[:len(basePayload)])).Msg("Created request")
 
 	var err error
 	if config.Config.SignRequests {
@@ -773,12 +777,13 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 	
 	// PROXY MODE: Cross-ops sempre vão para o proxy configurado
 	if config.Config.CrossOpProxyNodeID >= 0 && len(req.TouchedGroups) > 1 {
+		c.log.Info().Int32("clSn", req.RequestId.ClientSn).Interface("groups", req.TouchedGroups).Int32("proxy", config.Config.CrossOpProxyNodeID).Msg("Cross-op request, sending to proxy")
 		return []int32{config.Config.CrossOpProxyNodeID}
 	}
 	
 	// Calculate bucket using same hash as server: (clientId + clientSn) % maxBucketID+1
 	b := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(c.maxBucketID+1))
-	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int("bucket", b).Int("maxBucket", c.maxBucketID).Msg("Calculated bucket")
+	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int("bucket", b).Int("maxBucket", c.maxBucketID).Interface("groups", req.TouchedGroups).Msg("Calculated bucket")
 	
 	owner, ok := c.currentBucketAssignment[b]
 	if !ok {
