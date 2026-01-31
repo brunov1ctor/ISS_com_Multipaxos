@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -232,11 +234,20 @@ func (c *client) discoverPeers(dServAddr string) {
 }
 
 func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
-	// Generate unique key for each request (K00000001, K00000002, ...)
-	key := fmt.Sprintf("K%08d", seqNr)
+	// Select operation from workload
+	op := config.SelectWorkloadOp(seqNr)
+	var basePayload string
 	
-	// Add padding to reach configured payload size (realistic benchmark)
-	basePayload := "GET " + key
+	if op != nil {
+		// Use workload pattern
+		basePayload = expandPattern(op.Pattern, seqNr)
+	} else {
+		// Fallback: simple GET
+		key := fmt.Sprintf("K%08d", seqNr)
+		basePayload = "GET " + key
+	}
+	
+	// Add padding to reach configured payload size
 	paddingSize := config.Config.RequestPayloadSize - len(basePayload)
 	if paddingSize < 0 {
 		paddingSize = 0
@@ -251,7 +262,7 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		Payload:       payload,
 		Signature:     nil,
 		GroupId:       0,
-		TouchedGroups: nil, // Let proxy assign groups
+		TouchedGroups: nil, // ReplicaMapper determines groups from payload
 	}
 
 	var err error
@@ -263,6 +274,23 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	}
 
 	return req
+}
+
+// expandPattern expands workload pattern with seqNr
+// Example: "TX K{seqNr:08d},K{seqNr+5000:08d}" -> "TX K00000001,K00005001"
+func expandPattern(pattern string, seqNr int32) string {
+	result := pattern
+	// Replace {seqNr:08d}
+	result = strings.ReplaceAll(result, "{seqNr:08d}", fmt.Sprintf("%08d", seqNr))
+	// Replace {seqNr+N:08d} using regex
+	re := regexp.MustCompile(`\{seqNr\+(\d+):08d\}`)
+	result = re.ReplaceAllStringFunc(result, func(match string) string {
+		// Extract offset from match
+		offsetStr := re.FindStringSubmatch(match)[1]
+		offset, _ := strconv.Atoi(offsetStr)
+		return fmt.Sprintf("%08d", seqNr+int32(offset))
+	})
+	return result
 }
 
 // Runs the main client logic that
