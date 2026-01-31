@@ -121,7 +121,6 @@ type configuration struct {
 }
 
 type WorkloadOp struct {
-	Type    string `yaml:"type"`
 	Weight  int    `yaml:"weight"`
 	Pattern string `yaml:"pattern"`
 }
@@ -241,7 +240,7 @@ func LoadWorkload(workloadFile string) {
 	for i, op := range Workload.Workload {
 		workloadTotalWeight += op.Weight
 		workloadWeights[i] = workloadTotalWeight
-		logger.Info().Str("type", op.Type).Int("weight", op.Weight).Str("pattern", op.Pattern).Msg("Loaded workload operation")
+		logger.Info().Int("weight", op.Weight).Str("pattern", op.Pattern).Msg("Loaded workload operation")
 	}
 }
 
