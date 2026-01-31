@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,13 +112,21 @@ func (c *LocalClient) submitRequest(seqNr int32) {
 
 	c.finished[seqNr] = false
 
-	// Create request message.
+	// Create request message with same format as regular client
+	key := fmt.Sprintf("K%08d", seqNr)
+	basePayload := "GET " + key
+	paddingSize := config.Config.RequestPayloadSize - len(basePayload)
+	if paddingSize < 0 {
+		paddingSize = 0
+	}
+	payload := []byte(basePayload + " " + strings.Repeat("X", paddingSize))
+
 	req := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:   randomRequestPayload,
+		Payload:   payload,
 		Signature: nil,
 	}
 
