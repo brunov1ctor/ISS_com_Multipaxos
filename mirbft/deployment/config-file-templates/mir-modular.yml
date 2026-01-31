@@ -122,3 +122,7 @@ BatchVerifier: BATCHVERIFIER # Determines how the requests in a batch are verifi
                              #                  A separate set of verifier threads (RequestHandlerThreads of them)
                              #                  verifies the requests. Communication is through buffered channels.
 
+# Workload configuration
+WorkloadFile: "config/workload.yml" # Path to workload configuration file defining operation types and patterns
+CrossOpProxyNodeID: -1 # Node ID to use as proxy for cross-group operations. Set to -1 for no fixed proxy.
+
