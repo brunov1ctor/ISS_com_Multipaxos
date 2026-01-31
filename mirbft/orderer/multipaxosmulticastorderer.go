@@ -1026,9 +1026,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v payload=%s\n", 
 		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
-	// ✅ Se já tem GSN, foi preprocessado (forwarded de outro nó ou clone interno)
-	if req.GSN > 0 {
-		fmt.Printf("[PREPROCESS] Already has GSN=%d (forwarded), skipping\n", req.GSN)
+	// ✅ Se já tem GSN E GroupId, foi preprocessado (forwarded ou cross-group)
+	if req.GSN > 0 && req.GroupId > 0 {
+		fmt.Printf("[PREPROCESS] Already has GSN=%d GroupId=%d (forwarded), skipping\n", req.GSN, req.GroupId)
 		return false
 	}
 	
@@ -1069,10 +1069,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ Single-group: Marca como preprocessado e deixa AddReqMsg processar
+	// ✅ Single-group: Seta GroupId e deixa AddReqMsg processar
 	if len(req.TouchedGroups) == 1 {
 		req.GroupId = req.TouchedGroups[0]
-		req.GSN = 1 // Marca como preprocessado
 		fmt.Printf("[PREPROCESS] Single-group: group=%d (no GSN/META needed)\n", req.GroupId)
 		return false // Deixa AddReqMsg processar normalmente
 	}
