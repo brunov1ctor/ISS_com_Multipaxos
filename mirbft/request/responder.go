@@ -65,7 +65,8 @@ type Responder struct {
 func NewResponder() *Responder {
 	printVersionBanner()
 	return &Responder{
-		entriesChan:  log.Entries(),
+		// ✅ FIX: Usa EntriesOutOfOrder() para suportar SN intercalado
+		entriesChan:  log.EntriesOutOfOrder(),
 	}
 }
 
