@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -231,13 +232,23 @@ func (c *client) discoverPeers(dServAddr string) {
 }
 
 func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
+	// Generate unique key for each request (K00000001, K00000002, ...)
+	key := fmt.Sprintf("K%08d", seqNr)
+	
+	// Add padding to reach configured payload size (realistic benchmark)
+	basePayload := "GET " + key
+	paddingSize := config.Config.RequestPayloadSize - len(basePayload)
+	if paddingSize < 0 {
+		paddingSize = 0
+	}
+	payload := []byte(basePayload + " " + strings.Repeat("X", paddingSize))
 
 	req := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:       randomRequestPayload,
+		Payload:       payload,
 		Signature:     nil,
 		GroupId:       0,
 		TouchedGroups: nil, // Let proxy assign groups

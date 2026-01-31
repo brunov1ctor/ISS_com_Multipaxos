@@ -17,6 +17,7 @@ package request
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"sort"
 	"strings"
 	"sync"
@@ -293,18 +294,17 @@ func keyToGroup(key string) uint32 {
 	if len(key) == 0 {
 		return 1
 	}
-	c := key[0]
-	if c >= 'a' && c <= 'z' {
-		c -= 32
+	// Hash-based uniform distribution
+	h := crc32.ChecksumIEEE([]byte(key))
+	
+	// Get number of data groups dynamically (excludes group 0 sequencer)
+	numGroups := GetNumGroups()
+	numDataGroups := uint32(numGroups - 1) // Exclude group 0
+	if numDataGroups < 1 {
+		numDataGroups = 1
 	}
-	if c >= 'A' && c <= 'F' {
-		return 1
-	} else if c >= 'G' && c <= 'M' {
-		return 2
-	} else if c >= 'N' && c <= 'T' {
-		return 3
-	}
-	return 4
+	
+	return 1 + (h % numDataGroups) // Returns 1..numDataGroups
 }
 
 func rangeToGroups(start, end string) []uint32 {
@@ -339,8 +339,25 @@ func GetGroupMembersGetter() func(uint32) []int32 {
 	return groupMembersGetter
 }
 
+// isControlMessage verifica se é mensagem de controle que não deve virar carga
+func isControlMessage(payload []byte) bool {
+	payloadStr := string(payload)
+	if !strings.HasPrefix(payloadStr, "SYSTEM:") {
+		return false
+	}
+	// Mensagens de controle (não entram em bucket)
+	return strings.HasPrefix(payloadStr, "SYSTEM:GSN_RESPONSE") ||
+		strings.HasPrefix(payloadStr, "SYSTEM:ACK") ||
+		strings.HasPrefix(payloadStr, "SYSTEM:NACK")
+}
+
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
+	// Fast-path: mensagens de controle não entram em bucket
+	if isControlMessage(reqMsg.Payload) {
+		return nil
+	}
+	
 	// ✅ CORREÇÃO: GroupId já deve estar setado ANTES de calcular bucket
 	// Bucket é calculado A PARTIR do GroupId (não o contrário)
 	// GetBucketNr() usa req.GetGroupId() internamente
