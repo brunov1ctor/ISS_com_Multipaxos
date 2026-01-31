@@ -262,7 +262,7 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		Payload:       payload,
 		Signature:     nil,
 		GroupId:       0,
-		TouchedGroups: nil, // ReplicaMapper determines groups from payload
+		TouchedGroups: request.ReplicaMapper(payload),
 	}
 
 	var err error
