@@ -369,16 +369,17 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 	isLeader := (membership.OwnID == members[0])
 	fmt.Printf("[MPX][LOCAL-SN] Group %d: ownID=%d leader=%d isLeader=%v\n", groupId, membership.OwnID, members[0], isLeader)
 	
-	if !isLeader {
-		fmt.Printf("[MPX][LOCAL-SN] Group %d: Not leader, exiting ticker\n", groupId)
-		return
-	}
-	
-	fmt.Printf("[MPX][LOCAL-SN] Group %d: Starting ticker loop (interval=%v)\n", groupId, o.proposeEvery)
+	fmt.Printf("[MPX][LOCAL-SN] Group %d: Starting ticker loop (interval=%v, isLeader=%v)\n", groupId, o.proposeEvery, isLeader)
 	
 	for {
 		select {
 		case <-ticker.C:
+			// Não-líderes apenas processam mensagens via HandleMessage
+			// Líderes propõem novos valores
+			if !isLeader {
+				continue // Pula proposta, mas mantém loop vivo
+			}
+			
 			// ✅ Mapeia SN local → global: globalSN = localSN * numGroups + groupID
 			globalSN := localSN*numGroups + int32(groupId)
 			
@@ -555,6 +556,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					}
 					inst.tick(now)
 					inst.ProposeIfDue()
+					fmt.Printf("[PROPOSE] Group %d: sn=%d tick+propose executed\n", gid, currentSN)
 				}
 			}
 		}(groupId, bucketIdx)

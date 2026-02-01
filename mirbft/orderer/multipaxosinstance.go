@@ -838,7 +838,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accept},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[MPX][INST] sn=%d sending ACCEPT groupId=%d reqs=%d\n", i.sn, i.bucketId, reqs)
+		fmt.Printf("[✓ PROPOSE] Group %d: sn=%d ACCEPT sent with %d requests\n", i.bucketId, i.sn, reqs)
 		i.parent.emit(pm)
 	}
 	i.phase = phaseAcceptSent
