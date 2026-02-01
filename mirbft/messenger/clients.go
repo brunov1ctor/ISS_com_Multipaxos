@@ -30,6 +30,19 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
+// ValidateClientRequest - Validação centralizada de requests (alinhado com artigo)
+// Toda operação DEVE ter identidade para dedup/at-least-once e correlação de respostas
+func ValidateClientRequest(req *pb.ClientRequest) error {
+	if req == nil {
+		return fmt.Errorf("nil request")
+	}
+	if req.GetRequestId() == nil {
+		return fmt.Errorf("missing RequestId (identity required for dedup/correlation)")
+	}
+	// Payload vazio pode ser válido para alguns tipos de operação
+	return nil
+}
+
 var (
 	clientConnections sync.Map
 
@@ -58,7 +71,16 @@ func InitRequestWorkerPool() {
 		go func(workerID int) {
 			fmt.Printf("[WORKER][%d] Started, handler=%v\n", workerID, ClientRequestHandler != nil)
 			for req := range incomingReqCh {
-				fmt.Printf("[WORKER][%d] Processing req clId=%d clSn=%d, handler=%v\n", workerID, req.RequestId.ClientId, req.RequestId.ClientSn, ClientRequestHandler != nil)
+				// ✅ Validação usando GetRequestId() (safe mesmo se nil)
+				if err := ValidateClientRequest(req); err != nil {
+					logger.Error().Int("workerID", workerID).Err(err).Msg("Dropping malformed request")
+					fmt.Printf("[WORKER][%d] Dropping malformed req: %v\n", workerID, err)
+					continue
+				}
+				// Safe: já validado que RequestId existe
+				rid := req.GetRequestId()
+				fmt.Printf("[WORKER][%d] Processing req clId=%d clSn=%d, handler=%v\n", 
+					workerID, rid.GetClientId(), rid.GetClientSn(), ClientRequestHandler != nil)
 				if ClientRequestHandler != nil {
 					ClientRequestHandler(req)
 				} else {
@@ -113,10 +135,19 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 	reqCount := 0
 	for req, err = srv.Recv(); err == nil; req, err = srv.Recv() {
 		reqCount++
-		fmt.Printf("[MESSENGER][RECV] Received request #%d from client %d sn %d\n", reqCount, req.RequestId.ClientId, req.RequestId.ClientSn)
+		// ✅ Validação no ingress (entrada do sistema)
+		if err := ValidateClientRequest(req); err != nil {
+			logger.Error().Int("reqCount", reqCount).Err(err).Msg("Rejecting malformed request at ingress")
+			fmt.Printf("[MESSENGER][INGRESS] Rejecting request #%d: %v\n", reqCount, err)
+			continue
+		}
+		// Safe: já validado
+		rid := req.GetRequestId()
+		fmt.Printf("[MESSENGER][RECV] Received request #%d from client %d sn %d\n", 
+			reqCount, rid.GetClientId(), rid.GetClientSn())
 		logger.Trace().
-			Int32("clId", req.RequestId.ClientId).
-			Int32("clSn", req.RequestId.ClientSn).
+			Int32("clId", rid.GetClientId()).
+			Int32("clSn", rid.GetClientSn()).
 			Msg("Received request.")
 		if ClientRequestHandler == nil {
 			fmt.Printf("[MESSENGER][ERROR] ClientRequestHandler is nil!\n")
@@ -127,8 +158,9 @@ func (ms *messengerServer) Request(srv pb.Messenger_RequestServer) error {
 				// Enfileirado com sucesso
 			default:
 				// Fila cheia - drop com log
-				fmt.Printf("[MESSENGER][DROP] Queue full, dropping request clId=%d clSn=%d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
-				logger.Warn().Int32("clId", req.RequestId.ClientId).Int32("clSn", req.RequestId.ClientSn).Msg("Request queue full, dropping")
+				fmt.Printf("[MESSENGER][DROP] Queue full, dropping request clId=%d clSn=%d\n", 
+					rid.GetClientId(), rid.GetClientSn())
+				logger.Warn().Int32("clId", rid.GetClientId()).Int32("clSn", rid.GetClientSn()).Msg("Request queue full, dropping")
 			}
 		}
 	}
@@ -205,10 +237,16 @@ func (ms *messengerServer) performClientHandshake(srv pb.Messenger_RequestServer
 		logger.Error().Msg("Error receiving first (dummy) client request.")
 		return err
 	}
-	fmt.Printf("[MESSENGER][HANDSHAKE] Received dummy request: clientId=%d clientSn=%d\n", req.RequestId.ClientId, req.RequestId.ClientSn)
+	// Safe: usa GetRequestId() para evitar panic
+	rid := req.GetRequestId()
+	if rid == nil {
+		logger.Error().Msg("Handshake failed: dummy request has nil RequestId")
+		return fmt.Errorf("handshake failed: nil RequestId")
+	}
+	fmt.Printf("[MESSENGER][HANDSHAKE] Received dummy request: clientId=%d clientSn=%d\n", rid.GetClientId(), rid.GetClientSn())
 
 	// Save the connection to the client.
-	registerClientConnection(srv, req.RequestId.ClientId)
+	registerClientConnection(srv, rid.GetClientId())
 
 	// Send a dummy response to the client.
 	// This is not an actual response, and only serves as an acknowledgment to the client that the connection has

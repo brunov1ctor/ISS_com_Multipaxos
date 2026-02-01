@@ -39,15 +39,22 @@ func handlerThreadIndex(clientID int32, clientSn int32, threads int) int {
 // ForwardRequestToNodes envia request para nós específicos (usado para cross-op)
 // ✅ CORREÇÃO: Usa conexões gRPC existentes (mesma infraestrutura do client)
 func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
+	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil
+	rid := req.GetRequestId()
+	if rid == nil {
+		fmt.Printf("[FORWARD][ERROR] Request with nil RequestId, dropping\n")
+		return
+	}
+	
 	fmt.Printf("[FORWARD] Sending request clientId=%d clientSn=%d to nodes %v\n", 
-		req.RequestId.ClientId, req.RequestId.ClientSn, nodeIDs)
+		rid.GetClientId(), rid.GetClientSn(), nodeIDs)
 	
 	for _, nodeID := range nodeIDs {
 		if nodeID == membership.OwnID {
 			// Local: adiciona ao bucket
 			fmt.Printf("[FORWARD] Local node %d: adding to bucket\n", nodeID)
 			if config.Config.RequestHandlerThreads > 0 {
-				idx := handlerThreadIndex(req.RequestId.ClientId, req.RequestId.ClientSn, config.Config.RequestHandlerThreads)
+				idx := handlerThreadIndex(rid.GetClientId(), rid.GetClientSn(), config.Config.RequestHandlerThreads)
 				requestInputChannels[idx] <- req
 			} else {
 				AddReqMsg(req)
@@ -72,14 +79,21 @@ func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
 // HandleRequest processa request do cliente
 // Orderers específicos podem injetar lógica customizada via callbacks
 func HandleRequest(req *pb.ClientRequest) {
+	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil
+	rid := req.GetRequestId()
+	if rid == nil {
+		fmt.Printf("[HANDLE-REQ][ERROR] Request with nil RequestId, dropping\n")
+		return
+	}
+	
 	payloadPreview := req.Payload
 	if len(payloadPreview) > 50 {
 		payloadPreview = payloadPreview[:50]
 	}
 	fmt.Printf("[HANDLE-REQ][ENTRY] clientId=%d clientSn=%d groupId=%d payload=%s\n", 
-		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, string(payloadPreview))
+		rid.GetClientId(), rid.GetClientSn(), req.GroupId, string(payloadPreview))
 	
-	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(req.RequestId.ClientId), int64(req.RequestId.ClientSn))
+	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(rid.GetClientId()), int64(rid.GetClientSn()))
 	
 	// Preprocessor customizado (ex: atomic multicast)
 	if requestPreprocessor != nil {

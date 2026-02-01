@@ -991,8 +991,15 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	if len(payloadPreview) > 50 {
 		payloadPreview = payloadPreview[:50]
 	}
+	// Safe: usa GetRequestId() para evitar panic
+	rid := req.GetRequestId()
+	if rid == nil {
+		fmt.Printf("[PREPROCESS] Called with nil RequestId, groupId=%d touchedGroups=%v payload=%s\n", 
+			req.GroupId, req.TouchedGroups, string(payloadPreview))
+		return true // Bloqueia request malformada
+	}
 	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v payload=%s\n", 
-		req.RequestId.ClientId, req.RequestId.ClientSn, req.GroupId, req.TouchedGroups, string(payloadPreview))
+		rid.GetClientId(), rid.GetClientSn(), req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
 	// ✅ Se já tem GSN E GroupId, foi preprocessado (forwarded ou cross-group)
 	if req.GSN > 0 && req.GroupId > 0 {
