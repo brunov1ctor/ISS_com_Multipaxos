@@ -425,7 +425,7 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 			inst.tick(time.Now())
 			inst.ProposeIfDue()
 			
-			// ✅ FIX: Avança para próximo SN se instância já commitou
+			// Avança para próximo SN se instância já commitou
 			if inst.isClosed() {
 				localSN++
 				fmt.Printf("[MPX][LOCAL-SN] Group %d: instance closed, advancing to localSN=%d\n", groupId, localSN)
