@@ -202,8 +202,7 @@ func (o *MultiPaxosMulticastOrderer) setupHandlers() {
 	request.SetRequestReceivedMarker(o.MarkRequestReceived)
 	request.SetRequestCacher(o.CacheRequest)
 	request.SetRequestPreprocessor(o.PreprocessRequest)
-	request.SetNumGroupsGetter(o.GetNumGroups) // ✅ Injeta getter de numGroups
-	request.SetLeaderNotifier(o.NotifyNewRequest) // ✅ LIVENESS: Notifica líder quando request chega
+	request.SetNumGroupsGetter(o.GetNumGroups)
 	
 	logger.Info().Msg("[MULTICAST] Registered GSN/atomic multicast callbacks")
 	
@@ -983,49 +982,7 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 	}
 }
 
-// NotifyNewRequest - Notifica líder quando request chega no bucket
-// Acorda líder imediatamente sem depender de polling
-func (o *MultiPaxosMulticastOrderer) NotifyNewRequest(groupID uint32) {
-	fmt.Printf("[NOTIFY] Called for group %d\n", groupID)
-	
-	// Obtém orderer do grupo
-	o.orderersMu.RLock()
-	groupOrderer := o.groupOrderers[groupID]
-	o.orderersMu.RUnlock()
-	
-	if groupOrderer == nil {
-		fmt.Printf("[NOTIFY] Group %d: No orderer found\n", groupID)
-		return
-	}
-	
-	// Verifica se este nó é líder do grupo
-	// Para grupo 0, todos os nós são membros, então verifica liderança diretamente
-	// Para outros grupos, verifica se é membro E líder
-	if groupID != 0 && !o.am.IsMember(groupID, membership.OwnID) {
-		fmt.Printf("[NOTIFY] Group %d: Not a member (ownID=%d)\n", groupID, membership.OwnID)
-		return // Não é membro do grupo
-	}
-	
-	// Obtém instância ativa do grupo
-	inst := groupOrderer.GetActiveInstance(groupID)
-	if inst == nil {
-		fmt.Printf("[NOTIFY] Group %d: No active instance\n", groupID)
-		return
-	}
-	
-	// Verifica se é líder da instância
-	inst.mu.Lock()
-	isLeader := (inst.leader == membership.OwnID)
-	leaderID := inst.leader
-	inst.mu.Unlock()
-	
-	if isLeader {
-		fmt.Printf("[NOTIFY] Group %d: I AM LEADER, waking up\n", groupID)
-		inst.ProposeIfDue()
-	} else {
-		fmt.Printf("[NOTIFY] Group %d: Not leader (leader=%d, ownID=%d)\n", groupID, leaderID, membership.OwnID)
-	}
-}
+
 
 // PreprocessRequest - Preprocessa request para atomic multicast
 // Retorna true se já processou (não precisa processamento padrão)
