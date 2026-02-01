@@ -424,6 +424,12 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 			// ✅ LIVENESS: Sempre chama tick e ProposeIfDue para processar requests
 			inst.tick(time.Now())
 			inst.ProposeIfDue()
+			
+			// ✅ FIX: Avança para próximo SN se instância já commitou
+			if inst.isClosed() {
+				localSN++
+				fmt.Printf("[MPX][LOCAL-SN] Group %d: instance closed, advancing to localSN=%d\n", groupId, localSN)
+			}
 		}
 	}
 }
