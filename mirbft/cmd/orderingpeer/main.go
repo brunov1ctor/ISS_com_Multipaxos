@@ -149,16 +149,12 @@ func main() {
 		request.SetProxyInterceptor(func(req *request.Request) {
 			if req.Msg != nil {
 				mcOrd.ProxyInterceptor(req.Msg.GSN, req.Msg.TouchedGroups, req.Msg)
-				// ✅ LIVENESS: Notifica líder quando request chega no bucket (todos os grupos)
-				mcOrd.NotifyNewRequest(req.Msg.GroupId)
 			}
 		})
 		request.SetGSNBarrierChecker(mcOrd.CanProcessCrossOp)
 		request.SetGSNGenerator(mcOrd.GetNextGSN)
 		request.SetGroupMembersGetter(mcOrd.GetGroupMembers)
-		// ✅ CORREÇÃO: Configura META publisher para evitar duplicação
 		request.SetMETAPublisher(mcOrd.PublishMETAOnce)
-		// ✅ CRÍTICO: Registra PreprocessRequest para processar requisições de clientes
 		request.SetRequestPreprocessor(mcOrd.PreprocessRequest)
 	}
 
