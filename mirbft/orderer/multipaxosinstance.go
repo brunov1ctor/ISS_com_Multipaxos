@@ -679,9 +679,12 @@ func (i *mpxInstance) ProposeIfDue() {
 		
 		var selectedReq *request.Request
 		
-		//Itera APENAS buckets do grupo: b = start + k*numGroups (mod numBuckets)
+		// Itera por TODOS os buckets do grupo: groupId, groupId+numGroups, groupId+2*numGroups, ...
 		for k := int32(0); k < bucketsPorGrupo; k++ {
-			b := (i.nextBucketIdx + k*numGroups) % numBuckets
+			b := int32(i.bucketId) + k*numGroups
+			if b >= numBuckets {
+				break
+			}
 			
 			// Tenta remover request deste bucket
 			request.Buckets[b].Lock()
