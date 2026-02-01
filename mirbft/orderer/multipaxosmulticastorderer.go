@@ -467,7 +467,7 @@ func (o *MultiPaxosMulticastOrderer) ADeliver(gsn uint64, groupID uint32, batch 
 	}
 	
 	// gsn == nextCandidate e toca o grupo - pode entregar
-	fmt.Printf("[ATOMIC-ORDER] Group %d: Delivering GSN %d (lastDelivered=%d)\n", groupID, gsn, lastDelivered)
+	fmt.Printf("[DELIVER] Group %d: GSN %d delivered (prev=%d, touchedGroups=%v)\n", groupID, gsn, lastDelivered, o.gsnMetadata[gsn])
 	o.lastDeliveredGSN[groupID] = gsn
 	return true
 }
@@ -542,7 +542,7 @@ func (o *MultiPaxosMulticastOrderer) drainBuffer(groupID uint32) {
 		}
 		
 		// Entrega nextCandidate
-		fmt.Printf("[BUFFER] Group %d: Draining GSN %d (sn=%d)\n", groupID, nextCandidate, pending.sn)
+		fmt.Printf("[BUFFER-DRAIN] Group %d: GSN %d (sn=%d) delivered from buffer\n", groupID, nextCandidate, pending.sn)
 		pending.announce(pending.sn, pending.batch, pending.digest)
 		
 		o.expectedGSNMu.Lock()
@@ -1068,7 +1068,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	fmt.Printf("[PREPROCESS] Cross-group: mapped to groups=%v gsn=%d\n", req.TouchedGroups, gsn)
 	
 	// ✅ Cross-op: clona para cada grupo
-	fmt.Printf("[PREPROCESS] Cross-op: cloning for %d groups\n", len(req.TouchedGroups))
+	fmt.Printf("[CROSS-OP] GSN=%d: Fanout to %d groups %v\n", gsn, len(req.TouchedGroups), req.TouchedGroups)
 	for _, groupID := range req.TouchedGroups {
 		clone := &pb.ClientRequest{
 			RequestId:     req.RequestId,
@@ -1079,6 +1079,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 			TouchedGroups: req.TouchedGroups,
 			GSN:           gsn,
 		}
+		fmt.Printf("[CROSS-OP] GSN=%d: Sending to group %d\n", gsn, groupID)
 		o.sendToGroup(clone, groupID)
 	}
 	

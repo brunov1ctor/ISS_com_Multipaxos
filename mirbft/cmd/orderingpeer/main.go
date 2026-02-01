@@ -165,11 +165,9 @@ func main() {
 	chkp.Init(mngr)
 
 	// Register message and entry handlers
-	fmt.Printf("[MAIN] Registering ClientRequestHandler = request.HandleRequest\n")
 	messenger.CheckpointMsgHandler = chkp.HandleMessage
 	messenger.OrdererMsgHandler = ord.HandleMessage
 	messenger.ClientRequestHandler = request.HandleRequest
-	fmt.Printf("[MAIN] ClientRequestHandler registered: %v\n", messenger.ClientRequestHandler != nil)
 	messenger.StateTransferMsgHandler = statetransfer.HandleMessage
 	statetransfer.OrdererEntryHandler = ord.HandleEntry
 
