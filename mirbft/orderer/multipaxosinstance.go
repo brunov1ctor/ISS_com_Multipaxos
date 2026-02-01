@@ -696,12 +696,16 @@ func (i *mpxInstance) ProposeIfDue() {
 					selectedReq = systemReq
 					request.Buckets[b].RemoveNoLock(selectedReq)
 					request.Buckets[b].Unlock()
+					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
+					i.nextBucketIdx = (b + numGroups) % numBuckets
 					break
 				}
 				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
 				if selectedReq != nil {
 					request.Buckets[b].RemoveNoLock(selectedReq)
 					request.Buckets[b].Unlock()
+					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
+					i.nextBucketIdx = (b + numGroups) % numBuckets
 					break
 				}
 				request.Buckets[b].Unlock()
@@ -711,6 +715,8 @@ func (i *mpxInstance) ProposeIfDue() {
 				if selectedReq != nil {
 					request.Buckets[b].RemoveNoLock(selectedReq)
 					request.Buckets[b].Unlock()
+					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
+					i.nextBucketIdx = (b + numGroups) % numBuckets
 					break
 				}
 				
@@ -731,20 +737,6 @@ func (i *mpxInstance) ProposeIfDue() {
 					i.nextBucketIdx = (b + numGroups) % numBuckets
 					break
 				}
-			}
-			
-			// Grupo 0: unlock e break se encontrou
-			if i.bucketId == 0 && selectedReq != nil {
-				i.nextBucketIdx = (b + numGroups) % numBuckets
-				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-				break
-			}
-			
-			// Grupos de dados: unlock e break se cross-op
-			if selectedReq != nil {
-				i.nextBucketIdx = (b + numGroups) % numBuckets
-				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-				break
 			}
 		}
 		
