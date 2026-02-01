@@ -658,26 +658,30 @@ func (i *mpxInstance) ProposeIfDue() {
 			expectedGSN = 1 // Fallback se não há multicast orderer
 		}
 		
-		// ✅ PASSO 3: Round-robin entre todos os buckets do grupo
+		// Round-robin entre todos os buckets do grupo com stride
 		// Calcula numBuckets e numGroups
 		numBuckets := int32(len(request.Buckets))
 		numGroups := int32(request.GetNumGroups()) // ✅ Obtém dinamicamente
 		
-		// Inicializa nextBucketIdx se necessário
-		if i.nextBucketIdx == 0 && i.bucketId > 0 {
+		// Calcula quantos buckets pertencem a este grupo
+		bucketsPorGrupo := numBuckets / numGroups
+		if bucketsPorGrupo < 1 {
+			bucketsPorGrupo = 1
+		}
+		
+		// Garante que nextBucketIdx está alinhado ao grupo: b % numGroups == bucketId
+		if i.nextBucketIdx < 0 {
+			i.nextBucketIdx = int32(i.bucketId)
+		}
+		if i.nextBucketIdx % numGroups != int32(i.bucketId) {
 			i.nextBucketIdx = int32(i.bucketId)
 		}
 		
 		var selectedReq *request.Request
 		
-		// ✅ Itera por todos os buckets do grupo (round-robin)
-		for k := int32(0); k < numBuckets; k++ {
-			b := (i.nextBucketIdx + k) % numBuckets
-			
-			// Verifica se bucket pertence ao grupo: b % numGroups == groupId
-			if b % numGroups != int32(i.bucketId) {
-				continue
-			}
+		//Itera APENAS buckets do grupo: b = start + k*numGroups (mod numBuckets)
+		for k := int32(0); k < bucketsPorGrupo; k++ {
+			b := (i.nextBucketIdx + k*numGroups) % numBuckets
 			
 			// Tenta remover request deste bucket
 			request.Buckets[b].Lock()
@@ -721,21 +725,21 @@ func (i *mpxInstance) ProposeIfDue() {
 				
 				// Mudança 1: Para quando remaining == 0
 				if len(rb.Requests) >= i.parent.maxBatchSize {
-					i.nextBucketIdx = (b + 1) % numBuckets
+					i.nextBucketIdx = (b + numGroups) % numBuckets
 					break
 				}
 			}
 			
 			// Grupo 0: unlock e break se encontrou
 			if i.bucketId == 0 && selectedReq != nil {
-				i.nextBucketIdx = (b + 1) % numBuckets
+				i.nextBucketIdx = (b + numGroups) % numBuckets
 				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 				break
 			}
 			
 			// Grupos de dados: unlock e break se cross-op
 			if selectedReq != nil {
-				i.nextBucketIdx = (b + 1) % numBuckets
+				i.nextBucketIdx = (b + numGroups) % numBuckets
 				rb = &request.Batch{Requests: []*request.Request{selectedReq}}
 				break
 			}
@@ -743,7 +747,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		
 		if rb == nil && selectedReq == nil {
 			fmt.Printf("[MPX][PROPOSE] sn=%d group=%d no request found in any bucket (tried %d buckets)\n", 
-				i.sn, i.bucketId, numBuckets/numGroups)
+				i.sn, i.bucketId, bucketsPorGrupo)
 		}
 		
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
