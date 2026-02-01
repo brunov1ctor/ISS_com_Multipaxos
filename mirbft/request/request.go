@@ -87,6 +87,9 @@ var (
 	
 	// ✅ DYNAMIC: Getter de numGroups (injected by orderer)
 	numGroupsGetter func() int
+	
+	// ✅ LIVENESS: Callback para notificar líder quando request chega
+	leaderNotifier func(uint32)
 )
 
 type watermarkRange struct {
@@ -262,6 +265,11 @@ func GetNumGroups() int {
 	return 5 // Fallback para 5 grupos
 }
 
+// ✅ LIVENESS: SetLeaderNotifier configura callback para notificar líder
+func SetLeaderNotifier(fn func(uint32)) {
+	leaderNotifier = fn
+}
+
 // ReplicaMapper - Mapeia payload para grupos (particionamento por intervalo)
 func ReplicaMapper(payload []byte) []uint32 {
 	parts := strings.Fields(string(payload))
@@ -408,6 +416,10 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 	addedReq := Add(req)
 	if addedReq != nil {
 		fmt.Printf("[ADD-REQ] Successfully added to bucket=%d group=%d\n", bucketNr, reqMsg.GroupId)
+		// ✅ LIVENESS: Notifica líder que nova request chegou
+		if leaderNotifier != nil {
+			leaderNotifier(reqMsg.GroupId)
+		}
 	} else {
 		fmt.Printf("[ADD-REQ][WARN] Failed to add to bucket=%d group=%d\n", bucketNr, reqMsg.GroupId)
 	}

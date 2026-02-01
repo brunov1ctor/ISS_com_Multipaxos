@@ -203,6 +203,7 @@ func (o *MultiPaxosMulticastOrderer) setupHandlers() {
 	request.SetRequestCacher(o.CacheRequest)
 	request.SetRequestPreprocessor(o.PreprocessRequest)
 	request.SetNumGroupsGetter(o.GetNumGroups) // ✅ Injeta getter de numGroups
+	request.SetLeaderNotifier(o.NotifyNewRequest) // ✅ LIVENESS: Notifica líder quando request chega
 	
 	logger.Info().Msg("[MULTICAST] Registered GSN/atomic multicast callbacks")
 	
