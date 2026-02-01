@@ -630,7 +630,13 @@ func (i *mpxInstance) ProposeIfDue() {
 	
 	i.lastProposeAt = time.Now()
 	
-	if i.phase >= phaseAcceptSent {
+	// Permite novas propostas após commit (instância já foi fechada)
+	if i.phase >= phaseAcceptSent && i.phase != phaseCommitted {
+		return
+	}
+	
+	// Se já commitou, esta instância está finalizada
+	if i.closed {
 		return
 	}
 	
