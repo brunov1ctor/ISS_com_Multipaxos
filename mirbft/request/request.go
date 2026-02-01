@@ -353,6 +353,12 @@ func isControlMessage(payload []byte) bool {
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
+	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil (alinhado com artigo)
+	if reqMsg.GetRequestId() == nil {
+		fmt.Printf("[ADD-REQ][ERROR] Rejecting request with nil RequestId\n")
+		return nil
+	}
+	
 	// Fast-path: mensagens de controle não entram em bucket
 	if isControlMessage(reqMsg.Payload) {
 		return nil
@@ -365,9 +371,10 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 	// Calcula bucket usando GroupId já definido
 	bucketNr := GetBucketNr(reqMsg)
 	
-	// ✅ DEBUG: Log estado da request
+	// ✅ DEBUG: Log estado da request (safe: RequestId já validado)
+	rid := reqMsg.GetRequestId()
 	fmt.Printf("[ADD-REQ][ENTRY] req=%p clientId=%d clientSn=%d groupId=%d bucket=%d touchedGroups=%v gsn=%d\n",
-		reqMsg, reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, bucketNr, reqMsg.TouchedGroups, reqMsg.GSN)
+		reqMsg, rid.GetClientId(), rid.GetClientSn(), reqMsg.GroupId, bucketNr, reqMsg.TouchedGroups, reqMsg.GSN)
 	
 	// ✅ 3) LIVENESS: Marca request como recebida (para watchdog)
 	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
@@ -386,7 +393,7 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 	}
 	isSystem := strings.HasPrefix(string(reqMsg.Payload), "SYSTEM:")
 	fmt.Printf("[ADD-REQ] clientId=%d clientSn=%d groupId=%d bucket=%d gsn=%d touchedGroups=%v isSystem=%v payload=%s\n",
-		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId, bucketNr, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
+		rid.GetClientId(), rid.GetClientSn(), reqMsg.GroupId, bucketNr, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
 	
 	req := &Request{
 		Msg:      reqMsg,
@@ -549,6 +556,13 @@ func getBucket(req *pb.ClientRequest) *Bucket {
 }
 
 func GetBucketNr(req *pb.ClientRequest) int {
+	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil
+	rid := req.GetRequestId()
+	if rid == nil {
+		fmt.Printf("[BUCKET][ERROR] Request with nil RequestId, using bucket 0\n")
+		return 0
+	}
+	
 	n := len(Buckets)
 	if n == 0 {
 		return 0
@@ -565,7 +579,7 @@ func GetBucketNr(req *pb.ClientRequest) int {
 	bucketsPerGroup := n / numGroups
 	if bucketsPerGroup <= 0 {
 		// Fallback: distribuição global se configuração inválida
-		return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(n))
+		return int((rid.GetClientId() + rid.GetClientSn()) % int32(n))
 	}
 	
 	g := int(req.GetGroupId())
@@ -577,7 +591,7 @@ func GetBucketNr(req *pb.ClientRequest) int {
 	}
 	
 	// Hash dentro do grupo (0..bucketsPerGroup-1)
-	h := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(bucketsPerGroup))
+	h := int((rid.GetClientId() + rid.GetClientSn()) % int32(bucketsPerGroup))
 	
 	// Bucket final: g + numGroups * h
 	// Exemplos com 80 buckets, 5 grupos (16 buckets/grupo):
@@ -646,12 +660,19 @@ func Digest(req *pb.ClientRequest) []byte {
 }
 
 func RequestIDToBytes(req *pb.ClientRequest) []byte {
+	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil
+	rid := req.GetRequestId()
+	if rid == nil {
+		fmt.Printf("[REQUEST-ID][ERROR] Request with nil RequestId, returning empty bytes\n")
+		return []byte{}
+	}
+	
 	buffer := make([]byte, 0, 0)
 	sn := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sn, uint32(req.RequestId.ClientSn))
+	binary.LittleEndian.PutUint32(sn, uint32(rid.GetClientSn()))
 	buffer = append(buffer, sn...)
 	id := make([]byte, 4)
-	binary.LittleEndian.PutUint32(id, uint32(req.RequestId.ClientId))
+	binary.LittleEndian.PutUint32(id, uint32(rid.GetClientId()))
 	buffer = append(buffer, id...)
 	return buffer
 }

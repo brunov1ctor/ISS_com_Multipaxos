@@ -609,7 +609,12 @@ func handleClientRequest(req *pb.ClientRequest) {
 	case incomingReqCh <- req:
 		// Enfileirado com sucesso
 	default:
-		// Fila cheia - drop com log
-		logger.Warn().Int32("clId", req.RequestId.ClientId).Int32("clSn", req.RequestId.ClientSn).Msg("Request queue full, dropping forwarded request")
+		// Fila cheia - drop com log (safe: usa GetRequestId)
+		rid := req.GetRequestId()
+		if rid != nil {
+			logger.Warn().Int32("clId", rid.GetClientId()).Int32("clSn", rid.GetClientSn()).Msg("Request queue full, dropping forwarded request")
+		} else {
+			logger.Warn().Msg("Request queue full, dropping malformed forwarded request (nil RequestId)")
+		}
 	}
 }
