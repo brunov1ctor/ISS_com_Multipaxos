@@ -157,15 +157,21 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		fmt.Printf("[MPX] Skipped handler registration (managed by multicast orderer)\n")
 	}
 	o.announce = func(sn int32, batchBytes []byte, metadata []byte) {
-		if len(batchBytes) == 0 {
-			fmt.Printf("[MPX][SKIP] sn=%d (empty batch)\n", sn)
-			emptyBatch := &pb.Batch{Requests: []*pb.ClientRequest{}}
+		// Decodifica batch para verificar se é NOP
+		var b pb.Batch
+		if err := proto.Unmarshal(batchBytes, &b); err != nil {
+			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d unmarshal: %v\n", sn, err)
+			return
+		}
+		
+		// ✅ NOP: batch com zero requests (mas bytes não-vazios)
+		if len(b.Requests) == 0 {
+			fmt.Printf("[MPX][ANNOUNCE] sn=%d NOP (empty requests, announcing to log)\n", sn)
 			shouldRespond := true
-			emptyBytes, _ := proto.Marshal(emptyBatch)
-			digest := crypto.Hash(emptyBytes)
+			digest := crypto.Hash(batchBytes)
 			entry := &mirlog.Entry{
 				Sn:            sn,
-				Batch:         emptyBatch,
+				Batch:         &b,
 				Digest:        digest,
 				ShouldRespond: &shouldRespond,
 			}
