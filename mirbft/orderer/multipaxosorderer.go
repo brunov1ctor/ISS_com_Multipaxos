@@ -211,14 +211,26 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		}
 		announcer.Announce(entry)
 		
-		// ✅ META stream: Processa META commitado pelo grupo 0
-		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
+		// ✅ META stream: Registra operações multigrupo quando grupo 0 commita
+		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil && o.ownedGroupID == 0 {
+			// Analisa quais grupos cada requisição toca
+			touchedGroupsMap := make(map[uint64][]uint32)
 			for _, req := range b.Requests {
-				if req.GroupId == 0 && isMETAStream(req) {
-					gsn := req.GSN
-					touchedGroups := req.TouchedGroups
-					GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, touchedGroups)
-					fmt.Printf("[META-STREAM][REGISTERED] GSN %d -> groups %v\n", gsn, touchedGroups)
+				if req.GSN > 0 {
+					// Se TouchedGroups já está preenchido, usa direto
+					if len(req.TouchedGroups) > 0 {
+						touchedGroupsMap[req.GSN] = req.TouchedGroups
+					} else if req.GroupId > 0 {
+						// Operação single-group
+						touchedGroupsMap[req.GSN] = []uint32{req.GroupId}
+					}
+				}
+			}
+			// Registra operações multigrupo (len > 1)
+			for gsn, groups := range touchedGroupsMap {
+				if len(groups) > 1 {
+					GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, groups)
+					fmt.Printf("[META-STREAM][REGISTERED] GSN %d -> groups %v\n", gsn, groups)
 				}
 			}
 		}
@@ -703,6 +715,11 @@ func (o *MultiPaxosOrderer) Sign(data []byte) ([]byte, error) { return nil, nil 
 func (o *MultiPaxosOrderer) CheckSig(data []byte, senderID int32, signature []byte) error {
 	return nil
 }
+// isMETAStream verifica se uma requisição é metadado de operação multigrupo
+func isMETAStream(req *pb.ClientRequest) bool {
+	return req != nil && req.GSN > 0 && len(req.TouchedGroups) > 1
+}
+
 func extractGroupID(mpx *pb.MPxMsg) uint32 {
 	switch msg := mpx.Type.(type) {
 	case *pb.MPxMsg_Prepare:
