@@ -689,7 +689,11 @@ func (i *mpxInstance) ProposeIfDue() {
 		// Round-robin entre todos os buckets do grupo com stride
 		// Calcula numBuckets e numGroups
 		numBuckets := int32(len(request.Buckets))
-		numGroups := int32(request.GetNumGroups()) // ✅ Obtém dinamicamente
+		// ✅ FIX: Usa número real de grupos definidos, não valor do request package
+		numGroups := int32(len(i.parent.am.GetDefinedGroups()))
+		if numGroups == 0 {
+			numGroups = 1
+		}
 		
 		// ✅ FIX: Itera até não haver mais buckets do grupo
 		// Não usa bucketsPorGrupo como limite porque pode ser arredondado para baixo
