@@ -488,12 +488,9 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		return
 	}
 	val := c.GetValue()
-	if val == nil || len(val.GetBatch()) == 0 {
-		fmt.Printf("[MPX][INST] sn=%d NIL commit\n", i.sn)
+	if val == nil {
+		fmt.Printf("[MPX][INST] sn=%d NIL commit (val==nil)\n", i.sn)
 		i.phase = phaseCommitted
-		if i.announce != nil {
-			i.announce(i.sn, []byte{}, nil)
-		}
 		i.closed = true
 		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
 		return
