@@ -276,17 +276,20 @@ func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	var groupID uint32
 	if mpx != nil {
 		groupID = extractGroupID(mpx)
+		// ✅ FIX: Valida se REMETENTE é membro do grupo (não o receptor)
+		// Isso permite que líderes recebam mensagens de seguidores de outros grupos
 		if groupID != 0 && o.am != nil {
 			members := o.am.GetGroupMembers(groupID)
 			if members != nil {
-				isMember := false
+				isSenderMember := false
 				for _, m := range members {
-					if m == membership.OwnID {
-						isMember = true
+					if m == pm.SenderId {
+						isSenderMember = true
 						break
 					}
 				}
-				if !isMember {
+				if !isSenderMember {
+					fmt.Printf("[MPX][FILTER] sn=%d sender=%d not member of group=%d, dropping\n", sn, pm.SenderId, groupID)
 					return
 				}
 			}
