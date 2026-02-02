@@ -184,7 +184,6 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		if gsn, innerBatch, hasGSN = decodeGSNBatch(batchBytes); hasGSN {
 			fmt.Printf("[CROSS-OP] sn=%d decoded gsn=%d from batch\n", sn, gsn)
 		}
-		var b pb.Batch
 		if err := proto.Unmarshal(innerBatch, &b); err != nil {
 			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d unmarshal: %v\n", sn, err)
 			return
