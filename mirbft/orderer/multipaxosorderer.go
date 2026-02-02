@@ -715,11 +715,6 @@ func (o *MultiPaxosOrderer) Sign(data []byte) ([]byte, error) { return nil, nil 
 func (o *MultiPaxosOrderer) CheckSig(data []byte, senderID int32, signature []byte) error {
 	return nil
 }
-// isMETAStream verifica se uma requisição é metadado de operação multigrupo
-func isMETAStream(req *pb.ClientRequest) bool {
-	return req != nil && req.GSN > 0 && len(req.TouchedGroups) > 1
-}
-
 func extractGroupID(mpx *pb.MPxMsg) uint32 {
 	switch msg := mpx.Type.(type) {
 	case *pb.MPxMsg_Prepare:
