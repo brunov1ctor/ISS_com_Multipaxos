@@ -425,7 +425,11 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accepted},
 	}
 	if i.leader == membership.OwnID {
-		fmt.Printf("[MPX][INST] sn=%d skip ACCEPTED to self\n", i.sn)
+		fmt.Printf("[MPX][INST] sn=%d skip ACCEPTED to self (checking quorum directly)\n", i.sn)
+		// ✅ FIX: Líder deve verificar quorum após contar seu próprio voto
+		i.mu.Unlock()
+		i.onAccepted(nil, accepted.Type.(*pb.MPxMsg_Accepted).Accepted)
+		i.mu.Lock()
 		return
 	}
 	fmt.Printf("[MPX][INST] sn=%d sending ACCEPTED to leader=%d\n", i.sn, i.leader)
@@ -843,12 +847,9 @@ func (i *mpxInstance) ProposeIfDue() {
 			i.lastVal = val
 			i.lastDigest = sha256.Sum256(batchBytes)
 		}
+		// ✅ FIX: Não inicializa acceptCount aqui - onAccept vai contar quando receber próprio ACCEPT
 		i.acceptedFrom = map[int32]struct{}{}
 		i.acceptCount = 0
-		if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
-			i.acceptedFrom[membership.OwnID] = struct{}{}
-			i.acceptCount = 1
-		}
 	} else {
 		val = i.lastVal
 	}
