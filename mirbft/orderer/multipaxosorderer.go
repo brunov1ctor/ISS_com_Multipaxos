@@ -211,34 +211,13 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		}
 		announcer.Announce(entry)
 		
-		// ✅ META stream: Registra operações multigrupo quando grupo 0 commita
-		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil && o.ownedGroupID == 0 {
-			// Analisa quais grupos cada requisição toca
-			touchedGroupsMap := make(map[uint64][]uint32)
-			for _, req := range b.Requests {
-				if req.GSN > 0 {
-					// Se TouchedGroups já está preenchido, usa direto
-					if len(req.TouchedGroups) > 1 {
-						touchedGroupsMap[req.GSN] = req.TouchedGroups
-						fmt.Printf("[META-STREAM][ANALYZE] GSN %d has TouchedGroups=%v (from request)\n", req.GSN, req.TouchedGroups)
-					} else if req.GroupId > 0 {
-						// Operação single-group
-						touchedGroupsMap[req.GSN] = []uint32{req.GroupId}
-						fmt.Printf("[META-STREAM][ANALYZE] GSN %d single-group=%d\n", req.GSN, req.GroupId)
-					}
-				}
+		// ✅ META stream: Registra operações multigrupo quando commitadas
+		if hasGSN && len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
+			// Extrai TouchedGroups da primeira requisição
+			if len(b.Requests[0].TouchedGroups) > 1 {
+				GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, b.Requests[0].TouchedGroups)
+				fmt.Printf("[META-STREAM][REGISTERED] sn=%d GSN %d -> groups %v\n", sn, gsn, b.Requests[0].TouchedGroups)
 			}
-			// Registra operações multigrupo (len > 1)
-			for gsn, groups := range touchedGroupsMap {
-				if len(groups) > 1 {
-					GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, groups)
-					fmt.Printf("[META-STREAM][REGISTERED] GSN %d -> groups %v\n", gsn, groups)
-				} else {
-					fmt.Printf("[META-STREAM][SKIP] GSN %d single-group=%v\n", gsn, groups)
-				}
-			}
-			fmt.Printf("[META-STREAM][SUMMARY] sn=%d analyzed %d GSNs, found %d multigroup ops\n", 
-				sn, len(touchedGroupsMap), len(touchedGroupsMap))
 		}
 		fmt.Printf("DELIVER sn=%d delivered=%d\n", sn, len(b.Requests))
 	}
