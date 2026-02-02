@@ -842,12 +842,13 @@ func (i *mpxInstance) ProposeIfDue() {
 	if !i.prepared {
 		if i.promiseCount < i.quorum {
 			fmt.Printf("[MPX][INST] sn=%d aguardando quorum de promises (%d/%d)\n", i.sn, i.promiseCount, i.quorum)
-			// ✅ CORREÇÃO: Devolver request ao bucket mas MANTER i.lastVal para próxima chamada
+			// ✅ CORREÇÃO: Devolver request ao bucket E LIMPAR lastVal para tentar novamente
 			if i.lastReqBatch != nil {
 				fmt.Printf("[MPX][INST] sn=%d returning batch to bucket (no quorum)\n", i.sn)
 				i.lastReqBatch.Resurrect()
 				i.lastReqBatch = nil
-				// NÃO limpa i.lastVal - será reutilizado na próxima chamada
+				// ✅ FIX: Limpa lastVal para forçar nova leitura dos buckets na próxima tentativa
+				i.lastVal = nil
 			}
 			// ✅ FIX NOP: Se já tem valor (NOP ou request), envia PREPARE para iniciar protocolo
 			if i.lastVal != nil && !i.prepSent {
