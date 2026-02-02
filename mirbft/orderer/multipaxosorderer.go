@@ -357,9 +357,111 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 	
 	fmt.Printf("[MPX][LOCAL-SN] Starting local SN loop for group %d with %d members: %v (numGroups=%d)\n", groupId, len(members), members, numGroups)
 	
-	// SN local começa em 0
-	localSN := int32(0)
+	// ✅ Pipeline window scheduler (correto conforme artigo)
+	nextLocalSN := int32(0)
+	windowW := int32(1) // Começa com 1 para debug, depois aumentar para 4-8
+	inFlight := make(map[int32]*mpxInstance)
 	bucketIdx := int32(groupId)
+	
+	// Função auxiliar: mapeia localSN → globalSN
+	globalOf := func(local int32) int32 {
+		return local*numGroups + int32(groupId)
+	}
+	
+	// ✅ Avanço baseado APENAS no log (fonte de verdade do SMR)
+	// Elimina "salto misterioso" - cada advance é logado explicitamente
+	advance := func() {
+		for {
+			gsn := globalOf(nextLocalSN)
+			if mirlog.GetEntry(gsn) == nil {
+				return
+			}
+			fmt.Printf("[MPX][LOCAL-SN] Group %d: globalSN=%d already COMMITTED in log, advancing localSN=%d→%d\n",
+				groupId, gsn, nextLocalSN, nextLocalSN+1)
+			
+			// Limpa instância antiga se existir
+			if inst, ok := inFlight[gsn]; ok {
+				inst.stopWorkers()
+				delete(inFlight, gsn)
+			}
+			
+			nextLocalSN++
+		}
+	}
+	
+	// Função para garantir janela de instâncias em voo
+	ensureWindow := func() {
+		for off := int32(0); off < windowW; off++ {
+			local := nextLocalSN + off
+			gsn := globalOf(local)
+			
+			// Se já commitou, não precisa de instância
+			if mirlog.GetEntry(gsn) != nil {
+				continue
+			}
+			
+			// Se já existe, não recria
+			if _, ok := inFlight[gsn]; ok {
+				continue
+			}
+			
+			// Cria nova instância
+			inst := o.ensureInstance(gsn)
+			inst.bucketId = groupId
+			inst.bucketIndex = bucketIdx
+			inst.SetMembers(members)
+			o.dispatcher.store(gsn, inst)
+			inst.startWorkers(&o.stopWg)
+			o.backlog.drainTo(gsn, inst.enqueue)
+			
+			// Envia PREPARE
+			prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
+				Prepare: &pb.MPxPrepare{
+					Id:      &pb.MPxInstanceId{Sn: gsn, Lead: uint64(membership.OwnID)},
+					Ballot:  uint64(inst.currentBallot),
+					GroupId: groupId,
+				},
+			}}
+			pm := &pb.ProtocolMessage{
+				SenderId: membership.OwnID,
+				Sn:       gsn,
+				Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
+			}
+			if o.emit != nil {
+				inst.enqueue(pm)
+				o.emit(pm)
+			}
+			inst.prepSent = true
+			inFlight[gsn] = inst
+			
+			fmt.Printf("[MPX][SCHED] group=%d create inst globalSN=%d (localSN=%d)\n",
+				groupId, gsn, local)
+		}
+	}
+	
+	// Função para processar instâncias da janela
+	processSome := func(now time.Time) {
+		processed := int32(0)
+		for off := int32(0); off < windowW; off++ {
+			local := nextLocalSN + off
+			gsn := globalOf(local)
+			
+			inst := inFlight[gsn]
+			if inst == nil {
+				continue
+			}
+			
+			inst.tick(now)
+			inst.ProposeIfDue()
+			
+			processed++
+			fmt.Printf("[MPX][SCHED] group=%d process globalSN=%d tick+propose\n", groupId, gsn)
+			
+			if processed >= windowW {
+				break
+			}
+		}
+	}
 	
 	// Ticker para propostas periódicas
 	ticker := time.NewTicker(o.proposeEvery)
@@ -368,75 +470,30 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 	// ✅ FIX: Líder = primeiro membro do grupo (determinístico)
 	isLeader := (membership.OwnID == members[0])
 	fmt.Printf("[MPX][LOCAL-SN] Group %d: ownID=%d leader=%d isLeader=%v\n", groupId, membership.OwnID, members[0], isLeader)
-	
-	fmt.Printf("[MPX][LOCAL-SN] Group %d: Starting ticker loop (interval=%v, isLeader=%v)\n", groupId, o.proposeEvery, isLeader)
+	fmt.Printf("[MPX][LOCAL-SN] Group %d: Starting ticker loop (interval=%v, isLeader=%v, windowW=%d)\n", 
+		groupId, o.proposeEvery, isLeader, windowW)
 	
 	for {
 		select {
 		case <-ticker.C:
 			// Não-líderes apenas processam mensagens via HandleMessage
-			// Líderes propõem novos valores
 			if !isLeader {
-				continue // Pula proposta, mas mantém loop vivo
-			}
-			
-			// ✅ Mapeia SN local → global: globalSN = localSN * numGroups + groupID
-			globalSN := localSN*numGroups + int32(groupId)
-			
-			// Verifica se globalSN já foi commitado
-			if mirlog.GetEntry(globalSN) != nil {
-				localSN++
 				continue
 			}
 			
-			// Cria ou obtém instância usando globalSN
-			inst, ok := o.dispatcher.load(globalSN)
-			if !ok || inst == nil {
-				inst = o.ensureInstance(globalSN)
-				inst.bucketId = groupId
-				inst.bucketIndex = bucketIdx
-				inst.SetMembers(members)
-				o.dispatcher.store(globalSN, inst)
-				inst.startWorkers(&o.stopWg)
-				o.backlog.drainTo(globalSN, inst.enqueue)
-				
-				// Envia PREPARE
-				prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-					Prepare: &pb.MPxPrepare{
-						Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
-						Ballot:  uint64(inst.currentBallot),
-						GroupId: groupId,
-					},
-				}}
-				pm := &pb.ProtocolMessage{
-					SenderId: membership.OwnID,
-					Sn:       globalSN,
-					Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
-				}
-				if o.emit != nil {
-					inst.enqueue(pm)
-					o.emit(pm)
-				}
-				inst.prepSent = true
-				fmt.Printf("[MPX][LOCAL-SN] Group %d: localSN=%d → globalSN=%d (PREPARE sent)\n", groupId, localSN, globalSN)
-			} else {
-				// Instância já existe (criada por HandleMessage ou tick anterior)
-				fmt.Printf("[MPX][LOCAL-SN] Group %d: localSN=%d → globalSN=%d (instance exists)\n", groupId, localSN, globalSN)
-			}
+			now := time.Now()
 			
-			// ✅ FIX CRÍTICO: SEMPRE chama tick e ProposeIfDue em TODAS as instâncias ativas
-			// Movido para FORA do bloco if para garantir execução
-			if inst != nil && !inst.isClosed() {
-				inst.tick(time.Now())
-				inst.ProposeIfDue()
-				fmt.Printf("[MPX][LOCAL-SN] Group %d: globalSN=%d tick+propose executed\n", groupId, globalSN)
-			}
+			// 1) Avança baseado APENAS no log (fonte de verdade do SMR)
+			advance()
 			
-			// Avança para próximo SN se instância já commitou
-			if inst != nil && inst.isClosed() {
-				localSN++
-				fmt.Printf("[MPX][LOCAL-SN] Group %d: instance closed, advancing to localSN=%d\n", groupId, localSN)
-			}
+			// 2) Mantém janela de instâncias em voo
+			ensureWindow()
+			
+			// 3) Processa instâncias da janela (controlado)
+			processSome(now)
+			
+			// 4) Avanço final (caso commit tenha ocorrido durante processamento)
+			advance()
 		}
 	}
 }
