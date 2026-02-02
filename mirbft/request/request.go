@@ -84,9 +84,6 @@ var (
 	
 	// Preprocessor customizado (ex: atomic multicast)
 	requestPreprocessor func(*pb.ClientRequest) bool
-	
-	// DYNAMIC: Getter de numGroups (injected by orderer)
-	numGroupsGetter func() int
 )
 
 type watermarkRange struct {
@@ -246,21 +243,7 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 	requestPreprocessor = fn
 }
 
-// DYNAMIC: SetNumGroupsGetter configura getter de numGroups
-func SetNumGroupsGetter(fn func() int) {
-	numGroupsGetter = fn
-}
 
-// DYNAMIC: GetNumGroups retorna número de grupos (com fallback)
-func GetNumGroups() int {
-	if numGroupsGetter != nil {
-		n := numGroupsGetter()
-		if n > 0 {
-			return n
-		}
-	}
-	return 5 // Fallback para 5 grupos
-}
 
 // ReplicaMapper - Mapeia payload para grupos (particionamento por intervalo)
 func ReplicaMapper(payload []byte) []uint32 {
@@ -297,9 +280,8 @@ func keyToGroup(key string) uint32 {
 	// Hash-based uniform distribution
 	h := crc32.ChecksumIEEE([]byte(key))
 	
-	// Get number of data groups dynamically (excludes group 0 sequencer)
-	numGroups := GetNumGroups()
-	numDataGroups := uint32(numGroups - 1) // Exclude group 0
+	// Get number of data groups (excludes group 0 sequencer)
+	numDataGroups := uint32(getNumDataGroups())
 	if numDataGroups < 1 {
 		numDataGroups = 1
 	}
@@ -337,6 +319,29 @@ func keysToGroups(keys []string) []uint32 {
 // GetGroupMembersGetter retorna getter de membros (para watchdog)
 func GetGroupMembersGetter() func(uint32) []int32 {
 	return groupMembersGetter
+}
+
+// getNumGroups retorna número total de grupos (incluindo grupo 0)
+func getNumGroups() int {
+	if groupMembersGetter == nil {
+		return 5 // Fallback para 5 grupos se não inicializado
+	}
+	// Conta grupos definidos (assume grupos sequenciais 0,1,2,3,4...)
+	// Procura o maior grupo definido
+	maxGroup := 0
+	for g := 0; g < 100; g++ { // Limite razoável
+		if members := groupMembersGetter(uint32(g)); members != nil && len(members) > 0 {
+			if g > maxGroup {
+				maxGroup = g
+			}
+		}
+	}
+	return maxGroup + 1 // +1 porque grupos começam em 0
+}
+
+// getNumDataGroups retorna número de grupos de dados (exclui grupo 0)
+func getNumDataGroups() int {
+	return getNumGroups() - 1
 }
 
 // isControlMessage verifica se é mensagem de controle que não deve virar carga
@@ -571,7 +576,7 @@ func GetBucketNr(req *pb.ClientRequest) int {
 	// ✅ CORREÇÃO: bucket intercalado por grupo
 	// Fórmula: bucket = groupId + numGroups * hash
 	// Garante que grupo g só usa buckets onde b % numGroups == g
-	numGroups := GetNumGroups() // ✅ Obtém dinamicamente
+	numGroups := getNumGroups()
 	if numGroups <= 0 {
 		numGroups = 1
 	}

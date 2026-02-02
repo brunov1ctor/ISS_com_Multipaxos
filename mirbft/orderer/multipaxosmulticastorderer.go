@@ -209,7 +209,6 @@ func (o *MultiPaxosMulticastOrderer) setupHandlers() {
 	request.SetRequestReceivedMarker(o.MarkRequestReceived)
 	request.SetRequestCacher(o.CacheRequest)
 	request.SetRequestPreprocessor(o.PreprocessRequest)
-	request.SetNumGroupsGetter(o.GetNumGroups)
 	
 	logger.Info().Msg("[MULTICAST] Registered GSN/atomic multicast callbacks")
 	
