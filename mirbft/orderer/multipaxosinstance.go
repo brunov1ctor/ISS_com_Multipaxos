@@ -328,7 +328,9 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		}
 	} else {
 		fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d to leader=%d\n", i.sn, ballot, groupId, leaderID)
-		messenger.EnqueueMsg(out, leaderID)
+		if i.parent.emit != nil {
+			i.parent.emit(out)
+		}
 	}
 }
 func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
@@ -431,7 +433,9 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		return
 	}
 	fmt.Printf("[MPX][INST] sn=%d sending ACCEPTED to leader=%d\n", i.sn, i.leader)
-	messenger.EnqueueMsg(resp, i.leader)
+	if i.parent.emit != nil {
+		i.parent.emit(resp)
+	}
 }
 func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	i.mu.Lock()
