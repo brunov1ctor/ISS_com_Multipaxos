@@ -320,8 +320,8 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 				i.prepared = true
 				i.phase = phasePrepared
 				fmt.Printf("[MPX][INST] sn=%d QUORUM de promises atingido, entrando em steady-state\n", i.sn)
-				// ✅ FIX: NÃO chama ProposeIfDue imediatamente - deixa ticker chamar
-				// Isso dá tempo para requests devolvidos serem re-adicionados aos buckets
+				// ✅ Chama ProposeIfDue imediatamente ao atingir quorum
+				go i.ProposeIfDue()
 			}
 		}
 	} else {
@@ -357,8 +357,8 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 		i.prepared = true
 		i.phase = phasePrepared
 		fmt.Printf("[MPX][INST] sn=%d QUORUM de promises atingido, entrando em steady-state\n", i.sn)
-		// ✅ FIX: NÃO chama ProposeIfDue imediatamente - deixa ticker chamar
-		// Isso dá tempo para requests devolvidos serem re-adicionados aos buckets
+		// ✅ Chama ProposeIfDue imediatamente ao atingir quorum
+		go i.ProposeIfDue()
 	}
 }
 func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
@@ -649,6 +649,19 @@ func (i *mpxInstance) ProposeIfDue() {
 		return
 	}
 	
+	// ✅ CORREÇÃO MultiPaxos "steady leader": Verifica quorum ANTES de pegar requests
+	// Phase 1 (PREPARE/PROMISE) deve completar antes de Phase 2 (ACCEPT)
+	if !i.prepared {
+		if i.promiseCount < i.quorum {
+			fmt.Printf("[MPX][INST] sn=%d waiting quorum promises (%d/%d)\n",
+				i.sn, i.promiseCount, i.quorum)
+			return
+		}
+		i.prepared = true
+		i.phase = phasePrepared
+		fmt.Printf("[MPX][INST] sn=%d QUORUM atingido, entrando em steady-state\n", i.sn)
+	}
+	
 	var val *pb.MPxValue
 	reqs := 0
 	if i.lastVal == nil {
@@ -835,42 +848,9 @@ func (i *mpxInstance) ProposeIfDue() {
 	} else {
 		val = i.lastVal
 	}
-	if !i.prepared {
-		if i.promiseCount < i.quorum {
-			fmt.Printf("[MPX][INST] sn=%d aguardando quorum de promises (%d/%d)\n", i.sn, i.promiseCount, i.quorum)
-			// ✅ CORREÇÃO: Devolver request ao bucket E LIMPAR lastVal para tentar novamente
-			if i.lastReqBatch != nil {
-				fmt.Printf("[MPX][INST] sn=%d returning batch to bucket (no quorum)\n", i.sn)
-				i.lastReqBatch.Resurrect()
-				i.lastReqBatch = nil
-				// ✅ FIX: Limpa lastVal para forçar nova leitura dos buckets na próxima tentativa
-				i.lastVal = nil
-			}
-			// ✅ FIX NOP: Se já tem valor (NOP ou request), envia PREPARE para iniciar protocolo
-			if i.lastVal != nil && !i.prepSent {
-				prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-					Prepare: &pb.MPxPrepare{
-						Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-						Ballot:  uint64(i.currentBallot),
-						GroupId: i.bucketId,
-					},
-				}}
-				pm := &pb.ProtocolMessage{
-					SenderId: membership.OwnID,
-					Sn:       i.sn,
-					Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
-				}
-				if i.parent.emit != nil {
-					fmt.Printf("[MPX][INST] sn=%d sending PREPARE to initiate consensus (NOP or request)\n", i.sn)
-					i.parent.emit(pm)
-					i.prepSent = true
-				}
-			}
-			return
-		}
-		i.prepared = true
-		i.phase = phasePrepared
-	}
+	
+	// ✅ Bloco "devolver batch" REMOVIDO - não é mais necessário
+	// Requests só são retirados do bucket APÓS quorum (verificado no início)
 	accept := &pb.MPxMsg{Type: &pb.MPxMsg_Accept{Accept: &pb.MPxAccept{
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot:  uint64(i.currentBallot),
