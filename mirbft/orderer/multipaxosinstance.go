@@ -851,6 +851,26 @@ func (i *mpxInstance) ProposeIfDue() {
 				i.lastReqBatch = nil
 				// NÃO limpa i.lastVal - será reutilizado na próxima chamada
 			}
+			// ✅ FIX NOP: Se já tem valor (NOP ou request), envia PREPARE para iniciar protocolo
+			if i.lastVal != nil && !i.prepSent {
+				prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
+					Prepare: &pb.MPxPrepare{
+						Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+						Ballot:  uint64(i.currentBallot),
+						GroupId: i.bucketId,
+					},
+				}}
+				pm := &pb.ProtocolMessage{
+					SenderId: membership.OwnID,
+					Sn:       i.sn,
+					Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
+				}
+				if i.parent.emit != nil {
+					fmt.Printf("[MPX][INST] sn=%d sending PREPARE to initiate consensus (NOP or request)\n", i.sn)
+					i.parent.emit(pm)
+					i.prepSent = true
+				}
+			}
 			return
 		}
 		i.prepared = true
