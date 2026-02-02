@@ -419,14 +419,17 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 				}
 				inst.prepSent = true
 				fmt.Printf("[MPX][LOCAL-SN] Group %d: localSN=%d → globalSN=%d (PREPARE sent)\n", groupId, localSN, globalSN)
+			} else {
+				// Instância já existe (criada por HandleMessage ou tick anterior)
+				fmt.Printf("[MPX][LOCAL-SN] Group %d: localSN=%d → globalSN=%d (instance exists)\n", groupId, localSN, globalSN)
 			}
 			
-			// ✅ FIX CRÍTICO: Sempre chama tick e ProposeIfDue, mesmo se instância já existe
-			// Isso permite que instâncias que obtiveram quorum mas não tinham requests
-			// possam tentar novamente quando requests chegarem
+			// ✅ FIX CRÍTICO: SEMPRE chama tick e ProposeIfDue em TODAS as instâncias ativas
+			// Movido para FORA do bloco if para garantir execução
 			if inst != nil && !inst.isClosed() {
 				inst.tick(time.Now())
 				inst.ProposeIfDue()
+				fmt.Printf("[MPX][LOCAL-SN] Group %d: globalSN=%d tick+propose executed\n", groupId, globalSN)
 			}
 			
 			// Avança para próximo SN se instância já commitou
