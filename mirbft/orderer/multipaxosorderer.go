@@ -588,12 +588,16 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	}
 	fmt.Printf("[MPX][SEGMENT] Processing group %d with %d members: %v\n", groupId, len(members), members)
 	
-	groupLeader := o.am.GetGroupLeader(GroupID(groupId), seg.Leaders())
-	fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
+	// ✅ FIX: Líder determinístico do grupo (não depende de seg.Leaders())
+	// Usa round-robin dentro do grupo: round = firstSN / numGroups
+	groupLeader := o.am.GetGroupLeaderForSegment(groupId, seg.FirstSN(), numGroups)
+	fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", 
+		groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
 	
 	// Apenas líder propõe (incluindo grupo 0)
 	if groupLeader != membership.OwnID {
-		fmt.Printf("[MPX][SKIP] Group %d: not leader (leader=%d, ownID=%d)\n", groupId, groupLeader, membership.OwnID)
+		fmt.Printf("[MPX][SKIP] Group %d: not leader (leader=%d, ownID=%d)\n", 
+			groupId, groupLeader, membership.OwnID)
 		return
 	}
 	
