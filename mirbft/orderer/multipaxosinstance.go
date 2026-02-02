@@ -522,6 +522,18 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		return
 	}
 	
+	// ✅ Trata NOP (batch vazio): anuncia e fecha sem processar requests
+	if len(b.Requests) == 0 {
+		fmt.Printf("[MPX][INST] sn=%d NOP delivered (empty batch to fill log hole)\n", i.sn)
+		i.phase = phaseCommitted
+		if i.announce != nil {
+			i.announce(i.sn, innerBatch, i.lastDigest[:])
+		}
+		i.closed = true
+		traceCommit(i.sn, 0)
+		return
+	}
+	
 	if i.bucketId == 0 && GetGlobalMulticastOrderer() != nil {
 		for _, req := range b.Requests {
 			payload := string(req.Payload)
@@ -752,10 +764,23 @@ func (i *mpxInstance) ProposeIfDue() {
 		}
 		
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
-			// ✅ SIMPLIFICAÇÃO: NENHUM grupo propõe batch vazio
-			// Aguarda requests reais para evitar estados estranhos em debug
-			fmt.Printf("[MPX][INST] sn=%d group=%d waiting for requests (no empty batch)\n", i.sn, i.bucketId)
-			return
+			// ✅ NOP: Preenche buraco no log sequencial para não travar delivery
+			// Necessário porque globalSN = localSN*numGroups + groupId cria espaço esparso
+			emptyBatch := &pb.Batch{Requests: nil}
+			batchBytes, err := proto.Marshal(emptyBatch)
+			if err != nil {
+				fmt.Printf("[MPX][INST] sn=%d NOP marshal error: %v\n", i.sn, err)
+				return
+			}
+			val = &pb.MPxValue{
+				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+				Batch: batchBytes,
+			}
+			i.lastVal = val
+			i.lastDigest = sha256.Sum256(batchBytes)
+			i.lastReqBatch = nil
+			reqs = 0
+			fmt.Printf("[MPX][INST] sn=%d group=%d proposing NOP (no requests available)\n", i.sn, i.bucketId)
 		} else {
 			if !i.validateBatchHomogeneity(rb) {
 				return
