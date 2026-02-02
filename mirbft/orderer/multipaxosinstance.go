@@ -849,8 +849,6 @@ func (i *mpxInstance) ProposeIfDue() {
 		val = i.lastVal
 	}
 	
-	// ✅ Bloco "devolver batch" REMOVIDO - não é mais necessário
-	// Requests só são retirados do bucket APÓS quorum (verificado no início)
 	accept := &pb.MPxMsg{Type: &pb.MPxMsg_Accept{Accept: &pb.MPxAccept{
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot:  uint64(i.currentBallot),
