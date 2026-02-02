@@ -682,24 +682,15 @@ func (i *mpxInstance) ProposeIfDue() {
 		numBuckets := int32(len(request.Buckets))
 		numGroups := int32(request.GetNumGroups()) // ✅ Obtém dinamicamente
 		
-		// Calcula quantos buckets pertencem a este grupo
-		bucketsPorGrupo := numBuckets / numGroups
-		if bucketsPorGrupo < 1 {
-			bucketsPorGrupo = 1
-		}
-		
-		// Garante que nextBucketIdx está alinhado ao grupo: b % numGroups == bucketId
-		if i.nextBucketIdx < 0 {
-			i.nextBucketIdx = int32(i.bucketId)
-		}
-		if i.nextBucketIdx % numGroups != int32(i.bucketId) {
-			i.nextBucketIdx = int32(i.bucketId)
-		}
+		// ✅ FIX: Itera até não haver mais buckets do grupo
+		// Não usa bucketsPorGrupo como limite porque pode ser arredondado para baixo
+		// Exemplo: 16 buckets / 5 grupos = 3.2 → 3 (perde buckets!)
+		// Solução: itera enquanto b < numBuckets
 		
 		var selectedReq *request.Request
 		
 		// Itera por TODOS os buckets do grupo: groupId, groupId+numGroups, groupId+2*numGroups, ...
-		for k := int32(0); k < bucketsPorGrupo; k++ {
+		for k := int32(0); ; k++ {
 			b := int32(i.bucketId) + k*numGroups
 			if b >= numBuckets {
 				break
@@ -759,9 +750,15 @@ func (i *mpxInstance) ProposeIfDue() {
 			}
 		}
 		
+		// Conta quantos buckets foram verificados
+		bucketsChecked := int32(0)
+		for b := int32(i.bucketId); b < numBuckets; b += numGroups {
+			bucketsChecked++
+		}
+		
 		if rb == nil && selectedReq == nil {
 			fmt.Printf("[MPX][PROPOSE] sn=%d group=%d no request found in any bucket (tried %d buckets)\n", 
-				i.sn, i.bucketId, bucketsPorGrupo)
+				i.sn, i.bucketId, bucketsChecked)
 		}
 		
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {

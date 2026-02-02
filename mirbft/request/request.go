@@ -568,18 +568,12 @@ func GetBucketNr(req *pb.ClientRequest) int {
 		return 0
 	}
 	
-	// ✅ SOLUÇÃO: bucket dentro do grupo
+	// ✅ CORREÇÃO: bucket intercalado por grupo
 	// Fórmula: bucket = groupId + numGroups * hash
 	// Garante que grupo g só usa buckets onde b % numGroups == g
 	numGroups := GetNumGroups() // ✅ Obtém dinamicamente
 	if numGroups <= 0 {
 		numGroups = 1
-	}
-	
-	bucketsPerGroup := n / numGroups
-	if bucketsPerGroup <= 0 {
-		// Fallback: distribuição global se configuração inválida
-		return int((rid.GetClientId() + rid.GetClientSn()) % int32(n))
 	}
 	
 	g := int(req.GetGroupId())
@@ -590,17 +584,28 @@ func GetBucketNr(req *pb.ClientRequest) int {
 		g = g % numGroups
 	}
 	
-	// Hash dentro do grupo (0..bucketsPerGroup-1)
-	h := int((rid.GetClientId() + rid.GetClientSn()) % int32(bucketsPerGroup))
+	// ✅ FIX: Hash distribui uniformemente entre os buckets do grupo
+	// bucketsPerGroup = quantos buckets cada grupo pode usar
+	// Com 16 buckets e 5 grupos: 16/5 = 3 (alguns grupos terão 4)
+	bucketsPerGroup := n / numGroups
+	if bucketsPerGroup <= 0 {
+		bucketsPerGroup = 1
+	}
+	
+	// Hash seleciona offset dentro dos buckets do grupo
+	// Usa módulo grande para distribuir melhor
+	h := int((rid.GetClientId() + rid.GetClientSn()) % int32(bucketsPerGroup*10)) % bucketsPerGroup
 	
 	// Bucket final: g + numGroups * h
-	// Exemplos com 80 buckets, 5 grupos (16 buckets/grupo):
-	//   group 1, h=0 → 1 + 5*0 = 1
-	//   group 1, h=1 → 1 + 5*1 = 6
-	//   group 1, h=2 → 1 + 5*2 = 11
-	//   group 3, h=0 → 3 + 5*0 = 3
-	//   group 3, h=1 → 3 + 5*1 = 8
-	return g + numGroups*h
+	// Garante que bucket % numGroups == g
+	b := g + numGroups*h
+	
+	// Garante que não ultrapassa limite
+	if b >= n {
+		b = g + numGroups*((b-g)/numGroups % bucketsPerGroup)
+	}
+	
+	return b
 }
 
 // IsMultiGroupRequest verifica se request toca múltiplos grupos (precisa atomic global order)
