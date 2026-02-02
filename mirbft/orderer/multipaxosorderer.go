@@ -356,7 +356,11 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 	
 	// ✅ Pipeline window scheduler (correto conforme artigo)
 	nextLocalSN := int32(0)
-	windowW := int32(1) // Começa com 1 para debug, depois aumentar para 4-8
+	// Window size: número de instâncias de consenso em paralelo
+	// - Valor alinhado com NumBuckets (16) do config.yml
+	// - Balanceia throughput vs uso de recursos
+	// - Para máximo throughput: use 32 (CPUs) ou 64 (WatermarkWindowSize)
+	windowW := int32(16)
 	inFlight := make(map[int32]*mpxInstance)
 	bucketIdx := int32(groupId)
 	
@@ -386,8 +390,11 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 		}
 	}
 	
-	// Função para garantir janela de instâncias em voo
+	// ✅ Criação PARALELA de instâncias (reduz latência inicial)
 	ensureWindow := func() {
+		var wg sync.WaitGroup
+		var mu sync.Mutex // Protege inFlight map
+		
 		for off := int32(0); off < windowW; off++ {
 			local := nextLocalSN + off
 			gsn := globalOf(local)
@@ -398,47 +405,61 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 			}
 			
 			// Se já existe, não recria
-			if _, ok := inFlight[gsn]; ok {
+			mu.Lock()
+			_, exists := inFlight[gsn]
+			mu.Unlock()
+			if exists {
 				continue
 			}
 			
-			// Cria nova instância
-			inst := o.ensureInstance(gsn)
-			inst.bucketId = groupId
-			inst.bucketIndex = bucketIdx
-			inst.SetMembers(members)
-			o.dispatcher.store(gsn, inst)
-			inst.startWorkers(&o.stopWg)
-			o.backlog.drainTo(gsn, inst.enqueue)
-			
-			// Envia PREPARE
-			prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-				Prepare: &pb.MPxPrepare{
-					Id:      &pb.MPxInstanceId{Sn: gsn, Lead: uint64(membership.OwnID)},
-					Ballot:  uint64(inst.currentBallot),
-					GroupId: groupId,
-				},
-			}}
-			pm := &pb.ProtocolMessage{
-				SenderId: membership.OwnID,
-				Sn:       gsn,
-				Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
-			}
-			if o.emit != nil {
-				inst.enqueue(pm)
-				o.emit(pm)
-			}
-			inst.prepSent = true
-			inFlight[gsn] = inst
-			
-			fmt.Printf("[MPX][SCHED] group=%d create inst globalSN=%d (localSN=%d)\n",
-				groupId, gsn, local)
+			// ✅ Cria instância em paralelo
+			wg.Add(1)
+			go func(localSN, globalSN int32) {
+				defer wg.Done()
+				
+				// Cria nova instância
+				inst := o.ensureInstance(globalSN)
+				inst.bucketId = groupId
+				inst.bucketIndex = bucketIdx
+				inst.SetMembers(members)
+				o.dispatcher.store(globalSN, inst)
+				inst.startWorkers(&o.stopWg)
+				o.backlog.drainTo(globalSN, inst.enqueue)
+				
+				// Envia PREPARE
+				prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
+					Prepare: &pb.MPxPrepare{
+						Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
+						Ballot:  uint64(inst.currentBallot),
+						GroupId: groupId,
+					},
+				}}
+				pm := &pb.ProtocolMessage{
+					SenderId: membership.OwnID,
+					Sn:       globalSN,
+					Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
+				}
+				if o.emit != nil {
+					inst.enqueue(pm)
+					o.emit(pm)
+				}
+				inst.prepSent = true
+				
+				mu.Lock()
+				inFlight[globalSN] = inst
+				mu.Unlock()
+				
+				fmt.Printf("[MPX][SCHED] group=%d create inst globalSN=%d (localSN=%d)\n",
+					groupId, globalSN, localSN)
+			}(local, gsn)
 		}
+		wg.Wait() // Aguarda todas as instâncias serem criadas
 	}
 	
-	// Função para processar instâncias da janela
+	// ✅ Processamento PARALELO de instâncias (latência escondida)
+	// Cada instância processa independentemente enquanto outras esperam rede
 	processSome := func(now time.Time) {
-		processed := int32(0)
+		var wg sync.WaitGroup
 		for off := int32(0); off < windowW; off++ {
 			local := nextLocalSN + off
 			gsn := globalOf(local)
@@ -448,16 +469,15 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 				continue
 			}
 			
-			inst.tick(now)
-			inst.ProposeIfDue()
-			
-			processed++
-			fmt.Printf("[MPX][SCHED] group=%d process globalSN=%d tick+propose\n", groupId, gsn)
-			
-			if processed >= windowW {
-				break
-			}
+			// ✅ Goroutine por instância = paralelismo real
+			wg.Add(1)
+			go func(i *mpxInstance, sn int32) {
+				defer wg.Done()
+				i.tick(now)
+				i.ProposeIfDue()
+			}(inst, gsn)
 		}
+		wg.Wait() // Aguarda todas as instâncias processarem
 	}
 	
 	// Ticker para propostas periódicas
