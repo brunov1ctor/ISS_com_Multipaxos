@@ -147,9 +147,23 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			messenger.EnqueueMsg(pm, nid)
 		}
 	}
-	// ✅ FIX: Nenhum grupo usa segment manager (SN local com mapeamento global)
-	o.segmentChan = nil
-	fmt.Printf("[MPX] Using local SN loop (no segments) ownedGroupID=%d\n", o.ownedGroupID)
+	// ✅ FIX: Apenas força segmentChan=nil se não foi setado pelo multicast orderer
+	// Para orderer "standalone" (não multicast): pode usar SubscribeOrderer() normalmente
+	// Para orderer "filho" do multicast: recebe channel dedicado (fan-out)
+	if o.segmentChan == nil && !o.skipHandlerRegistration {
+		// Standalone: usa segment manager diretamente
+		if config.Config.LeaderPolicy == "Simple" {
+			o.segmentChan = mgr.SubscribeOrderer()
+			fmt.Printf("[MPX] Using segment manager (Simple policy standalone)\n")
+		} else {
+			o.segmentChan = nil
+			fmt.Printf("[MPX] Using local SN loop (no segments) ownedGroupID=%d\n", o.ownedGroupID)
+		}
+	} else if o.segmentChan != nil {
+		fmt.Printf("[MPX] Using dedicated segment channel (multicast fan-out) ownedGroupID=%d\n", o.ownedGroupID)
+	} else {
+		fmt.Printf("[MPX] Using local SN loop (multicast child) ownedGroupID=%d\n", o.ownedGroupID)
+	}
 	if !o.skipHandlerRegistration {
 		messenger.OrdererMsgHandler = o.HandleMessage
 		fmt.Printf("[MPX] Registered global message handler\n")
