@@ -218,11 +218,13 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			for _, req := range b.Requests {
 				if req.GSN > 0 {
 					// Se TouchedGroups já está preenchido, usa direto
-					if len(req.TouchedGroups) > 0 {
+					if len(req.TouchedGroups) > 1 {
 						touchedGroupsMap[req.GSN] = req.TouchedGroups
+						fmt.Printf("[META-STREAM][ANALYZE] GSN %d has TouchedGroups=%v (from request)\n", req.GSN, req.TouchedGroups)
 					} else if req.GroupId > 0 {
 						// Operação single-group
 						touchedGroupsMap[req.GSN] = []uint32{req.GroupId}
+						fmt.Printf("[META-STREAM][ANALYZE] GSN %d single-group=%d\n", req.GSN, req.GroupId)
 					}
 				}
 			}
@@ -231,8 +233,12 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 				if len(groups) > 1 {
 					GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, groups)
 					fmt.Printf("[META-STREAM][REGISTERED] GSN %d -> groups %v\n", gsn, groups)
+				} else {
+					fmt.Printf("[META-STREAM][SKIP] GSN %d single-group=%v\n", gsn, groups)
 				}
 			}
+			fmt.Printf("[META-STREAM][SUMMARY] sn=%d analyzed %d GSNs, found %d multigroup ops\n", 
+				sn, len(touchedGroupsMap), len(touchedGroupsMap))
 		}
 		fmt.Printf("DELIVER sn=%d delivered=%d\n", sn, len(b.Requests))
 	}
