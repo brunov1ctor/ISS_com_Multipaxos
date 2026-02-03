@@ -91,7 +91,7 @@ func CommitEntry(entry *Entry) {
 		Int("nReq", len(entry.Batch.Requests)).
 		//Time("proposed", time.Unix(0, entry.ProposeTs)).
 		//Time("committed", time.Unix(0, entry.CommitTs)).
-		Int64("latency", (entry.CommitTs-entry.CommitTs)/1000000).
+		Int64("latency", (entry.CommitTs-entry.ProposeTs)/1000000).
 		Msg("Committed entry.")
 
 	entryPublishLock.Lock()
