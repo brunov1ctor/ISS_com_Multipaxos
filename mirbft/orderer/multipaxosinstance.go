@@ -960,7 +960,7 @@ func (i *mpxInstance) validateBatchHomogeneity(batch *request.Batch) bool {
 	}
 	
 	// Validação especial para bucket 0 (sequenciador GSN)
-	if i.bucketIndex == 0 && firstGroupId != 0 {
+	if i.bucketId == 0 && firstGroupId != 0 {
 		fmt.Printf("[MPX][INST] sn=%d bucket 0 rejecting groupId=%d (must be 0), returning requests\n", i.sn, firstGroupId)
 		batch.Resurrect()
 		return false
