@@ -183,11 +183,14 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			fmt.Printf("[MPX][ANNOUNCE] sn=%d NOP (empty requests, announcing to log)\n", sn)
 			shouldRespond := true
 			digest := crypto.Hash(batchBytes)
+			now := time.Now().UnixNano()
 			entry := &mirlog.Entry{
 				Sn:            sn,
 				Batch:         &b,
 				Digest:        digest,
 				ShouldRespond: &shouldRespond,
+				ProposeTs:     now,
+				CommitTs:      now,
 			}
 			announcer.Announce(entry)
 			return
@@ -222,11 +225,14 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		} else {
 			fmt.Printf("[MPX][ANNOUNCE] sn=%d NO REQUESTS or NO AM, shouldRespond=%v\n", sn, shouldRespond)
 		}
+		now := time.Now().UnixNano()
 		entry := &mirlog.Entry{
 			Sn:             sn,
 			Batch:          &b,
 			Digest:         digest,
 			ShouldRespond:  &shouldRespond,
+			ProposeTs:      now,
+			CommitTs:       now,
 		}
 		announcer.Announce(entry)
 		
