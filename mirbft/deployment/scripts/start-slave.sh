@@ -68,6 +68,11 @@ mkdir -p \
   "${remote_exp_dir}/raw-results/experiment-output" \
   "${remote_exp_dir}/_debug"
 
+# Copia tls-data para experiment-output (onde o cliente precisa)
+if [ -d "${remote_base_dir}/tls-data" ]; then
+  cp -r "${remote_base_dir}/tls-data" "${remote_exp_dir}/experiment-output/tls-data"
+fi
+
 echo "[start-slave] PWD=${remote_exp_dir}"
 echo "[start-slave] Preparado diretórios básicos:"
 echo "  - experiment-output/"
