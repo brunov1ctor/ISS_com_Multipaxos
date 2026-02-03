@@ -88,8 +88,8 @@ type mpxInstance struct {
 	parent *MultiPaxosOrderer       // Referência ao orderer pai
 	sn     int32                     // Sequence Number desta instância
 	bucketId uint32                 // ID do grupo (bucket)
-	bucketIndex int32               // Índice do bucket para requests
-	nextBucketIdx int32             // Próximo bucket a verificar (round-robin)
+	groupBucketIDs []int            // IDs dos buckets deste grupo
+	groupBucketGroup *request.BucketGroup // BucketGroup agregado para batching eficiente
 	proposeEvery  time.Duration     // Intervalo entre propostas
 	announce      AnnounceFn        // Função para anunciar commits
 	lastProposeAt time.Time         // Última vez que propôs
@@ -134,20 +134,18 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ 
 		parent:         parent,
 		sn:             sn,
 		bucketId:       0,
-		bucketIndex:    -1,
-		nextBucketIdx:  0,
 		proposeEvery:   interval,
 		announce:       announce,
 		lastProposeAt:  now,
 		phase:          phaseInit,
 		acceptRtxEvery: interval * 2,
 		lastAcceptAt:   now,
-		roundStartAt:   now, // ✅ Inicializa início da rodada
+		roundStartAt:   now,
 		msgCh:          make(chan *pb.ProtocolMessage, 8192),
 		stopCh:         make(chan struct{}),
 		promisedBallot: 0,
 		acceptedBallot: 0,
-		currentBallot:  int64(uint64(membership.OwnID)), // Ballot inicial baseado no ID do nó
+		currentBallot:  int64(uint64(membership.OwnID)),
 	}
 	fmt.Printf("[MPX][INST] sn=%d created\n", sn)
 	return inst
@@ -175,6 +173,29 @@ func (i *mpxInstance) setSegment(seg manager.Segment) {
 		i.quorum = n/2 + 1
 		fmt.Printf("[MPX][INST] sn=%d segment bound, quorum=%d (group members=%d)\n", i.sn, i.quorum, len(i.members))
 	}
+}
+
+// initGroupBuckets - Inicializa BucketGroup agregado com todos os buckets do grupo
+// Deve ser chamado após bucketId ser definido
+func (i *mpxInstance) initGroupBuckets() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	
+	numBuckets := len(request.Buckets)
+	numGroups := len(i.parent.am.GetDefinedGroups())
+	if numGroups == 0 {
+		numGroups = 1
+	}
+	
+	// Coleta IDs dos buckets deste grupo: bucketId, bucketId+numGroups, bucketId+2*numGroups, ...
+	i.groupBucketIDs = make([]int, 0)
+	for b := int(i.bucketId); b < numBuckets; b += numGroups {
+		i.groupBucketIDs = append(i.groupBucketIDs, b)
+	}
+	
+	// Cria BucketGroup agregado
+	i.groupBucketGroup = request.NewBucketGroup(i.groupBucketIDs)
+	fmt.Printf("[MPX][INST] sn=%d initialized group buckets: %v (total=%d)\n", i.sn, i.groupBucketIDs, len(i.groupBucketIDs))
 }
 // startWorkers - Inicia worker assíncrono para processar mensagens
 // Cada instância tem seu próprio worker para evitar bloqueios entre instâncias
@@ -259,6 +280,13 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	}
 	ballot := uint64(prepare.GetBallot())
 	i.bucketId = prepare.GetGroupId()
+	
+	// ✅ Inicializa BucketGroup agregado quando bucketId é definido pela primeira vez
+	if i.groupBucketGroup == nil {
+		i.mu.Unlock()
+		i.initGroupBuckets()
+		i.mu.Lock()
+	}
 	if int64(ballot) > i.currentBallot && i.leader == membership.OwnID {
 		seenCounter := ballot >> 32
 		i.currentBallot = int64((seenCounter + 1) << 32 | uint64(membership.OwnID))
@@ -403,16 +431,7 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 			i.lastDigest = incomingDigest
 		}
 	}
-	if i.acceptedFrom == nil {
-		i.acceptedFrom = make(map[int32]struct{})
-	}
-	if len(i.members) == 0 || i.isInGroup(membership.OwnID) {
-		i.acceptedFrom[membership.OwnID] = struct{}{}
-		i.acceptCount++
-		fmt.Printf("[MPX][INST] sn=%d self-vote counted, acceptCount=%d/%d\n", i.sn, i.acceptCount, i.quorum)
-	} else {
-		fmt.Printf("[MPX][INST] sn=%d self-vote skipped (not in group)\n", i.sn)
-	}
+	// ✅ FIX: Acceptor NÃO conta votos, apenas envia ACCEPTED ao líder
 	accepted := &pb.MPxMsg{Type: &pb.MPxMsg_Accepted{Accepted: &pb.MPxAccepted{
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot:  ballot,
@@ -425,10 +444,10 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accepted},
 	}
 	if i.leader == membership.OwnID {
-		fmt.Printf("[MPX][INST] sn=%d skip ACCEPTED to self (checking quorum directly)\n", i.sn)
-		// ✅ FIX: Líder deve verificar quorum após contar seu próprio voto
+		// ✅ FIX: Líder processa seu próprio ACCEPTED como se fosse de outro nó
+		fmt.Printf("[MPX][INST] sn=%d processing self-ACCEPTED as leader\n", i.sn)
 		i.mu.Unlock()
-		i.onAccepted(nil, accepted.Type.(*pb.MPxMsg_Accepted).Accepted)
+		i.onAccepted(resp, accepted.Type.(*pb.MPxMsg_Accepted).Accepted)
 		i.mu.Lock()
 		return
 	}
@@ -440,24 +459,32 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if pm != nil {
-		if i.acceptedFrom == nil {
-			i.acceptedFrom = make(map[int32]struct{})
-		}
-		if _, ok := i.acceptedFrom[pm.SenderId]; ok {
-			return
-		}
-		if len(i.members) == 0 || i.isInGroup(pm.SenderId) {
-			i.acceptedFrom[pm.SenderId] = struct{}{}
-			i.acceptCount++
-			fmt.Printf("[MPX][INST] sn=%d vote from=%d counted, acceptCount=%d/%d\n", i.sn, pm.SenderId, i.acceptCount, i.quorum)
-		} else {
-			fmt.Printf("[MPX][INST] sn=%d vote from=%d skipped (not in group)\n", i.sn, pm.SenderId)
-			return
-		}
-	} else {
-		i.acceptCount++
+	
+	// ✅ FIX: pm nunca deve ser nil - sempre recebe ProtocolMessage válido
+	if pm == nil {
+		fmt.Printf("[MPX][INST] sn=%d ERROR: onAccepted called with nil pm\n", i.sn)
+		return
 	}
+	
+	if i.acceptedFrom == nil {
+		i.acceptedFrom = make(map[int32]struct{})
+	}
+	
+	// Verifica duplicata
+	if _, ok := i.acceptedFrom[pm.SenderId]; ok {
+		return
+	}
+	
+	// Valida membership
+	if len(i.members) > 0 && !i.isInGroup(pm.SenderId) {
+		fmt.Printf("[MPX][INST] sn=%d vote from=%d skipped (not in group)\n", i.sn, pm.SenderId)
+		return
+	}
+	
+	// ✅ Conta voto UMA ÚNICA VEZ
+	i.acceptedFrom[pm.SenderId] = struct{}{}
+	i.acceptCount++
+	fmt.Printf("[MPX][INST] sn=%d vote from=%d counted, acceptCount=%d/%d\n", i.sn, pm.SenderId, i.acceptCount, i.quorum)
 	
 	// Incorporada lógica da função duplicada ProposeIfDue() aqui
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
@@ -647,18 +674,15 @@ func (i *mpxInstance) ProposeIfDue() {
 	
 	i.lastProposeAt = time.Now()
 	
-	// Permite novas propostas após commit (instância já foi fechada)
 	if i.phase >= phaseAcceptSent && i.phase != phaseCommitted {
 		return
 	}
 	
-	// Se já commitou, esta instância está finalizada
 	if i.closed {
 		return
 	}
 	
 	// ✅ CORREÇÃO MultiPaxos "steady leader": Verifica quorum ANTES de pegar requests
-	// Phase 1 (PREPARE/PROMISE) deve completar antes de Phase 2 (ACCEPT)
 	if !i.prepared {
 		if i.promiseCount < i.quorum {
 			fmt.Printf("[MPX][INST] sn=%d waiting quorum promises (%d/%d)\n",
@@ -672,119 +696,19 @@ func (i *mpxInstance) ProposeIfDue() {
 	
 	var val *pb.MPxValue
 	reqs := 0
+	
 	if i.lastVal == nil {
-		// ✅ FIX: Verifica apenas bucketIndex (seg pode ser nil em runLocalSNLoop)
-		if i.bucketIndex < 0 {
-			fmt.Printf("[MPX][PROPOSE] sn=%d bucketIndex not set, skipping\n", i.sn)
+		// ✅ FIX: Verifica se BucketGroup foi inicializado
+		if i.groupBucketGroup == nil {
+			fmt.Printf("[MPX][PROPOSE] sn=%d groupBucketGroup not initialized, skipping\n", i.sn)
 			return
 		}
-		var rb *request.Batch
-		// ✅ CORREÇÃO: Propõe apenas GSN esperado para evitar buffering excessivo
-		// Obtém lastDeliveredGSN para este grupo
-		var expectedGSN uint64
-		if GetGlobalMulticastOrderer() != nil {
-			GetGlobalMulticastOrderer().expectedGSNMu.RLock()
-			expected, exists := GetGlobalMulticastOrderer().lastDeliveredGSN[i.bucketId]
-			if !exists {
-				expected = 0
-			}
-			expectedGSN = expected + 1
-			GetGlobalMulticastOrderer().expectedGSNMu.RUnlock()
-		} else {
-			expectedGSN = 1 // Fallback se não há multicast orderer
-		}
 		
-		// Round-robin entre todos os buckets do grupo com stride
-		// Calcula numBuckets e numGroups
-		numBuckets := int32(len(request.Buckets))
-		// ✅ FIX: Usa número real de grupos definidos, não valor do request package
-		numGroups := int32(len(i.parent.am.GetDefinedGroups()))
-		if numGroups == 0 {
-			numGroups = 1
-		}
-		
-		// ✅ FIX: Itera até não haver mais buckets do grupo
-		// Não usa bucketsPorGrupo como limite porque pode ser arredondado para baixo
-		// Exemplo: 16 buckets / 5 grupos = 3.2 → 3 (perde buckets!)
-		// Solução: itera enquanto b < numBuckets
-		
-		var selectedReq *request.Request
-		
-		// Itera por TODOS os buckets do grupo: groupId, groupId+numGroups, groupId+2*numGroups, ...
-		for k := int32(0); ; k++ {
-			b := int32(i.bucketId) + k*numGroups
-			if b >= numBuckets {
-				break
-			}
-			
-			// Tenta remover request deste bucket
-			request.Buckets[b].Lock()
-			
-			if i.bucketId == 0 {
-				// Grupo 0: prioriza requests sistêmicas
-				systemReq := request.Buckets[b].FindSystemRequest()
-				if systemReq != nil {
-					selectedReq = systemReq
-					request.Buckets[b].RemoveNoLock(selectedReq)
-					request.Buckets[b].Unlock()
-					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-					i.nextBucketIdx = (b + numGroups) % numBuckets
-					break
-				}
-				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
-				if selectedReq != nil {
-					request.Buckets[b].RemoveNoLock(selectedReq)
-					request.Buckets[b].Unlock()
-					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-					i.nextBucketIdx = (b + numGroups) % numBuckets
-					break
-				}
-				request.Buckets[b].Unlock()
-			} else {
-				// Tenta expectedGSN primeiro (cross-op)
-				selectedReq = request.Buckets[b].FindRequestWithGSN(expectedGSN)
-				if selectedReq != nil {
-					request.Buckets[b].RemoveNoLock(selectedReq)
-					request.Buckets[b].Unlock()
-					rb = &request.Batch{Requests: []*request.Request{selectedReq}}
-					i.nextBucketIdx = (b + numGroups) % numBuckets
-					break
-				}
-				
-				// Single-group: drena até maxBatchSize TOTAL
-				if rb == nil {
-					rb = &request.Batch{Requests: make([]*request.Request, 0, i.parent.maxBatchSize)}
-				}
-				// Mudança 1: remaining = limite global - já coletado
-				remaining := i.parent.maxBatchSize - len(rb.Requests)
-				if remaining > 0 {
-					batchReqs := request.Buckets[b].RemoveFirstSingleGroup(remaining, []*request.Request{})
-					rb.Requests = append(rb.Requests, batchReqs...)
-				}
-				request.Buckets[b].Unlock()
-				
-				// Mudança 1: Para quando remaining == 0
-				if len(rb.Requests) >= i.parent.maxBatchSize {
-					i.nextBucketIdx = (b + numGroups) % numBuckets
-					break
-				}
-			}
-		}
-		
-		// Conta quantos buckets foram verificados
-		bucketsChecked := int32(0)
-		for b := int32(i.bucketId); b < numBuckets; b += numGroups {
-			bucketsChecked++
-		}
-		
-		if rb == nil && selectedReq == nil {
-			fmt.Printf("[MPX][PROPOSE] sn=%d group=%d no request found in any bucket (tried %d buckets)\n", 
-				i.sn, i.bucketId, bucketsChecked)
-		}
+		// ✅ NOVA LÓGICA: Usa BucketGroup agregado para cortar batch de TODOS os buckets do grupo
+		rb := i.groupBucketGroup.CutBatch(i.parent.maxBatchSize, i.proposeEvery)
 		
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
-			// ✅ NOP: Preenche buraco no log sequencial para não travar delivery
-			// Necessário porque globalSN = localSN*numGroups + groupId cria espaço esparso
+			// NOP: Preenche buraco no log sequencial
 			emptyBatch := &pb.Batch{Requests: nil}
 			batchBytes, err := proto.Marshal(emptyBatch)
 			if err != nil {
@@ -805,6 +729,8 @@ func (i *mpxInstance) ProposeIfDue() {
 				return
 			}
 			batchMsg := rb.Message()
+			
+			// Validação cross-op
 			if len(batchMsg.Requests) > 0 && len(batchMsg.Requests[0].TouchedGroups) > 1 {
 				if len(batchMsg.Requests) != 1 {
 					fmt.Printf("[CROSS-OP][ERROR] sn=%d batch has %d requests, cross-op must be alone\n", 
@@ -813,6 +739,7 @@ func (i *mpxInstance) ProposeIfDue() {
 					return
 				}
 			}
+			
 			var crossOpGSN uint64
 			for _, req := range rb.Requests {
 				if len(req.Msg.TouchedGroups) > 1 {
@@ -827,13 +754,15 @@ func (i *mpxInstance) ProposeIfDue() {
 					break
 				}
 			}
+			
 			i.lastReqBatch = rb
 			reqs = len(batchMsg.Requests)
 			batchBytes, err := proto.Marshal(batchMsg)
 			if err != nil {
 				return
 			}
-			// GSN para todas: sempre embute GSN se presente
+			
+			// GSN encoding se necessário
 			var gsnToEncode uint64
 			if crossOpGSN > 0 {
 				gsnToEncode = crossOpGSN
@@ -844,6 +773,7 @@ func (i *mpxInstance) ProposeIfDue() {
 				batchBytes = encodeGSNBatch(gsnToEncode, batchBytes)
 				fmt.Printf("[GSN-ALL] sn=%d encoded gsn=%d into batch (cross-op=%t)\n", i.sn, gsnToEncode, crossOpGSN > 0)
 			}
+			
 			val = &pb.MPxValue{
 				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 				Batch: batchBytes,
@@ -851,7 +781,7 @@ func (i *mpxInstance) ProposeIfDue() {
 			i.lastVal = val
 			i.lastDigest = sha256.Sum256(batchBytes)
 		}
-		// ✅ FIX: Não inicializa acceptCount aqui - onAccept vai contar quando receber próprio ACCEPT
+		
 		i.acceptedFrom = map[int32]struct{}{}
 		i.acceptCount = 0
 	} else {
