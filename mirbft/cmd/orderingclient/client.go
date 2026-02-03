@@ -209,6 +209,10 @@ func newClient(dServAddr string, numRequests int) *client {
 // Loads private key for signing requests
 func (c *client) loadPrivKey(privKeyFile string) {
 	var err error
+	// Log current working directory for debugging
+	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+		c.log.Info().Str("cwd", cwd).Str("privKeyFile", privKeyFile).Msg("Loading private key")
+	}
 	c.privKey, err = crypto.PrivateKeyFromFile("../../" + privKeyFile)
 	if err != nil {
 		c.log.Fatal().

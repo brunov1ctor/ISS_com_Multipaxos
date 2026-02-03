@@ -70,7 +70,9 @@ mkdir -p \
 
 # Copia tls-data para experiment-output (onde o cliente precisa)
 if [ -d "${remote_base_dir}/tls-data" ]; then
+  rm -rf "${remote_exp_dir}/experiment-output/tls-data" 2>/dev/null || true
   cp -r "${remote_base_dir}/tls-data" "${remote_exp_dir}/experiment-output/tls-data"
+  echo "[start-slave] Copiados $(ls -1 ${remote_exp_dir}/experiment-output/tls-data/ | wc -l) arquivos TLS para experiment-output/tls-data"
 fi
 
 echo "[start-slave] PWD=${remote_exp_dir}"
