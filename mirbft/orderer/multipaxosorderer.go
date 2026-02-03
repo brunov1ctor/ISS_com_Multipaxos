@@ -312,12 +312,10 @@ func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	inst, ok := o.dispatcher.load(sn)
 	if !ok || inst == nil {
 		inst = o.ensureInstance(sn)
-		// Seta bucketId e bucketIndex baseado na mensagem
+		// Seta bucketId baseado na mensagem
 		if mpx != nil {
 			inst.bucketId = groupID
-			// ✅ FIX: bucketIndex = groupId (not array position)
-			inst.bucketIndex = int32(groupID)
-			fmt.Printf("[MPX][INST] sn=%d set bucketId=%d bucketIndex=%d from message\n", sn, groupID, int32(groupID))
+			fmt.Printf("[MPX][INST] sn=%d set bucketId=%d from message\n", sn, groupID)
 		}
 		o.dispatcher.store(sn, inst)
 		inst.startWorkers(&o.stopWg)
@@ -442,7 +440,6 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 				// Cria nova instância
 				inst := o.ensureInstance(globalSN)
 				inst.bucketId = groupId
-				inst.bucketIndex = bucketIdx
 				inst.SetMembers(members)
 				o.dispatcher.store(globalSN, inst)
 				inst.startWorkers(&o.stopWg)
@@ -632,7 +629,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						inst = o.ensureInstance(currentSN)
 						inst.setSegment(seg)
 						inst.bucketId = gid
-						inst.bucketIndex = bIdx
 						inst.SetMembers(members)
 						o.dispatcher.store(currentSN, inst)
 						inst.startWorkers(&o.stopWg)
@@ -659,11 +655,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					} else {
 						// Instância já existe, atualiza bucketIndex e bucketId se necessário
 						inst.mu.Lock()
-						if inst.bucketIndex < 0 {
-							// ✅ FIX: bucketIndex = groupId (not array position)
-							inst.bucketIndex = int32(gid)
+						if inst.bucketId == 0 {
 							inst.bucketId = gid
-							fmt.Printf("[MPX][INST] sn=%d updated bucketIndex=%d bucketId=%d\n", currentSN, int32(gid), gid)
+							fmt.Printf("[MPX][INST] sn=%d updated bucketId=%d\n", currentSN, gid)
 						}
 						inst.mu.Unlock()
 					}
