@@ -52,7 +52,7 @@ reuseFaulty=true  # If true, both correct and faulty peers will have the same ta
 loggingLevel="debug" #"info"
 peerTag="peers"
 faultyPeerTag="faultyPeers"
-minConcurrentRequests=$((256 * 128)) # Optimized for low latency: ~33K requests = 2min queue at 256 req/s
+minConcurrentRequests=$((256 * 16384)) # Based on empirical data. At saturation, makes the throughput-latency plot nicely go up (as it is equivalent to may concurrent clients).
 requestBufferSizes="8192"
 requestHandlerThreadNums="32"
 messageBatchRates="4"       # (in msgs/ms) The number of peers divided by this number gives the message batch timeout in ms
@@ -92,11 +92,11 @@ crashTimings="EpochStart" # Possible values:
 singleLeaderEpoch=$minEpochLength
 
 # Parameters to tune:
-batchsizes="128"           # [requests] Optimized for 128-256 req/s (fills in ~0.5s)
+batchsizes="4096"           # [requests] Optimized for 128-256 req/s
 batchrates="32"             # [batches/s]
-minBatchTimeout="100"      # [ms] Reduced for lower latency
-maxBatchTimeout="500"      # [ms] Reduced for lower latency
-segmentLengths="16"         # [entries]
+minBatchTimeout="1000"      # [ms] Balanced timeout
+maxBatchTimeout="4000"     # [ms] Balanced timeout
+segmentLengths="256"        # [entries] Increased to reduce epoch changes
 viewChangeTimeouts="60000"  # [ms]
 nodeToLeaderRatios="1"      # How many nodes are initally leaders, set to 1 to have initially all nodes in the leaderset
 
