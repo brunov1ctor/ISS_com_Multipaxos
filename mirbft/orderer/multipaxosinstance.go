@@ -569,6 +569,10 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 						Msg: &pb.ProtocolMessage_GsnReqForward{
 							GsnReqForward: &pb.GSNReqForward{
 								Req: &pb.ClientRequest{
+									RequestId: &pb.RequestID{
+										ClientId: requester,
+										ClientSn: 0,
+									},
 									Payload: []byte(fmt.Sprintf("SYSTEM:GSN_RESPONSE:%d:%d", reqID, gsn)),
 								},
 							},

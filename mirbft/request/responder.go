@@ -15,6 +15,7 @@
 package request
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"time"
@@ -27,6 +28,9 @@ import (
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/tracing"
 )
+
+// Prefixo para mensagens internas do protocolo (GSN/META)
+var systemPrefix = []byte("SYSTEM:")
 
 // ========================== Instrumentação extra ============================
 
@@ -112,6 +116,12 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 		for _, req := range e.Batch.Requests {
 			if req == nil || req.RequestId == nil {
 				fmt.Printf("[RESPONDER][WARN] sn=%d request sem RequestId — ignorando\n", e.Sn)
+				continue
+			}
+			
+			// ✅ FIX: Não responda operações internas do protocolo (GSN/META) como se fossem cliente
+			if bytes.HasPrefix(req.Payload, systemPrefix) {
+				skipped++
 				continue
 			}
 
