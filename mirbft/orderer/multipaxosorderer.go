@@ -382,7 +382,6 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 	// - Para máximo throughput: use 32 (CPUs) ou 64 (WatermarkWindowSize)
 	windowW := int32(16)
 	inFlight := make(map[int32]*mpxInstance)
-	bucketIdx := int32(groupId)
 	
 	// Função auxiliar: mapeia localSN → globalSN
 	globalOf := func(local int32) int32 {
