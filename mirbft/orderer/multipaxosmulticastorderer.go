@@ -119,8 +119,8 @@ type MultiPaxosMulticastOrderer struct {
 type PendingCommit struct {
 	gsn       uint64                           // GSN desta operação
 	groupID   uint32                           // Grupo que fez o commit
-	batch     []byte                           // Dados do batch
-	announce  func(int32, []byte, []byte)     // Função para anunciar o commit
+	batch     *pb.Batch                        // ✅ Changed from []byte to *pb.Batch
+	announce  func(int32, *pb.Batch, []byte)  // ✅ Changed signature
 	sn        int32                            // Sequence Number local do grupo
 	digest    []byte                           // Hash do batch
 }
@@ -515,7 +515,7 @@ func (o *MultiPaxosMulticastOrderer) ADeliver(gsn uint64, groupID uint32, batch 
 }
 
 // Buffer para commits fora de ordem
-func (o *MultiPaxosMulticastOrderer) BufferCommit(gsn uint64, groupID uint32, batch []byte, announce func(int32, []byte, []byte), sn int32, digest []byte) {
+func (o *MultiPaxosMulticastOrderer) BufferCommit(gsn uint64, groupID uint32, batch *pb.Batch, announce func(int32, *pb.Batch, []byte), sn int32, digest []byte) {
 	o.bufferMu.Lock()
 	defer o.bufferMu.Unlock()
 	
@@ -526,7 +526,7 @@ func (o *MultiPaxosMulticastOrderer) BufferCommit(gsn uint64, groupID uint32, ba
 	o.pendingCommits[groupID][gsn] = &PendingCommit{
 		gsn:      gsn,
 		groupID:  groupID,
-		batch:    batch,
+		batch:    batch,  // ✅ Batch diretamente
 		announce: announce,
 		sn:       sn,
 		digest:   digest,

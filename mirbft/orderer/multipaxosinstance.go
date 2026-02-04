@@ -29,7 +29,6 @@ Arquitetura:
 */
 package orderer
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -415,20 +414,26 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT from=%d (leader=%d)\n", i.sn, from, i.leader)
 		return
 	}
-	if a.GetValue() != nil {
-		incomingBatch := a.GetValue().GetBatch()
-		if len(incomingBatch) == 0 {
-			incomingBatch = []byte{}
-		}
-		incomingDigest := sha256.Sum256(incomingBatch)
+	// ✅ VALIDAÇÃO DE DIGEST (igual ao PBFT)
+	if a.GetValue() != nil && a.GetValue().GetBatch() != nil {
+		// Calcula digest usando request.BatchDigest (igual ao PBFT)
+		incomingDigestSlice := request.BatchDigest(a.GetValue().GetBatch())
+		var incomingDigest [32]byte
+		copy(incomingDigest[:], incomingDigestSlice)
+		
+		// Valida digest contra valor já aceito (se houver)
 		if i.lastVal != nil {
 			if incomingDigest != i.lastDigest {
-				fmt.Printf("[MPX][INST] sn=%d digest mismatch (rejecting without state change)\n", i.sn)
+				fmt.Printf("[MPX][INST] sn=%d digest mismatch: expected=%x got=%x (rejecting)\n", 
+					i.sn, i.lastDigest, incomingDigest)
 				return
 			}
+			fmt.Printf("[MPX][INST] sn=%d digest match confirmed\n", i.sn)
 		} else {
+			// Primeira vez que vê um valor - aceita e armazena digest
 			i.lastVal = a.GetValue()
 			i.lastDigest = incomingDigest
+			fmt.Printf("[MPX][INST] sn=%d stored value with digest=%x\n", i.sn, incomingDigest)
 		}
 	}
 	// ✅ FIX: Acceptor NÃO conta votos, apenas envia ACCEPTED ao líder
@@ -528,7 +533,9 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	}
 	if i.lastVal == nil {
 		i.lastVal = val
-		i.lastDigest = sha256.Sum256(val.GetBatch())
+		// Digest calculado usando request.BatchDigest (igual ao PBFT)
+		digestSlice := request.BatchDigest(val.GetBatch())
+		copy(i.lastDigest[:], digestSlice)
 	}
 	i.phase = phaseCommitted
 	if i.lastReqBatch != nil {
@@ -536,18 +543,20 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		i.lastReqBatch = nil
 	}
 	var crossOpGSN uint64
-	var batchBytes []byte
-	batchBytes = i.lastVal.GetBatch()
-	innerBatch := batchBytes
-	if gsn, inner, hasGSN := decodeGSNBatch(batchBytes); hasGSN {
-		crossOpGSN = gsn
-		innerBatch = inner // Usa batch limpo sem MAGIC
-		fmt.Printf("[CROSS-OP] sn=%d onCommit decoded gsn=%d\n", i.sn, gsn)
-	}
-	var b pb.Batch
-	if err := proto.Unmarshal(innerBatch, &b); err != nil {
-		fmt.Printf("[MPX][INST] sn=%d onCommit unmarshal error: %v\n", i.sn, err)
+	// ✅ FIX: Acessa Batch diretamente (sem unmarshal) para preservar assinaturas
+	b := i.lastVal.GetBatch()
+	if b == nil {
+		fmt.Printf("[MPX][INST] sn=%d onCommit batch is nil\n", i.sn)
 		return
+	}
+	
+	// Extrai GSN das requests se presente
+	for _, req := range b.Requests {
+		if len(req.TouchedGroups) > 1 && req.GSN > 0 {
+			crossOpGSN = req.GSN
+			fmt.Printf("[CROSS-OP] sn=%d onCommit found gsn=%d in request\n", i.sn, crossOpGSN)
+			break
+		}
 	}
 	
 	// ✅ Trata NOP (batch vazio): anuncia e fecha sem processar requests
@@ -555,7 +564,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		fmt.Printf("[MPX][INST] sn=%d NOP delivered (empty batch to fill log hole)\n", i.sn)
 		i.phase = phaseCommitted
 		if i.announce != nil {
-			i.announce(i.sn, innerBatch, i.lastDigest[:])
+			i.announce(i.sn, b, i.lastDigest[:])  // ✅ Passa Batch diretamente
 		}
 		i.closed = true
 		traceCommit(i.sn, 0)
@@ -622,8 +631,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		}
 		
 		if i.announce != nil {
-			digestBytes := sha256.Sum256(innerBatch)
-			i.announce(i.sn, innerBatch, digestBytes[:])
+			i.announce(i.sn, b, i.lastDigest[:])  // ✅ Passa Batch diretamente
 		}
 		i.closed = true
 		traceCommit(i.sn, len(b.Requests))
@@ -638,12 +646,14 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		// META é publicado apenas UMA vez pelo proxy no requesthandler.go
 		
 		// Ponto 3: Verifica ordem sequencial antes de entregar
-		if !GetGlobalMulticastOrderer().ADeliver(crossOpGSN, i.bucketId, i.lastVal.GetBatch()) {
+		// ✅ FIX: Marshal batch apenas para ADeliver (que espera bytes)
+		batchBytes, _ := proto.Marshal(b)
+		if !GetGlobalMulticastOrderer().ADeliver(crossOpGSN, i.bucketId, batchBytes) {
 			fmt.Printf("[GSN-ALL] sn=%d gsn=%d out of order, buffering\n", i.sn, crossOpGSN)
 			// Buffer commit fora de ordem
 			if i.announce != nil {
 				digestBytes := i.lastDigest[:]
-				GetGlobalMulticastOrderer().BufferCommit(crossOpGSN, i.bucketId, i.lastVal.GetBatch(), i.announce, i.sn, digestBytes)
+				i.announce(i.sn, b, digestBytes)  // ✅ Passa Batch diretamente
 			}
 			i.closed = true
 			traceCommit(i.sn, len(b.Requests))
@@ -655,7 +665,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	if i.announce != nil {
 		fmt.Printf("[MPX][INST] sn=%d announcing commit, size=%d\n", i.sn, len(b.Requests))
 		digestBytes := i.lastDigest[:]
-		i.announce(i.sn, i.lastVal.GetBatch(), digestBytes)
+		i.announce(i.sn, b, digestBytes)  // ✅ Passa Batch diretamente
 	} else {
 		fmt.Printf("[MPX][INST] sn=%d announcer is nil!\n", i.sn)
 	}
@@ -710,17 +720,14 @@ func (i *mpxInstance) ProposeIfDue() {
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			// NOP: Preenche buraco no log sequencial
 			emptyBatch := &pb.Batch{Requests: nil}
-			batchBytes, err := proto.Marshal(emptyBatch)
-			if err != nil {
-				fmt.Printf("[MPX][INST] sn=%d NOP marshal error: %v\n", i.sn, err)
-				return
-			}
 			val = &pb.MPxValue{
 				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Batch: batchBytes,
+				Batch: emptyBatch,  // ✅ Batch diretamente
 			}
 			i.lastVal = val
-			i.lastDigest = sha256.Sum256(batchBytes)
+			// Digest calculado usando request.BatchDigest (igual ao PBFT)
+			digestSlice := request.BatchDigest(emptyBatch)
+			copy(i.lastDigest[:], digestSlice)
 			i.lastReqBatch = nil
 			reqs = 0
 			fmt.Printf("[MPX][INST] sn=%d group=%d proposing NOP (no requests available)\n", i.sn, i.bucketId)
@@ -757,29 +764,25 @@ func (i *mpxInstance) ProposeIfDue() {
 			
 			i.lastReqBatch = rb
 			reqs = len(batchMsg.Requests)
-			batchBytes, err := proto.Marshal(batchMsg)
-			if err != nil {
-				return
-			}
 			
-			// GSN encoding se necessário
-			var gsnToEncode uint64
-			if crossOpGSN > 0 {
-				gsnToEncode = crossOpGSN
-			} else if len(batchMsg.Requests) > 0 && batchMsg.Requests[0].GSN > 0 {
-				gsnToEncode = batchMsg.Requests[0].GSN
-			}
-			if gsnToEncode > 0 {
-				batchBytes = encodeGSNBatch(gsnToEncode, batchBytes)
-				fmt.Printf("[GSN-ALL] sn=%d encoded gsn=%d into batch (cross-op=%t)\n", i.sn, gsnToEncode, crossOpGSN > 0)
+			// ✅ FIX: Armazena Batch diretamente (sem marshal) para preservar assinaturas
+			// GSN será armazenado no campo GSN das requests individuais
+			var crossOpGSN uint64
+			for _, req := range batchMsg.Requests {
+				if len(req.TouchedGroups) > 1 && req.GSN > 0 {
+					crossOpGSN = req.GSN
+					break
+				}
 			}
 			
 			val = &pb.MPxValue{
 				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Batch: batchBytes,
+				Batch: batchMsg,  // ✅ Batch diretamente, sem marshal
 			}
 			i.lastVal = val
-			i.lastDigest = sha256.Sum256(batchBytes)
+			// Digest calculado usando request.BatchDigest (igual ao PBFT)
+			digestSlice := request.BatchDigest(batchMsg)
+			copy(i.lastDigest[:], digestSlice)
 		}
 		
 		i.acceptedFrom = map[int32]struct{}{}

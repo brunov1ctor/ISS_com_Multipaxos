@@ -46,7 +46,7 @@ import (
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	logger "github.com/rs/zerolog/log"
 )
-type AnnounceFn func(sn int32, batchBytes []byte, metadata []byte)
+type AnnounceFn func(sn int32, batch *pb.Batch, metadata []byte)  // ✅ Changed from batchBytes []byte to batch *pb.Batch
 type mpxDispatcher struct {
 	mm sync.Map
 }
@@ -170,11 +170,10 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	} else {
 		fmt.Printf("[MPX] Skipped handler registration (managed by multicast orderer)\n")
 	}
-	o.announce = func(sn int32, batchBytes []byte, metadata []byte) {
-		// Decodifica batch para verificar se é NOP
-		var b pb.Batch
-		if err := proto.Unmarshal(batchBytes, &b); err != nil {
-			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d unmarshal: %v\n", sn, err)
+	o.announce = func(sn int32, b *pb.Batch, metadata []byte) {
+		// ✅ FIX: Recebe Batch diretamente (sem unmarshal) para preservar assinaturas
+		if b == nil {
+			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d batch is nil\n", sn)
 			return
 		}
 		
@@ -182,11 +181,13 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		if len(b.Requests) == 0 {
 			fmt.Printf("[MPX][ANNOUNCE] sn=%d NOP (empty requests, announcing to log)\n", sn)
 			shouldRespond := true
+			// Marshal apenas para calcular digest
+			batchBytes, _ := proto.Marshal(b)
 			digest := crypto.Hash(batchBytes)
 			now := time.Now().UnixNano()
 			entry := &mirlog.Entry{
 				Sn:            sn,
-				Batch:         &b,
+				Batch:         b,
 				Digest:        digest,
 				ShouldRespond: &shouldRespond,
 				ProposeTs:     now,
@@ -195,27 +196,16 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			announcer.Announce(entry)
 			return
 		}
-		var gsn uint64
-		innerBatch := batchBytes
-		hasGSN := false
-		if gsn, innerBatch, hasGSN = decodeGSNBatch(batchBytes); hasGSN {
-			fmt.Printf("[CROSS-OP] sn=%d decoded gsn=%d from batch\n", sn, gsn)
-		}
-		if err := proto.Unmarshal(innerBatch, &b); err != nil {
-			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d unmarshal: %v\n", sn, err)
-			return
-		}
-		if hasGSN && len(b.Requests) > 0 {
-			for _, req := range b.Requests {
-				req.GSN = gsn
-			}
-		}
+		
 		var digest []byte
 		if len(metadata) > 0 {
 			digest = metadata
 		} else {
+			// Marshal apenas para calcular digest
+			batchBytes, _ := proto.Marshal(b)
 			digest = crypto.Hash(batchBytes)
 		}
+		
 		shouldRespond := true
 		if len(b.Requests) > 0 && o.am != nil {
 			groupId := b.Requests[0].GetGroupId()
@@ -225,10 +215,11 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		} else {
 			fmt.Printf("[MPX][ANNOUNCE] sn=%d NO REQUESTS or NO AM, shouldRespond=%v\n", sn, shouldRespond)
 		}
+		
 		now := time.Now().UnixNano()
 		entry := &mirlog.Entry{
 			Sn:             sn,
-			Batch:          &b,
+			Batch:          b,
 			Digest:         digest,
 			ShouldRespond:  &shouldRespond,
 			ProposeTs:      now,
@@ -237,13 +228,15 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		announcer.Announce(entry)
 		
 		// ✅ META stream: Registra operações multigrupo quando commitadas
-		if hasGSN && len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
-			// Extrai TouchedGroups da primeira requisição
-			if len(b.Requests[0].TouchedGroups) > 1 {
+		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
+			// Extrai GSN e TouchedGroups da primeira requisição
+			if len(b.Requests[0].TouchedGroups) > 1 && b.Requests[0].GSN > 0 {
+				gsn := b.Requests[0].GSN
 				GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, b.Requests[0].TouchedGroups)
 				fmt.Printf("[META-STREAM][REGISTERED] sn=%d GSN %d -> groups %v\n", sn, gsn, b.Requests[0].TouchedGroups)
 			}
 		}
+		
 		fmt.Printf("DELIVER sn=%d delivered=%d\n", sn, len(b.Requests))
 	}
 	fmt.Printf("[MPX] Init ok; cfg: batchSize=%d batchTimeout=%s leaderPolicy=%s\n",
