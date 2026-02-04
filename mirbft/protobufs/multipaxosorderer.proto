@@ -4,6 +4,8 @@ option go_package = "github.com/hyperledger-labs/mirbft/protobufs;protobufs";
 
 package protobufs;
 
+import "request.proto";
+
 message MPxInstanceId {
   int32  sn   = 1;
   uint64 lead = 2;
@@ -11,7 +13,7 @@ message MPxInstanceId {
 
 message MPxValue {
   MPxInstanceId id    = 1;
-  bytes         batch = 2;
+  Batch         batch = 2;  // Direct Batch to preserve signatures
 }
 
 message MPxPrepare {
