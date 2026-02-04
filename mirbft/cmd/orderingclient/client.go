@@ -73,11 +73,10 @@ type client struct {
 	// IMPORTANT: draining happens with stop=1 but closing=0, so resubmissions can still happen.
 	closing int32
 
-	// All requests the client will submit (indexed by client sequence number).
-	// All clients running on the same machine first create (ans sigh) all requests
-	// and only then start submitting them.
-	// This is to remove the CPU bottleneck of running many clients on the same machine.
-	// Filled with data on initialization.
+	// Precomputed payloads (if PrecomputeRequests=true). Signatures are NEVER precomputed.
+	payloads map[int32][]byte
+
+	// In-flight requests (created on-demand with fresh signatures).
 	requests map[int32]*pb.ClientRequest
 
 	// The gRPC client stub data structures used to send and receive requests/responses to and from replicas.
@@ -149,6 +148,7 @@ func newClient(dServAddr string, numRequests int) *client {
 	cl := &client{
 		ownClientID:            -1,
 		numRequests:            numRequests,
+		payloads:               make(map[int32][]byte),
 		requests:               make(map[int32]*pb.ClientRequest),
 		responses:              make(map[int32]map[int32]bool, numRequests),
 		submittedTo:            make(map[int32]map[int32]bool, numRequests),
@@ -194,13 +194,17 @@ func newClient(dServAddr string, numRequests int) *client {
 	// Load signing key
 	if config.Config.SignRequests {
 		cl.loadPrivKey(config.Config.ClientPrivKeyFile)
+		// Fail-fast: abort if key loading failed
+		if cl.privKey == nil {
+			cl.log.Fatal().Msg("SignRequests=true but privKey is nil after loading.")
+		}
 	}
 
-	// Generate all request messages if configured to do so
+	// Precompute ONLY payloads (never signatures)
 	if config.Config.PrecomputeRequests {
-		cl.log.Info().Int("numRequests", numRequests).Msg("Precomputing requests.")
+		cl.log.Info().Int("numRequests", numRequests).Msg("Precomputing payloads (signatures will be created on-demand).")
 		for seqNr := int32(0); seqNr < int32(cl.numRequests); seqNr++ {
-			cl.requests[seqNr] = cl.createRequest(seqNr)
+			cl.payloads[seqNr] = cl.createPayload(seqNr)
 		}
 	}
 
@@ -234,7 +238,8 @@ func (c *client) discoverPeers(dServAddr string) {
 	})
 }
 
-func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
+// createPayload generates only the payload bytes (no signature)
+func (c *client) createPayload(seqNr int32) []byte {
 	// Select operation from workload
 	op := config.SelectWorkloadOp(seqNr)
 	var basePayload string
@@ -255,7 +260,17 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	if paddingSize < 0 {
 		paddingSize = 0
 	}
-	payload := []byte(basePayload + " " + strings.Repeat("X", paddingSize))
+	return []byte(basePayload + " " + strings.Repeat("X", paddingSize))
+}
+
+// createRequest creates a request with FRESH signature (never reuses precomputed signatures)
+func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
+	var payload []byte
+	if config.Config.PrecomputeRequests {
+		payload = c.payloads[seqNr]
+	} else {
+		payload = c.createPayload(seqNr)
+	}
 
 	req := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
@@ -267,14 +282,16 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		GroupId:       0,
 		TouchedGroups: request.ReplicaMapper(payload),
 	}
-	
-	c.log.Debug().Int32("seqNr", seqNr).Interface("touchedGroups", req.TouchedGroups).Str("payload", string(payload[:len(basePayload)])).Msg("Created request")
 
-	var err error
+	// ALWAYS sign fresh (never reuse precomputed signatures)
 	if config.Config.SignRequests {
+		if c.privKey == nil {
+			c.log.Fatal().Int32("clSn", seqNr).Msg("Cannot sign: privKey is nil")
+		}
+		var err error
 		req.Signature, err = crypto.Sign(request.Digest(req), c.privKey)
 		if err != nil {
-			c.log.Error().Err(err).Int32("clSn", seqNr).Msg("Failed signing request.")
+			c.log.Fatal().Err(err).Int32("clSn", seqNr).Msg("Failed signing request.")
 		}
 	}
 
@@ -498,12 +515,8 @@ func (c *client) submitRequest(seqNr int32) {
 		return
 	}
 
-	var req *pb.ClientRequest
-	if config.Config.PrecomputeRequests {
-		req = c.requests[seqNr]
-	} else {
-		req = c.createRequest(seqNr)
-	}
+	// ALWAYS create request fresh (with fresh signature)
+	req := c.createRequest(seqNr)
 
 	// For request creation, the client need not be locked.
 	c.Lock()
