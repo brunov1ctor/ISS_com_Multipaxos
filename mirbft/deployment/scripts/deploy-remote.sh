@@ -227,6 +227,22 @@ else
   log_w "workload.yml não encontrado em ${workload_yml_src}, usando fallback GET hardcoded."
 fi
 
+# === TLS-DATA: DEPLOY DE CERTIFICADOS ===
+log_i "Copiando tls-data para ${remote_base_dir}/tls-data em todos os nós..."
+if [[ -d "${tls_dir}" ]]; then
+  for ip in $(awk '{print $2}' "$instance_info_file"); do
+    (
+      ssh $ssh_options "${remote_user}@${ip}" "rm -rf '${remote_base_dir}/tls-data' && mkdir -p '${remote_base_dir}/tls-data'" && \
+      scp $scp_options "${tls_dir}"/* "${remote_user}@${ip}:${remote_base_dir}/tls-data/"
+    ) &
+  done
+  wait
+  log_i "tls-data copiado para todos os nós."
+else
+  log_e "tls-data não encontrado em ${tls_dir}"
+  exit 1
+fi
+
 # === COPIA instance-info PARA MASTER (IDs determinísticos) ===
 log_i "Copiando instance-info para ${remote_work_dir}/config no master..."
 scp $scp_options "${instance_info_file}" "${remote_user}@${master_ip}:${remote_work_dir}/config/instance-info"
