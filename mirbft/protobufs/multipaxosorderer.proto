@@ -6,59 +6,71 @@ package protobufs;
 
 import "request.proto";
 
+// MPxInstanceId - Unique identifier for a MultiPaxos consensus instance
 message MPxInstanceId {
-  int32  sn   = 1;
-  uint64 lead = 2;
+  int32  sn   = 1;  // Sequence number
+  uint64 lead = 2;  // Leader node ID
 }
 
+// MPxValue - Consensus value wrapper (internal use only)
 message MPxValue {
   MPxInstanceId id    = 1;
-  Batch         batch = 2;  // Direct Batch to preserve signatures
-  bytes         digest = 3; // Digest for Promise messages (avoids re-serialization)
+  Batch         batch = 2;  // Direct Batch reference (never serialized to preserve signatures)
+  bytes         digest = 3; // SHA-256 digest for validation
 }
 
+// MPxPrepare - Phase 1a: Leader requests permission to propose
 message MPxPrepare {
   MPxInstanceId id       = 1;
-  uint64        ballot   = 2;
-  uint32        group_id = 3;
+  uint64        ballot   = 2;  // Ballot number (higher = newer round)
+  uint32        group_id = 3;  // Consensus group ID
 }
 
+// MPxPromise - Phase 1b: Follower promises not to accept lower ballots
+// Returns digest of previously accepted value (if any)
 message MPxPromise {
   MPxInstanceId id       = 1;
-  uint64        ballot   = 2;
-  bool          ok       = 3;
-  bytes         digest   = 4;  // Only digest, not full value (avoids signature corruption)
+  uint64        ballot   = 2;  // Promised ballot number
+  bool          ok       = 3;  // Promise granted
+  bytes         digest   = 4;  // SHA-256 digest of previously accepted batch (if any)
   uint32        group_id = 5;
-  repeated uint32 members = 6;
+  repeated uint32 members = 6; // Group membership list
 }
 
+// MPxAccept - Phase 2a: Leader proposes value after quorum of promises
+// Equivalent to PBFT PREPREPARE - sends FULL BATCH to preserve client signatures
 message MPxAccept {
   MPxInstanceId id     = 1;
   uint64        ballot = 2;
-  MPxValue      value  = 3;
+  Batch         batch  = 3;  // Full Batch with original client signatures
   uint32        group_id = 4;
 }
 
+// MPxAccepted - Phase 2b: Follower accepts proposed value
+// Equivalent to PBFT PREPARE - confirms acceptance to leader
 message MPxAccepted {
   MPxInstanceId id     = 1;
   uint64        ballot = 2;
-  bool          ok     = 3;
+  bool          ok     = 3;  // Value accepted
   uint32        group_id = 4;
 }
 
+// MPxCommit - Phase 3: Leader announces consensus after quorum of accepts
+// Equivalent to PBFT COMMIT - sends only digest (followers already have batch)
 message MPxCommit {
   MPxInstanceId id     = 1;
-  MPxValue      value  = 2;
+  bytes         digest = 2;  // SHA-256 digest (followers use local batch)
   uint32        group_id = 3;
 }
 
+// MPxMsg - MultiPaxos protocol message wrapper
 message MPxMsg {
   oneof type {
-    MPxPrepare  prepare  = 1;
-    MPxPromise  promise  = 2;
-    MPxAccept   accept   = 3;
-    MPxAccepted accepted = 4;
-    MPxCommit   commit   = 5;
+    MPxPrepare  prepare  = 1;  // Phase 1a
+    MPxPromise  promise  = 2;  // Phase 1b
+    MPxAccept   accept   = 3;  // Phase 2a 
+    MPxAccepted accepted = 4;  // Phase 2b 
+    MPxCommit   commit   = 5;  // Phase 3  
   }
 }
 
