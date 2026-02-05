@@ -453,7 +453,8 @@ func (o *MultiPaxosMulticastOrderer) cleanOldMappings(checkpointSN int32) {
 
 // ADeliver - Verifica ordem determinística baseada em META antes de entregar
 // ✅ FIX: Só entrega quando gsn == nextTouchingGSN (determinístico via META)
-func (o *MultiPaxosMulticastOrderer) ADeliver(gsn uint64, groupID uint32, batch []byte) bool {
+// ✅ FIX SIGNATURE: Recebe *pb.Batch diretamente para preservar assinaturas
+func (o *MultiPaxosMulticastOrderer) ADeliver(gsn uint64, groupID uint32, batch *pb.Batch) bool {
 	o.expectedGSNMu.Lock()
 	defer o.expectedGSNMu.Unlock()
 	
