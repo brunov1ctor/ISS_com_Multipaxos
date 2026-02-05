@@ -34,7 +34,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"google.golang.org/protobuf/proto"
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
