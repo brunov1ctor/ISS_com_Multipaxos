@@ -14,6 +14,7 @@ message MPxInstanceId {
 message MPxValue {
   MPxInstanceId id    = 1;
   Batch         batch = 2;  // Direct Batch to preserve signatures
+  bytes         digest = 3; // Digest for Promise messages (avoids re-serialization)
 }
 
 message MPxPrepare {
@@ -26,7 +27,7 @@ message MPxPromise {
   MPxInstanceId id       = 1;
   uint64        ballot   = 2;
   bool          ok       = 3;
-  MPxValue      value    = 4;
+  bytes         digest   = 4;  // Only digest, not full value (avoids signature corruption)
   uint32        group_id = 5;
   repeated uint32 members = 6;
 }

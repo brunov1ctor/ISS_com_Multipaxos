@@ -301,9 +301,10 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		return
 	}
 	i.promisedBallot = ballot
-	var promiseValue *pb.MPxValue
-	if i.acceptedValue != nil {
-		promiseValue = i.acceptedValue
+	// ✅ FIX SIGNATURE: Envia apenas digest, não o valor completo (evita re-serialização)
+	var promiseDigest []byte
+	if i.acceptedValue != nil && i.acceptedValue.GetBatch() != nil {
+		promiseDigest = request.BatchDigest(i.acceptedValue.GetBatch())
 	}
 	groupId := prepare.GetGroupId()
 	members := make([]int32, 0)
@@ -321,7 +322,7 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 			Id:             &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 			Ballot:         ballot,
 			Ok:             true,
-			Value:          promiseValue,
+			Digest:         promiseDigest,
 			GroupId:        groupId,
 			Members:        membersUint32,
 		},
@@ -372,11 +373,10 @@ func (i *mpxInstance) onPromise(from int32, promise *pb.MPxPromise) {
 	}
 	i.promisedFrom[from] = struct{}{}
 	i.promiseCount++
-	if promise.GetValue() != nil {
-		promiseValue := promise.GetValue()
-		i.acceptedValue = promiseValue
-		i.lastVal = promiseValue
-		fmt.Printf("[MPX][INST] sn=%d adopted value from promise\n", i.sn)
+	// ✅ FIX SIGNATURE: Promise agora contém apenas digest, não valor completo
+	// Líder não precisa adotar valor de promises antigas (steady-state leader)
+	if len(promise.GetDigest()) > 0 {
+		fmt.Printf("[MPX][INST] sn=%d promise has digest (value already accepted by follower)\n", i.sn)
 	}
 	fmt.Printf("[MPX][INST] sn=%d promise from=%d counted, promiseCount=%d/%d\n", i.sn, from, i.promiseCount, i.quorum)
 	if i.promiseCount >= i.quorum && !i.prepared {
