@@ -401,9 +401,6 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	}
 	if ballot >= i.acceptedBallot {
 		i.acceptedBallot = ballot
-		if a.GetValue() != nil {
-			i.acceptedValue = a.GetValue()
-		}
 	}
 	if ballot >= i.promisedBallot || i.leader == 0 {
 		i.leader = from
@@ -413,28 +410,20 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT from=%d (leader=%d)\n", i.sn, from, i.leader)
 		return
 	}
-	// ✅ VALIDAÇÃO DE DIGEST (igual ao PBFT)
-	if a.GetValue() != nil && a.GetValue().GetBatch() != nil {
-		// Calcula digest usando request.BatchDigest (igual ao PBFT)
-		incomingDigestSlice := request.BatchDigest(a.GetValue().GetBatch())
-		var incomingDigest [32]byte
-		copy(incomingDigest[:], incomingDigestSlice)
-		
-		// Valida digest contra valor já aceito (se houver)
-		if i.lastVal != nil {
-			if incomingDigest != i.lastDigest {
-				fmt.Printf("[MPX][INST] sn=%d digest mismatch: expected=%x got=%x (rejecting)\n", 
-					i.sn, i.lastDigest, incomingDigest)
-				return
-			}
-			fmt.Printf("[MPX][INST] sn=%d digest match confirmed\n", i.sn)
-		} else {
-			// Primeira vez que vê um valor - aceita e armazena digest
-			i.lastVal = a.GetValue()
-			i.lastDigest = incomingDigest
-			fmt.Printf("[MPX][INST] sn=%d stored value with digest=%x\n", i.sn, incomingDigest)
-		}
+	// ✅ FIX SIGNATURE: ACCEPT contém Batch completo (como PBFT PREPREPARE)
+	batch := a.GetBatch()
+	if batch == nil {
+		fmt.Printf("[MPX][INST] sn=%d ACCEPT without batch (rejecting)\n", i.sn)
+		return
 	}
+	// Armazena valor e calcula digest
+	i.lastVal = &pb.MPxValue{
+		Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(from)},
+		Batch: batch,
+	}
+	digestSlice := request.BatchDigest(batch)
+	copy(i.lastDigest[:], digestSlice)
+	fmt.Printf("[MPX][INST] sn=%d accepted batch with %d requests, digest=%x\n", i.sn, len(batch.Requests), i.lastDigest)
 	// ✅ FIX: Acceptor NÃO conta votos, apenas envia ACCEPTED ao líder
 	accepted := &pb.MPxMsg{Type: &pb.MPxMsg_Accepted{Accepted: &pb.MPxAccepted{
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
@@ -492,10 +481,11 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	
 	// Incorporada lógica da função duplicada ProposeIfDue() aqui
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
+		// ✅ FIX SIGNATURE: Envia apenas digest no COMMIT
 		commit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
 			Commit: &pb.MPxCommit{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Value:   i.lastVal,
+				Digest:  i.lastDigest[:],  // Apenas digest
 				GroupId: i.bucketId,
 			},
 		}}
@@ -505,14 +495,13 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: commit},
 		}
 		if i.parent.emit != nil {
-			fmt.Printf("[MPX][INST] sn=%d QUORUM reached (%d/%d), sending COMMIT\n", i.sn, i.acceptCount, i.quorum)
+			fmt.Printf("[MPX][INST] sn=%d QUORUM reached (%d/%d), sending COMMIT (digest only)\n", i.sn, i.acceptCount, i.quorum)
 			i.parent.emit(pmOut)
 		}
 		
-		// Chama onCommit diretamente
-		val := i.lastVal
+		// Chama onCommit diretamente com digest
 		i.mu.Unlock()
-		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Value: val, GroupId: i.bucketId})
+		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Digest: i.lastDigest[:], GroupId: i.bucketId})
 		i.mu.Lock()
 	}
 }
@@ -522,19 +511,27 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	if i.phase == phaseCommitted {
 		return
 	}
-	val := c.GetValue()
-	if val == nil {
-		fmt.Printf("[MPX][INST] sn=%d NIL commit (val==nil)\n", i.sn)
+	// ✅ FIX SIGNATURE: COMMIT agora contém apenas digest
+	// Valida digest e usa Batch local
+	if len(c.GetDigest()) == 0 {
+		fmt.Printf("[MPX][INST] sn=%d NIL commit (no digest)\n", i.sn)
 		i.phase = phaseCommitted
 		i.closed = true
 		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
 		return
 	}
+	// Valida digest recebido contra digest local
+	var commitDigest [32]byte
+	copy(commitDigest[:], c.GetDigest())
+	if i.lastVal != nil && commitDigest != i.lastDigest {
+		fmt.Printf("[MPX][INST] sn=%d commit digest mismatch: expected=%x got=%x\n", 
+			i.sn, i.lastDigest, commitDigest)
+		return
+	}
 	if i.lastVal == nil {
-		i.lastVal = val
-		// Digest calculado usando request.BatchDigest (igual ao PBFT)
-		digestSlice := request.BatchDigest(val.GetBatch())
-		copy(i.lastDigest[:], digestSlice)
+		// Não tem valor local - armazena digest para validação futura
+		i.lastDigest = commitDigest
+		fmt.Printf("[MPX][INST] sn=%d commit received but no local Batch (digest=%x)\n", i.sn, commitDigest)
 	}
 	i.phase = phaseCommitted
 	if i.lastReqBatch != nil {
@@ -542,12 +539,12 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		i.lastReqBatch = nil
 	}
 	var crossOpGSN uint64
-	// ✅ FIX: Acessa Batch diretamente (sem unmarshal) para preservar assinaturas
-	b := i.lastVal.GetBatch()
-	if b == nil {
-		fmt.Printf("[MPX][INST] sn=%d onCommit batch is nil\n", i.sn)
+	// ✅ FIX SIGNATURE: Usa Batch local (nunca foi serializado)
+	if i.lastVal == nil || i.lastVal.GetBatch() == nil {
+		fmt.Printf("[MPX][INST] sn=%d onCommit no local Batch available\n", i.sn)
 		return
 	}
+	b := i.lastVal.GetBatch()
 	
 	// Extrai GSN das requests se presente
 	for _, req := range b.Requests {
@@ -788,10 +785,11 @@ func (i *mpxInstance) ProposeIfDue() {
 		val = i.lastVal
 	}
 	
+	// ✅ FIX SIGNATURE: Envia Batch completo no ACCEPT (como PBFT PREPREPARE)
 	accept := &pb.MPxMsg{Type: &pb.MPxMsg_Accept{Accept: &pb.MPxAccept{
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot:  uint64(i.currentBallot),
-		Value:   val,
+		Batch:   val.GetBatch(),  // Batch completo
 		GroupId: i.bucketId,
 	}}}
 	pm := &pb.ProtocolMessage{
@@ -800,7 +798,7 @@ func (i *mpxInstance) ProposeIfDue() {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: accept},
 	}
 	if i.parent.emit != nil {
-		fmt.Printf("[PROPOSE] Group %d: sn=%d ACCEPT sent with %d requests\n", i.bucketId, i.sn, reqs)
+		fmt.Printf("[PROPOSE] Group %d: sn=%d ACCEPT sent with %d requests (full batch)\n", i.bucketId, i.sn, reqs)
 		i.parent.emit(pm)
 	}
 	i.phase = phaseAcceptSent
@@ -818,6 +816,7 @@ func (i *mpxInstance) tick(now time.Time) {
 	// Nível 1: Retransmissão de ACCEPT se não obteve quorum
 	if i.phase == phaseAcceptSent && i.acceptCount < i.quorum && now.Sub(i.lastAcceptAt) >= i.acceptRtxEvery {
 		if i.parent.emit != nil && i.lastVal != nil {
+			// ✅ FIX SIGNATURE: Retransmissão envia Batch completo
 			pm := &pb.ProtocolMessage{
 				SenderId: membership.OwnID,
 				Sn:       i.sn,
@@ -826,13 +825,13 @@ func (i *mpxInstance) tick(now time.Time) {
 						Accept: &pb.MPxAccept{
 							Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 							Ballot:  uint64(i.currentBallot),
-							Value:   i.lastVal,
+							Batch:   i.lastVal.GetBatch(),  // Batch completo
 							GroupId: i.bucketId,
 						},
 					}},
 				},
 			}
-			fmt.Printf("[MPX][INST] sn=%d resending ACCEPT (timeout)\n", i.sn)
+			fmt.Printf("[MPX][INST] sn=%d resending ACCEPT (timeout, full batch)\n", i.sn)
 			i.parent.emit(pm)
 			i.lastAcceptAt = now // ✅ Atualiza apenas relógio de retransmissão
 		}
