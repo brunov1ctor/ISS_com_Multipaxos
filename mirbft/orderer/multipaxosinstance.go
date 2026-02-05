@@ -646,9 +646,8 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		// META é publicado apenas UMA vez pelo proxy no requesthandler.go
 		
 		// Ponto 3: Verifica ordem sequencial antes de entregar
-		// ✅ FIX: Marshal batch apenas para ADeliver (que espera bytes)
-		batchBytes, _ := proto.Marshal(b)
-		if !GetGlobalMulticastOrderer().ADeliver(crossOpGSN, i.bucketId, batchBytes) {
+		// ✅ FIX SIGNATURE: Passa Batch diretamente (sem marshal) para preservar assinaturas
+		if !GetGlobalMulticastOrderer().ADeliver(crossOpGSN, i.bucketId, b) {
 			fmt.Printf("[GSN-ALL] sn=%d gsn=%d out of order, buffering\n", i.sn, crossOpGSN)
 			// Buffer commit fora de ordem
 			if i.announce != nil {
