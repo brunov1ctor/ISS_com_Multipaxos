@@ -767,7 +767,6 @@ func (i *mpxInstance) ProposeIfDue() {
 			
 			// ✅ FIX: Armazena Batch diretamente (sem marshal) para preservar assinaturas
 			// GSN será armazenado no campo GSN das requests individuais
-			var crossOpGSN uint64
 			for _, req := range batchMsg.Requests {
 				if len(req.TouchedGroups) > 1 && req.GSN > 0 {
 					crossOpGSN = req.GSN
