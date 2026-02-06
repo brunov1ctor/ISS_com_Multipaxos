@@ -1,35 +1,3 @@
-/*
-MultiPaxos Multicast Orderer - Sistema de Consenso Distribuído Multi-Grupo
-
-Implementa sistema robusto de consenso distribuído que combina:
-1. MultiPaxos: Protocolo de consenso para cada grupo independente
-2. Multicast Atômico: Garante ordem total entre grupos diferentes
-3. GSN (Global Sequence Number): Numeração global única para todas operações
-4. META Stream: Metadados determinísticos sobre quais grupos cada operação toca
-5. Sistema de Liveness: Re-forward automático contra falhas de proxy/rede
-
-Arquitetura do Sistema:
-- Grupo 0: Sequenciador GSN (todos os nós) - garante ordem global determinística
-- Grupos 1,2,3...: Grupos de dados (subconjuntos de nós) - processam operações
-- SN Global Intercalado: Cada grupo usa slots diferentes no mesmo espaço SN
-- Multi-Proxy: Qualquer nó pode atuar como proxy (sem gargalo único)
-
-Fluxo de Operação:
-1. Cliente envia request para qualquer nó (proxy)
-2. Proxy atribui GSN via grupo 0 (sequenciador global)
-3. Proxy publica META uma vez (evita duplicação)
-4. Proxy faz fanout para todos os grupos tocados
-5. Cada grupo processa via MultiPaxos independente
-6. ADeliver verifica ordem sequencial GSN antes de entregar
-7. Sistema de liveness detecta e corrige requests perdidas
-
-Garantias do Sistema:
-- Ordem Global: GSN garante ordem total entre todos os grupos
-- Determinismo: META stream garante consistência de metadados
-- Liveness: Re-forward automático garante entrega eventual
-- Robustez: Tolera falhas de proxy, rede e nós individuais
-- Performance: SN intercalado permite paralelismo entre grupos
-*/
 package orderer
 import (
 	"fmt"
@@ -84,7 +52,6 @@ type MultiPaxosMulticastOrderer struct {
 	gsnReqMu           sync.Mutex
 	gsnSeqCounter      uint32
 	metaSeqCounter     uint32
-	mcastSeqCounter    uint32
 	
 	// GSN Batching - processa múltiplas requests em um consenso
 	gsnBatchPending    []uint64           // IDs das requests aguardando batch
@@ -92,10 +59,6 @@ type MultiPaxosMulticastOrderer struct {
 	gsnBatchTimer      *time.Timer
 	gsnBatchSize       int                // Tamanho máximo do batch (default: 32)
 	gsnBatchTimeout    time.Duration      // Timeout para cortar batch (default: 5ms)
-	
-	// Deduplicação de GSN requests
-	seenGSNReq map[uint64]bool
-	seenGSNMu  sync.Mutex
 	
 	// META Stream
 	gsnMetadata map[uint64][]uint32
@@ -166,9 +129,6 @@ func (o *MultiPaxosMulticastOrderer) initComponents() {
 	
 	// ✅ DEDUPLICACAO: Inicializa controle de META publicados
 	o.publishedMeta = make(map[uint64]bool)
-	
-	// Deduplicação de GSN requests no líder
-	o.seenGSNReq = make(map[uint64]bool)
 }
 
 // loadGroups - Carrega configuração de grupos do arquivo YAML
@@ -309,9 +269,13 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			if n == 2 {
 				o.gsnReqMu.Lock()
 				if ch, exists := o.gsnRequestsPending[reqID]; exists {
-					ch <- gsn
-					delete(o.gsnRequestsPending, reqID)
-					fmt.Printf("[GSN-CLIENT] Received GSN=%d for reqID=%d (via GsnReqForward)\n", gsn, reqID)
+					select {
+					case ch <- gsn:
+						delete(o.gsnRequestsPending, reqID)
+						fmt.Printf("[GSN-REQ][SUCCESS] Received GSN=%d for reqID=%d\n", gsn, reqID)
+					default:
+						fmt.Printf("[GSN-REQ][WARN] Channel full for reqID=%d\n", reqID)
+					}
 				}
 				o.gsnReqMu.Unlock()
 				return // ✅ Não adiciona ao bucket
