@@ -89,10 +89,6 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	bg.lockBuckets()
 	defer bg.unlockBuckets()
 
-	// Wait for batch to fill or for the timeout to fire.
-	// May release and re-acquire the bucket locks before returning.
-	bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
-
 	// Create new request batch
 	newBatch := Batch{Requests: make([]*Request, 0, size)}
 
@@ -105,26 +101,30 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	// Verifica se algum bucket pertence ao grupo 0 (bucket % numGroups == 0)
 	isGroup0 := false
 	if len(bg.buckets) > 0 {
-		// Assume que todos os buckets do BucketGroup pertencem ao mesmo grupo
-		// Verifica se o primeiro bucket é do grupo 0
 		numGroups := getNumGroups()
 		if numGroups > 0 && bg.buckets[0].id % numGroups == 0 {
 			isGroup0 = true
 		}
 	}
 	
+	// FAST-PATH: Se é Group 0 e há SYSTEM messages, NÃO espera timeout
 	if isGroup0 {
-		// Grupo 0: prioriza mensagens sistêmicas (GSN_REQUEST, META_STREAM)
 		for _, b := range bg.buckets {
 			if sysReq := b.FindSystemRequest(); sysReq != nil {
 				b.RemoveNoLock(sysReq)
 				newBatch.Requests = append(newBatch.Requests, sysReq)
-				logger.Debug().Int("bucketId", b.id).Msg("Cut batch with system request (Group 0)")
+				logger.Debug().Int("bucketId", b.id).Msg("Cut batch with system request (Group 0 - fast path)")
 				return &newBatch
 			}
 		}
-	} else {
-		// Grupos de dados: prioriza cross-ops
+	}
+
+	// Wait for batch to fill or for the timeout to fire.
+	// May release and re-acquire the bucket locks before returning.
+	bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
+
+	// Grupos de dados: prioriza cross-ops
+	if !isGroup0 {
 		for _, b := range bg.buckets {
 			if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
 				b.RemoveNoLock(crossOp)
@@ -135,7 +135,7 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 		}
 	}
 
-	// Se não há cross-ops/system requests, corta batch apenas com single-group requests
+	// Se não há cross-ops, corta batch apenas com single-group requests
 	var initCut = 0
 	if size <= int(bg.totalRequests) {
 		initCut = size / len(bg.buckets)
