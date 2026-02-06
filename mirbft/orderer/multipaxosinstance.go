@@ -571,6 +571,73 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		for _, req := range b.Requests {
 			payload := string(req.Payload)
 			
+			// ✅ BATCHING: Processa batch de GSN_REQUEST
+			if strings.HasPrefix(payload, "SYSTEM:GSN_REQUEST:BATCH:") {
+				var batchSize int
+				n, _ := fmt.Sscanf(payload, "SYSTEM:GSN_REQUEST:BATCH:%d", &batchSize)
+				if n < 1 || batchSize <= 0 {
+					continue
+				}
+				
+				// Extrai IDs do batch
+				parts := strings.Split(payload, ":")
+				if len(parts) < 4+batchSize {
+					fmt.Printf("[GSN-BATCH][ERROR] Invalid batch format\n")
+					continue
+				}
+				
+				gmo := GetGlobalMulticastOrderer()
+				gmo.gsnMu.Lock()
+				
+				// Processa cada reqID do batch
+				for i := 0; i < batchSize; i++ {
+					var reqID uint64
+					if _, err := fmt.Sscanf(parts[4+i], "%d", &reqID); err != nil {
+						continue
+					}
+					
+					gsn := gmo.nextGSN
+					gmo.nextGSN++
+					
+					// Extrai requester do reqID
+					requester := int32(reqID >> 32)
+					
+					if requester == membership.OwnID {
+						gmo.gsnReqMu.Lock()
+						if ch, exists := gmo.gsnRequestsPending[reqID]; exists {
+							ch <- gsn
+							delete(gmo.gsnRequestsPending, reqID)
+						}
+						gmo.gsnReqMu.Unlock()
+						fmt.Printf("[GSN-BATCH] GSN=%d for reqID=%d (local)\n", gsn, reqID)
+					} else {
+						resp := &pb.ProtocolMessage{
+							SenderId: membership.OwnID,
+							Sn:       -1,
+							Msg: &pb.ProtocolMessage_GsnReqForward{
+								GsnReqForward: &pb.GSNReqForward{
+									Req: &pb.ClientRequest{
+										RequestId: &pb.RequestID{
+											ClientId: requester,
+											ClientSn: 0,
+										},
+										Payload: []byte(fmt.Sprintf("SYSTEM:GSN_RESPONSE:%d:%d", reqID, gsn)),
+									},
+								},
+							},
+						}
+						messenger.EnqueueMsg(resp, requester)
+						fmt.Printf("[GSN-BATCH] GSN=%d for reqID=%d (remote node=%d)\n", gsn, reqID, requester)
+					}
+				}
+				
+				gmo.persistNextGSN()
+				gmo.gsnMu.Unlock()
+				fmt.Printf("[GSN-BATCH] Processed batch of %d GSN requests\n", batchSize)
+				continue
+			}
+			
+			// ✅ FALLBACK: Processa GSN_REQUEST individual (compatibilidade)
 			if strings.HasPrefix(payload, "SYSTEM:GSN_REQUEST:") {
 				var reqID uint64
 				var requester int32
