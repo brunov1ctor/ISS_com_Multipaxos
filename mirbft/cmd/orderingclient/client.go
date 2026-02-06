@@ -272,6 +272,18 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		payload = c.createPayload(seqNr)
 	}
 
+	touchedGroups := request.ReplicaMapper(payload)
+	
+	// Set GroupId based on operation type
+	var groupId uint32
+	if len(touchedGroups) == 0 {
+		// No groups detected, use Group 0 (will be preprocessed)
+		groupId = 0
+	} else {
+		// Single-group or cross-op: use first data group
+		groupId = touchedGroups[0]
+	}
+	
 	req := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
 			ClientId: c.ownClientID,
@@ -279,8 +291,8 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		},
 		Payload:       payload,
 		Signature:     nil,
-		GroupId:       0,
-		TouchedGroups: request.ReplicaMapper(payload),
+		GroupId:       groupId,
+		TouchedGroups: touchedGroups,
 	}
 
 	// ALWAYS sign fresh (never reuse precomputed signatures)
