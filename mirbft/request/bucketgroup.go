@@ -97,14 +97,21 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	newBatch := Batch{Requests: make([]*Request, 0, size)}
 
 	// If the bucket group is empty (contains no buckets), return an empty batch.
-	// (This is a corner case that should not occur with a reasonable configuration.)
-	// Handling this here is necessary to avoid dividing by zero.
 	if len(bg.buckets) == 0 {
 		return &newBatch
 	}
 
-	// Calculate the initial number of Requests that can be fairly taken from each Bucket.
-	// (Requests from each Bucket must have the chance to make it in the Batch.)
+	// Prioriza cross-ops - se houver uma, retorna batch com apenas ela
+	for _, b := range bg.buckets {
+		if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
+			b.RemoveNoLock(crossOp)
+			newBatch.Requests = append(newBatch.Requests, crossOp)
+			logger.Debug().Int("bucketId", b.id).Uint64("gsn", crossOp.Msg.GSN).Msg("Cut batch with single cross-op")
+			return &newBatch
+		}
+	}
+
+	// Se não há cross-ops, corta batch apenas com single-group requests
 	var initCut = 0
 	if size <= int(bg.totalRequests) {
 		initCut = size / len(bg.buckets)
@@ -112,20 +119,15 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 		initCut = int(bg.totalRequests) / len(bg.buckets)
 	}
 
-	// Add initial requests to the batch.
+	// Add initial single-group requests to the batch
 	for _, b := range bg.buckets {
-		newBatch.Requests = b.RemoveFirst(initCut, newBatch.Requests)
+		newBatch.Requests = b.RemoveFirstSingleGroup(initCut, newBatch.Requests)
 	}
 
-	// Fill rest of the batch with any requests, iterating over all buckets.
+	// Fill rest of the batch with single-group requests only
 	for _, b := range bg.buckets {
-
-		// If we are still missing some requests
 		if len(newBatch.Requests) < size {
-			// Add up to the missing number of requests (size - len(newBatch.Requests)).
-			newBatch.Requests = b.RemoveFirst(size-len(newBatch.Requests), newBatch.Requests)
-
-			// Stop iterating over buckets if enough requests were collected.
+			newBatch.Requests = b.RemoveFirstSingleGroup(size-len(newBatch.Requests), newBatch.Requests)
 		} else {
 			break
 		}
