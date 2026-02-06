@@ -72,6 +72,22 @@ ensure_local_binaries() {
   fi
 
   # =========================================================
+  # Limpar binários e cache antigos antes de recompilar
+  # =========================================================
+  log_info "Limpando binários antigos e cache do Go..."
+  
+  # Remover binários antigos
+  rm -f "$local_bin_dir/discoverymaster" \
+        "$local_bin_dir/discoveryslave" \
+        "$local_bin_dir/orderingpeer" \
+        "$local_bin_dir/orderingclient"
+  
+  # Limpar cache do Go
+  go clean -cache -modcache -i -r 2>/dev/null || true
+  
+  log_info "Cache limpo. Iniciando compilação..."
+  
+  # =========================================================
   # sempre compila os binários a partir do repo.
   # (compila cada cmd separadamente; pronto para build tags)
   # =========================================================
