@@ -758,7 +758,7 @@ func (o *MultiPaxosMulticastOrderer) Mcast(groups []uint32, msg []byte) error {
 	
 	// ✅ 5) Submete request para cada grupo tocado
 	for _, groupID := range groups {
-		mcastSn := atomic.AddUint32(&o.mcastSeqCounter, 1)
+		mcastSn := atomic.AddUint32(&o.gsnSeqCounter, 1)
 		req := &pb.ClientRequest{
 			RequestId: &pb.RequestID{
 				ClientId: membership.OwnID,
