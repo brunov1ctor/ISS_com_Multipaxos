@@ -836,7 +836,9 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 
 	// ✅ REDE: Envia para TODOS os membros do grupo (garante liveness)
 	for _, nodeID := range members {
-		if nodeID == membership.OwnID {
+		// Para grupo 0 (GSN/META), SEMPRE envia via rede para garantir consenso
+		// Para outros grupos, pula envio para si mesmo se já adicionou localmente
+		if nodeID == membership.OwnID && groupID != 0 {
 			continue // Já adicionou localmente acima (se for membro)
 		}
 		
