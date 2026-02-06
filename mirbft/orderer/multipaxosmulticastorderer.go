@@ -275,6 +275,8 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 					default:
 						fmt.Printf("[GSN-REQ][WARN] Channel full for reqID=%d\n", reqID)
 					}
+				} else {
+					fmt.Printf("[GSN-REQ][LATE] Received GSN=%d for reqID=%d but request already timed out or completed\n", gsn, reqID)
 				}
 				o.gsnReqMu.Unlock()
 				return // ✅ Não adiciona ao bucket
@@ -388,7 +390,9 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	
 	o.gsnReqMu.Lock()
 	o.gsnRequestsPending[reqID] = respChan
+	pendingCount := len(o.gsnRequestsPending)
 	o.gsnReqMu.Unlock()
+	fmt.Printf("[GSN-REQ][PENDING] reqID=%d registered, total pending=%d\n", reqID, pendingCount)
 	
 	// ✅ BATCHING: Adiciona ao batch pendente
 	o.gsnBatchMu.Lock()
@@ -416,13 +420,16 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		fmt.Printf("[GSN-REQ][SUCCESS] Received GSN=%d for reqID=%d\n", gsn, reqID)
 		o.gsnReqMu.Lock()
 		delete(o.gsnRequestsPending, reqID)
+		pendingCount := len(o.gsnRequestsPending)
 		o.gsnReqMu.Unlock()
+		fmt.Printf("[GSN-REQ][CLEANUP] reqID=%d removed, remaining pending=%d\n", reqID, pendingCount)
 		return gsn
 	case <-time.After(time.Duration(config.Config.ClientDrainTime) * time.Millisecond):
 		fmt.Printf("[GSN-REQ][ERROR] Timeout waiting for GSN reqID=%d after %dms\n", reqID, config.Config.ClientDrainTime)
 		o.gsnReqMu.Lock()
 		delete(o.gsnRequestsPending, reqID)
-		fmt.Printf("[GSN-REQ][ERROR] Still pending: %d requests\n", len(o.gsnRequestsPending))
+		pendingCount := len(o.gsnRequestsPending)
+		fmt.Printf("[GSN-REQ][ERROR] Still pending: %d requests\n", pendingCount)
 		o.gsnReqMu.Unlock()
 		return 0
 	}
@@ -438,7 +445,7 @@ func (o *MultiPaxosMulticastOrderer) flushGSNBatch() {
 	copy(batch, o.gsnBatchPending)
 	o.gsnBatchPending = o.gsnBatchPending[:0]
 	
-	fmt.Printf("[GSN-BATCH] Flushing batch of %d requests\n", len(batch))
+	fmt.Printf("[GSN-BATCH][SEND] Flushing batch of %d requests: %v\n", len(batch), batch)
 	
 	payload := fmt.Sprintf("%sBATCH:%d", SYSTEM_GSN_REQUEST, len(batch))
 	for _, reqID := range batch {
@@ -455,6 +462,7 @@ func (o *MultiPaxosMulticastOrderer) flushGSNBatch() {
 		TouchedGroups: []uint32{0},
 	}
 	
+	fmt.Printf("[GSN-BATCH][SEND] Sending to group 0: %s\n", payload)
 	o.sendToGroup(gsnReq, 0)
 }
 
