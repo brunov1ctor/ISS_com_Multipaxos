@@ -730,6 +730,7 @@ func (i *mpxInstance) ProposeIfDue() {
 			if !i.validateBatchHomogeneity(rb) {
 				return
 			}
+			// ✅ FIX SIGNATURE: Chama Message() UMA ÚNICA VEZ e armazena resultado
 			batchMsg := rb.Message()
 			
 			// Validação cross-op
@@ -760,18 +761,11 @@ func (i *mpxInstance) ProposeIfDue() {
 			i.lastReqBatch = rb
 			reqs = len(batchMsg.Requests)
 			
-			// ✅ FIX: Armazena Batch diretamente (sem marshal) para preservar assinaturas
-			// GSN será armazenado no campo GSN das requests individuais
-			for _, req := range batchMsg.Requests {
-				if len(req.TouchedGroups) > 1 && req.GSN > 0 {
-					crossOpGSN = req.GSN
-					break
-				}
-			}
-			
+			// ✅ FIX SIGNATURE: Armazena batchMsg (já criado) diretamente
+			// Nunca mais chama Message() - reutiliza este Batch
 			val = &pb.MPxValue{
 				Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Batch: batchMsg,  // ✅ Batch diretamente, sem marshal
+				Batch: batchMsg,  // ✅ Usa batchMsg criado acima
 			}
 			i.lastVal = val
 			// Digest calculado usando request.BatchDigest (igual ao PBFT)
