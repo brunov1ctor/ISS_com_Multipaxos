@@ -852,6 +852,12 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		// ✅ ATALHO: Proxy é membro, adiciona ao bucket local
 		fmt.Printf("[SEND] Adding to local bucket for group %d (I am member)\n", groupID)
 		request.AddReqMsg(req)
+		
+		// ✅ FIX: Para grupo 0, também envia via rede para garantir que todos recebam
+		// META/GSN_REQUEST devem chegar em todos os nós do grupo 0
+		if groupID == 0 {
+			fmt.Printf("[SEND] Group 0: also broadcasting to all members (system messages)\n")
+		}
 	} else {
 		// ✅ PROXY: Não é membro, encaminha para membros do grupo via rede
 		fmt.Printf("[SEND] Forwarding to group %d members (I am NOT member)\n", groupID)

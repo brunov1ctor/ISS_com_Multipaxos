@@ -101,17 +101,41 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 		return &newBatch
 	}
 
-	// Prioriza cross-ops - se houver uma, retorna batch com apenas ela
-	for _, b := range bg.buckets {
-		if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
-			b.RemoveNoLock(crossOp)
-			newBatch.Requests = append(newBatch.Requests, crossOp)
-			logger.Debug().Int("bucketId", b.id).Uint64("gsn", crossOp.Msg.GSN).Msg("Cut batch with single cross-op")
-			return &newBatch
+	// Grupo 0 prioriza mensagens sistêmicas (GSN_REQUEST, META_STREAM)
+	// Verifica se algum bucket pertence ao grupo 0 (bucket % numGroups == 0)
+	isGroup0 := false
+	if len(bg.buckets) > 0 {
+		// Assume que todos os buckets do BucketGroup pertencem ao mesmo grupo
+		// Verifica se o primeiro bucket é do grupo 0
+		numGroups := getNumGroups()
+		if numGroups > 0 && bg.buckets[0].id % numGroups == 0 {
+			isGroup0 = true
+		}
+	}
+	
+	if isGroup0 {
+		// Grupo 0: prioriza mensagens sistêmicas (GSN_REQUEST, META_STREAM)
+		for _, b := range bg.buckets {
+			if sysReq := b.FindSystemRequest(); sysReq != nil {
+				b.RemoveNoLock(sysReq)
+				newBatch.Requests = append(newBatch.Requests, sysReq)
+				logger.Debug().Int("bucketId", b.id).Msg("Cut batch with system request (Group 0)")
+				return &newBatch
+			}
+		}
+	} else {
+		// Grupos de dados: prioriza cross-ops
+		for _, b := range bg.buckets {
+			if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
+				b.RemoveNoLock(crossOp)
+				newBatch.Requests = append(newBatch.Requests, crossOp)
+				logger.Debug().Int("bucketId", b.id).Uint64("gsn", crossOp.Msg.GSN).Msg("Cut batch with single cross-op")
+				return &newBatch
+			}
 		}
 	}
 
-	// Se não há cross-ops, corta batch apenas com single-group requests
+	// Se não há cross-ops/system requests, corta batch apenas com single-group requests
 	var initCut = 0
 	if size <= int(bg.totalRequests) {
 		initCut = size / len(bg.buckets)
