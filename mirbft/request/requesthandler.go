@@ -37,9 +37,9 @@ func handlerThreadIndex(clientID int32, clientSn int32, threads int) int {
 }
 
 // ForwardRequestToNodes envia request para nós específicos (usado para cross-op)
-// ✅ CORREÇÃO: Usa conexões gRPC existentes (mesma infraestrutura do client)
+// Usa conexões gRPC existentes (mesma infraestrutura do client)
 func ForwardRequestToNodes(req *pb.ClientRequest, nodeIDs []int32) {
-	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil
+	// Garante RequestId nunca é nil
 	rid := req.GetRequestId()
 	if rid == nil {
 		fmt.Printf("[FORWARD][ERROR] Request with nil RequestId, dropping\n")
@@ -92,6 +92,13 @@ func HandleRequest(req *pb.ClientRequest) {
 	}
 	fmt.Printf("[HANDLE-REQ][ENTRY] clientId=%d clientSn=%d groupId=%d payload=%s\n", 
 		rid.GetClientId(), rid.GetClientSn(), req.GroupId, string(payloadPreview))
+	
+	// GSN_RESPONSE não deve entrar no fluxo normal
+	// Deve ser processado diretamente pelo HandleMessage do multicast orderer
+	if len(req.Payload) > 0 && string(req.Payload[:min(len(req.Payload), 20)]) == "SYSTEM:GSN_RESPONSE:" {
+		fmt.Printf("[HANDLE-REQ] GSN_RESPONSE detected, should be handled by HandleMessage, dropping\n")
+		return
+	}
 	
 	tracing.MainTrace.Event(tracing.REQ_RECEIVE, int64(rid.GetClientId()), int64(rid.GetClientSn()))
 	
