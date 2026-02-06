@@ -819,16 +819,14 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		}
 	}
 
-	if isMember {
-		// ✅ ATALHO: Proxy é membro, adiciona ao bucket local
+	// ✅ FIX: Para grupo 0 (GSN/META), NUNCA adiciona ao bucket local
+	// Sempre envia via rede para garantir consenso
+	if groupID == 0 {
+		fmt.Printf("[SEND] Group 0: sending via network only (system messages need consensus)\n")
+	} else if isMember {
+		// ✅ ATALHO: Para outros grupos, se é membro, adiciona ao bucket local
 		fmt.Printf("[SEND] Adding to local bucket for group %d (I am member)\n", groupID)
 		request.AddReqMsg(req)
-		
-		// ✅ FIX: Para grupo 0, também envia via rede para garantir que todos recebam
-		// META/GSN_REQUEST devem chegar em todos os nós do grupo 0
-		if groupID == 0 {
-			fmt.Printf("[SEND] Group 0: also broadcasting to all members (system messages)\n")
-		}
 	} else {
 		// ✅ PROXY: Não é membro, encaminha para membros do grupo via rede
 		fmt.Printf("[SEND] Forwarding to group %d members (I am NOT member)\n", groupID)
@@ -836,13 +834,13 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 
 	// ✅ REDE: Envia para TODOS os membros do grupo (garante liveness)
 	for _, nodeID := range members {
-		// Para grupo 0 (GSN/META), SEMPRE envia via rede para garantir consenso
+		// Para grupo 0 (GSN/META), SEMPRE envia via rede para TODOS (incluindo si mesmo)
 		// Para outros grupos, pula envio para si mesmo se já adicionou localmente
 		if nodeID == membership.OwnID && groupID != 0 {
-			continue // Já adicionou localmente acima (se for membro)
+			continue // Já adicionou localmente acima (se for membro de grupo != 0)
 		}
 		
-		// Envia para outros membros via rede
+		// Envia para membros via rede
 		pm := &pb.ProtocolMessage{
 			SenderId: membership.OwnID,
 			Sn:       -1,
