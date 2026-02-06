@@ -402,12 +402,13 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	if ballot >= i.acceptedBallot {
 		i.acceptedBallot = ballot
 	}
-	if ballot >= i.promisedBallot || i.leader == 0 {
+	// ✅ FIX: Aceita apenas ballot MAIOR (não >=) para evitar split-brain
+	if ballot > i.promisedBallot || i.leader == 0 {
 		i.leader = from
 		i.promisedBallot = ballot
 		fmt.Printf("[MPX][INST] sn=%d leader set to %d (ballot=%d)\n", i.sn, from, ballot)
 	} else if i.leader != from {
-		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT from=%d (leader=%d)\n", i.sn, from, i.leader)
+		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT from=%d (leader=%d, ballot=%d < promised=%d)\n", i.sn, from, i.leader, ballot, i.promisedBallot)
 		return
 	}
 	// ✅ FIX SIGNATURE: ACCEPT contém Batch completo (como PBFT PREPREPARE)
