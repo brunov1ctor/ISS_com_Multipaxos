@@ -271,7 +271,6 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 				if ch, exists := o.gsnRequestsPending[reqID]; exists {
 					select {
 					case ch <- gsn:
-						delete(o.gsnRequestsPending, reqID)
 						fmt.Printf("[GSN-REQ][SUCCESS] Received GSN=%d for reqID=%d\n", gsn, reqID)
 					default:
 						fmt.Printf("[GSN-REQ][WARN] Channel full for reqID=%d\n", reqID)
