@@ -460,23 +460,20 @@ func Add(req *Request) *Request {
 	// If retrying is not necessary (request added) or meaningful (request cannot be added anyway),
 	// Return the result of the first optimistic attempt.
 	if retry {
-		// Check client signature.
-		// Not checking whether signature checking is enabled,
-		// since no retrying would be requested if signature checking was disabled.
-		if err := crypto.CheckSig(req.Digest, membership.ClientPubKey(req.Msg.RequestId.ClientId), req.Msg.Signature); err == nil {
+		if !config.Config.SignRequests || len(req.Msg.Signature) == 0 {
 			req.Verified = true
 		} else {
-			logger.Warn().
-				Err(err).
-				Int32("clSn", req.Msg.RequestId.ClientSn).
-				Int32("clId", req.Msg.RequestId.ClientId).
-				Msg("Invalid request signature.")
-
-			return nil
+			if err := crypto.CheckSig(req.Digest, membership.ClientPubKey(req.Msg.RequestId.ClientId), req.Msg.Signature); err == nil {
+				req.Verified = true
+			} else {
+				logger.Warn().
+					Err(err).
+					Int32("clSn", req.Msg.RequestId.ClientSn).
+					Int32("clId", req.Msg.RequestId.ClientId).
+					Msg("Invalid request signature.")
+				return nil
+			}
 		}
-
-		// Add verified request.
-		// If request cannot be added this time, it is not because of an unverified signature.
 		storedReq, _ = req.Bucket.AddRequest(req)
 	}
 
