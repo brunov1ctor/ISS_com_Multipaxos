@@ -736,6 +736,3 @@ func (o *MultiPaxosOrderer) GetActiveInstance(groupID uint32) *mpxInstance {
 	
 	return inst
 }
-
-
-
