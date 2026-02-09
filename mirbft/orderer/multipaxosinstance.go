@@ -39,6 +39,7 @@ import (
 	"github.com/hyperledger-labs/mirbft/messenger"
 	"github.com/hyperledger-labs/mirbft/request"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
+	"github.com/hyperledger-labs/mirbft/statetransfer"
 	"github.com/hyperledger-labs/mirbft/tracing"
 )
 // GSN_MAGIC - Identificador mágico para batches com GSN embarcado
@@ -117,6 +118,10 @@ type mpxInstance struct {
 	leader   int32                  // Líder atual desta instância
 	currentBallot int64             // Ballot atual
 	inProposal bool                 // Debounce: evita build batch múltiplo no mesmo tick
+	
+	// Estado para fetch de batch faltante
+	pendingCommitDigest *[32]byte  // Digest do commit pendente (aguardando batch)
+	fetchInFlight       bool        // Se já disparou fetch
 	
 	// Canais para processamento assíncrono
 	msgCh  chan *pb.ProtocolMessage // Canal de mensagens
@@ -207,11 +212,18 @@ func (i *mpxInstance) startWorkers(_ *sync.WaitGroup) {
 			select {
 			case pm := <-i.msgCh:
 				if pm == nil {
-					return // Canal fechado
+					return
 				}
-				i.handleMPxMsg(pm, pm.GetMultipaxos())
+				if mpx := pm.GetMultipaxos(); mpx != nil {
+					i.handleMPxMsg(pm, mpx)
+					continue
+				}
+				if me := pm.GetMissingEntry(); me != nil {
+					i.onMissingEntry(me)
+					continue
+				}
 			case <-i.stopCh:
-				return // Sinal de parada
+				return
 			}
 		}
 	}()
@@ -254,19 +266,19 @@ func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	switch t := mpx.Type.(type) {
 	case *pb.MPxMsg_Prepare:
 		fmt.Printf("[MPX][INST] sn=%d PREPARE from=%d\n", i.sn, pm.GetSenderId())
-		i.onPrepare(t.Prepare) // Phase 1a: Líder solicita permissão
+		i.onPrepare(t.Prepare)
 	case *pb.MPxMsg_Promise:
 		fmt.Printf("[MPX][INST] sn=%d PROMISE from=%d\n", i.sn, pm.GetSenderId())
-		i.onPromise(pm.GetSenderId(), t.Promise) // Phase 1b: Seguidor promete
+		i.onPromise(pm.GetSenderId(), t.Promise)
 	case *pb.MPxMsg_Accept:
 		fmt.Printf("[MPX][INST] sn=%d ACCEPT from=%d\n", i.sn, pm.GetSenderId())
-		i.onAccept(pm.GetSenderId(), t.Accept) // Phase 2a: Líder propõe valor
+		i.onAccept(pm.GetSenderId(), t.Accept)
 	case *pb.MPxMsg_Accepted:
 		fmt.Printf("[MPX][INST] sn=%d ACCEPTED from=%d\n", i.sn, pm.GetSenderId())
-		i.onAccepted(pm, t.Accepted) // Phase 2b: Seguidor aceita valor
+		i.onAccepted(pm, t.Accepted)
 	case *pb.MPxMsg_Commit:
 		fmt.Printf("[MPX][INST] sn=%d COMMIT from=%d\n", i.sn, pm.GetSenderId())
-		i.onCommit(t.Commit) // Commit: Líder anuncia consenso
+		i.onCommit(t.Commit)
 	default:
 		fmt.Printf("[MPX][INST] sn=%d UNKNOWN msg type\n", i.sn)
 	}
@@ -526,32 +538,90 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		return
 	}
 	
-	// ✅ COMMIT contém apenas digest - usa batch armazenado do ACCEPT
 	if len(c.GetDigest()) == 0 {
-		fmt.Printf("[MPX][INST] sn=%d NIL commit (no digest)\n", i.sn)
+		fmt.Printf("[MPX][INST] sn=%d NIL commit\n", i.sn)
 		i.phase = phaseCommitted
 		i.closed = true
 		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
 		return
 	}
 	
-	// Valida digest recebido contra batch local (armazenado no onAccept)
-	var commitDigest [32]byte
-	copy(commitDigest[:], c.GetDigest())
+	var cd [32]byte
+	copy(cd[:], c.GetDigest())
+	i.pendingCommitDigest = &cd
 	
 	if i.lastVal == nil || i.lastVal.GetBatch() == nil {
-		fmt.Printf("[MPX][INST] sn=%d COMMIT received but no local batch from ACCEPT (digest=%x)\n", i.sn, commitDigest)
-		// TODO: Implementar fetch do batch via MissingEntry
+		fmt.Printf("[MPX][INST] sn=%d MISSING batch, fetching\n", i.sn)
+		if !i.fetchInFlight {
+			i.fetchInFlight = true
+			go i.fetchCommittedValueFromGroup()
+		}
 		return
 	}
 	
-	// Valida digest
-	if commitDigest != i.lastDigest {
-		fmt.Printf("[MPX][INST] sn=%d commit digest mismatch: expected=%x got=%x\n", 
-			i.sn, i.lastDigest, commitDigest)
+	if cd != i.lastDigest {
+		fmt.Printf("[MPX][INST] sn=%d DIGEST mismatch, fetching\n", i.sn)
+		if !i.fetchInFlight {
+			i.fetchInFlight = true
+			go i.fetchCommittedValueFromGroup()
+		}
 		return
 	}
 	
+	i.pendingCommitDigest = nil
+	i.fetchInFlight = false
+	i.deliverCommit()
+}
+
+func (i *mpxInstance) onMissingEntry(me *pb.MissingEntry) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	
+	if me == nil || me.Batch == nil {
+		return
+	}
+	
+	i.lastVal = &pb.MPxValue{Batch: me.Batch}
+	digestSlice := request.BatchDigest(me.Batch)
+	copy(i.lastDigest[:], digestSlice)
+	
+	if i.pendingCommitDigest == nil {
+		return
+	}
+	
+	if *i.pendingCommitDigest != i.lastDigest {
+		fmt.Printf("[MPX][INST] sn=%d MissingEntry digest mismatch\n", i.sn)
+		i.fetchInFlight = false
+		return
+	}
+	
+	fmt.Printf("[MPX][INST] sn=%d MissingEntry validated, delivering\n", i.sn)
+	i.fetchInFlight = false
+	i.pendingCommitDigest = nil
+	i.deliverCommit()
+}
+
+func (i *mpxInstance) fetchCommittedValueFromGroup() {
+	if i.parent == nil || i.parent.am == nil {
+		return
+	}
+	members := i.parent.am.GetGroupMembers(uint32(i.bucketId))
+	if len(members) == 0 {
+		return
+	}
+	sources := make([]int32, 0, len(members))
+	for _, m := range members {
+		if m != membership.OwnID {
+			sources = append(sources, m)
+		}
+	}
+	if len(sources) == 0 {
+		return
+	}
+	statetransfer.FetchMissingEntry(i.sn, sources)
+}
+
+func (i *mpxInstance) deliverCommit() {
 	i.phase = phaseCommitted
 	if i.lastReqBatch != nil {
 		request.RemoveBatch(i.lastReqBatch)
