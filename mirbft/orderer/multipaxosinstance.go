@@ -128,6 +128,7 @@ type mpxInstance struct {
 // Parâmetros: parent (orderer), sn (sequence number), announce (callback), interval (timeout)
 func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ int, interval time.Duration) *mpxInstance {
 	now := time.Now()
+	
 	inst := &mpxInstance{
 		parent:         parent,
 		sn:             sn,
@@ -143,8 +144,8 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ 
 		stopCh:         make(chan struct{}),
 		promisedBallot: 0,
 		acceptedBallot: 0,
-		currentBallot:  int64(uint64(membership.OwnID)),
-		leader:         -1,  // ✅ Sentinela: nenhum líder estabelecido
+		currentBallot:  0,
+		leader:         -1,  // Será definido em SetMembers
 	}
 	fmt.Printf("[MPX][INST] sn=%d created\n", sn)
 	return inst
@@ -752,6 +753,11 @@ func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	
+	// ✅ APENAS O LÍDER PODE PROPOR
+	if i.leader != membership.OwnID {
+		return
+	}
+	
 	if i.inProposal {
 		return
 	}
@@ -965,7 +971,16 @@ func (i *mpxInstance) SetMembers(members []int32) {
 		n = 1
 	}
 	i.quorum = n/2 + 1
-	fmt.Printf("[MPX][INST] sn=%d SetMembers: members=%v quorum=%d\n", i.sn, members, i.quorum)
+	
+	// ✅ LÍDER DETERMINÍSTICO: leader = sn % numMembers (dentro do grupo)
+	if i.leader == -1 {
+		leaderID := i.members[i.sn % n]
+		i.leader = leaderID
+		i.currentBallot = int64(uint64(0)<<32 | uint64(leaderID))
+		fmt.Printf("[MPX][INST] sn=%d SetMembers: members=%v quorum=%d leader=%d\n", i.sn, members, i.quorum, leaderID)
+	} else {
+		fmt.Printf("[MPX][INST] sn=%d SetMembers: members=%v quorum=%d (leader already set=%d)\n", i.sn, members, i.quorum, i.leader)
+	}
 	
 	// Recontagem de votos accepted para nova membership
 	if i.acceptedFrom != nil {

@@ -443,31 +443,12 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 				inst.startWorkers(&o.stopWg)
 				o.backlog.drainTo(globalSN, inst.enqueue)
 				
-				// Envia PREPARE
-				prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-					Prepare: &pb.MPxPrepare{
-						Id:      &pb.MPxInstanceId{Sn: globalSN, Lead: uint64(membership.OwnID)},
-						Ballot:  uint64(inst.currentBallot),
-						GroupId: groupId,
-					},
-				}}
-				pm := &pb.ProtocolMessage{
-					SenderId: membership.OwnID,
-					Sn:       globalSN,
-					Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
-				}
-				if o.emit != nil {
-					inst.enqueue(pm)
-					o.emit(pm)
-				}
-				inst.prepSent = true
-				
 				mu.Lock()
 				inFlight[globalSN] = inst
 				mu.Unlock()
 				
-				fmt.Printf("[MPX][SCHED] group=%d create inst globalSN=%d (localSN=%d)\n",
-					groupId, globalSN, localSN)
+				fmt.Printf("[MPX][SCHED] group=%d create inst globalSN=%d (localSN=%d) leader=%d\n",
+					groupId, globalSN, localSN, inst.leader)
 			}(local, gsn)
 		}
 		wg.Wait() // Aguarda todas as instâncias serem criadas
@@ -630,27 +611,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						inst.SetMembers(members)
 						o.dispatcher.store(currentSN, inst)
 						inst.startWorkers(&o.stopWg)
-						o.backlog.drainTo(currentSN, inst.enqueue)
-						prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-							Prepare: &pb.MPxPrepare{
-								Id:      &pb.MPxInstanceId{Sn: currentSN, Lead: uint64(membership.OwnID)},
-								Ballot:  uint64(inst.currentBallot),
-								GroupId: gid,
-							},
-						}}
-						pm := &pb.ProtocolMessage{
-							SenderId: membership.OwnID,
-							Sn:       currentSN,
-							Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
-						}
-						if o.emit != nil {
-							// Líder processa seu próprio PREPARE localmente primeiro
-							inst.enqueue(pm)
-							// Depois envia para os outros membros do grupo
-							o.emit(pm)
-						}
-						inst.prepSent = true
-					} else {
+						o.backlog.drainTo(currentSN, inst.enqueue)`r`n`t`t`t`t`tfmt.Printf(`[MPX][INST] sn=%d created for group %d, leader=%d\n`, currentSN, gid, inst.leader)`r`n`t`t`t`t} else {
 						// Instância já existe, atualiza bucketIndex e bucketId se necessário
 						inst.mu.Lock()
 						if inst.bucketId == 0 {
@@ -773,3 +734,5 @@ func (o *MultiPaxosOrderer) GetActiveInstance(groupID uint32) *mpxInstance {
 	
 	return inst
 }
+
+
