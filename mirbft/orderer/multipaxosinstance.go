@@ -551,7 +551,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		fmt.Printf("[MPX][INST] sn=%d onCommit no local Batch available\n", i.sn)
 		return
 	}
-	b := i.lastVal.GetBatch() i.lastVal.GetBatch()
+	b := i.lastVal.GetBatch()
 	
 	// Extrai GSN das requests se presente
 	for _, req := range b.Requests {
