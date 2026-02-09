@@ -399,16 +399,25 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		fmt.Printf("[MPX][INST] sn=%d rejecting ACCEPT ballot=%d < promised=%d\n", i.sn, ballot, i.promisedBallot)
 		return
 	}
+	// ✅ FIX SPLIT-BRAIN: Rejeita ACCEPT se já temos líder E ballot não é maior
+	if i.leader != 0 && i.leader != from && ballot <= i.promisedBallot {
+		fmt.Printf("[MPX][INST] sn=%d rejecting ACCEPT from=%d (leader=%d already set, ballot=%d <= promised=%d)\n", 
+			i.sn, from, i.leader, ballot, i.promisedBallot)
+		return
+	}
+	
 	if ballot >= i.acceptedBallot {
 		i.acceptedBallot = ballot
 	}
-	// ✅ FIX: Aceita apenas ballot MAIOR (não >=) para evitar split-brain
-	if ballot > i.promisedBallot || i.leader == 0 {
+	
+	// Aceita novo líder se ballot >= promisedBallot (protocolo Paxos) OU não tem líder
+	if ballot >= i.promisedBallot || i.leader == 0 {
 		i.leader = from
 		i.promisedBallot = ballot
 		fmt.Printf("[MPX][INST] sn=%d leader set to %d (ballot=%d)\n", i.sn, from, ballot)
 	} else if i.leader != from {
-		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT from=%d (leader=%d, ballot=%d < promised=%d)\n", i.sn, from, i.leader, ballot, i.promisedBallot)
+		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT from=%d (leader=%d, ballot=%d < promised=%d)\n", 
+			i.sn, from, i.leader, ballot, i.promisedBallot)
 		return
 	}
 	// ✅ FIX SIGNATURE: ACCEPT contém Batch completo (como PBFT PREPREPARE)
