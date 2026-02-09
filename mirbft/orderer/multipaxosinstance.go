@@ -399,26 +399,23 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		fmt.Printf("[MPX][INST] sn=%d rejecting ACCEPT ballot=%d < promised=%d\n", i.sn, ballot, i.promisedBallot)
 		return
 	}
-	// ✅ FIX SPLIT-BRAIN: Rejeita ACCEPT se já temos líder E ballot não é maior
-	if i.leader != 0 && i.leader != from && ballot <= i.promisedBallot {
-		fmt.Printf("[MPX][INST] sn=%d rejecting ACCEPT from=%d (leader=%d already set, ballot=%d <= promised=%d)\n", 
-			i.sn, from, i.leader, ballot, i.promisedBallot)
+	
+	// ✅ FIX SPLIT-BRAIN: Rejeita ACCEPT se já temos líder estabelecido E não é dele
+	if i.leader != 0 && i.leader != from {
+		fmt.Printf("[MPX][INST] sn=%d rejecting ACCEPT from=%d (leader=%d already set)\n", 
+			i.sn, from, i.leader)
 		return
+	}
+	
+	// Aceita líder se não tem líder OU é o mesmo líder
+	if i.leader == 0 {
+		i.leader = from
+		i.promisedBallot = ballot
+		fmt.Printf("[MPX][INST] sn=%d leader set to %d (ballot=%d)\n", i.sn, from, ballot)
 	}
 	
 	if ballot >= i.acceptedBallot {
 		i.acceptedBallot = ballot
-	}
-	
-	// Aceita novo líder se ballot >= promisedBallot (protocolo Paxos) OU não tem líder
-	if ballot >= i.promisedBallot || i.leader == 0 {
-		i.leader = from
-		i.promisedBallot = ballot
-		fmt.Printf("[MPX][INST] sn=%d leader set to %d (ballot=%d)\n", i.sn, from, ballot)
-	} else if i.leader != from {
-		fmt.Printf("[MPX][INST] sn=%d ignoring ACCEPT from=%d (leader=%d, ballot=%d < promised=%d)\n", 
-			i.sn, from, i.leader, ballot, i.promisedBallot)
-		return
 	}
 	// ✅ FIX SIGNATURE: ACCEPT contém Batch completo (como PBFT PREPREPARE)
 	batch := a.GetBatch()
@@ -554,7 +551,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		fmt.Printf("[MPX][INST] sn=%d onCommit no local Batch available\n", i.sn)
 		return
 	}
-	b := i.lastVal.GetBatch()
+	b := i.lastVal.GetBatch() i.lastVal.GetBatch()
 	
 	// Extrai GSN das requests se presente
 	for _, req := range b.Requests {
