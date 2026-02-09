@@ -144,6 +144,7 @@ func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ 
 		promisedBallot: 0,
 		acceptedBallot: 0,
 		currentBallot:  int64(uint64(membership.OwnID)),
+		leader:         -1,  // ✅ Sentinela: nenhum líder estabelecido
 	}
 	fmt.Printf("[MPX][INST] sn=%d created\n", sn)
 	return inst
@@ -289,7 +290,7 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		seenCounter := ballot >> 32
 		i.currentBallot = int64((seenCounter + 1) << 32 | uint64(membership.OwnID))
 		fmt.Printf("[MPX][INST] sn=%d ABORTING leadership, bumping ballot to %d\n", i.sn, i.currentBallot)
-		i.leader = 0
+		i.leader = -1
 		i.phase = phaseInit
 		i.prepared = false
 		i.prepSent = false
@@ -400,19 +401,21 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 		return
 	}
 	
-	// ✅ FIX SPLIT-BRAIN: Rejeita ACCEPT se já temos líder estabelecido E não é dele
-	if i.leader != 0 && i.leader != from {
-		fmt.Printf("[MPX][INST] sn=%d rejecting ACCEPT from=%d (leader=%d already set)\n", 
-			i.sn, from, i.leader)
-		return
+	// ✅ FIX SPLIT-BRAIN: Permite mudança de líder apenas com ballot maior
+	if i.leader != -1 && i.leader != from {
+		if ballot == i.promisedBallot {
+			fmt.Printf("[MPX][INST] sn=%d rejecting ACCEPT from=%d (leader=%d already set, ballot=%d)\n", 
+				i.sn, from, i.leader, ballot)
+			return
+		}
+		// ballot > promisedBallot: mudança de líder legítima
+		fmt.Printf("[MPX][INST] sn=%d leader change: %d -> %d (ballot %d -> %d)\n", 
+			i.sn, i.leader, from, i.promisedBallot, ballot)
 	}
 	
-	// Aceita líder se não tem líder OU é o mesmo líder
-	if i.leader == 0 {
-		i.leader = from
-		i.promisedBallot = ballot
-		fmt.Printf("[MPX][INST] sn=%d leader set to %d (ballot=%d)\n", i.sn, from, ballot)
-	}
+	i.promisedBallot = ballot
+	i.leader = from
+	fmt.Printf("[MPX][INST] sn=%d leader set to %d (ballot=%d)\n", i.sn, from, ballot)
 	
 	if ballot >= i.acceptedBallot {
 		i.acceptedBallot = ballot
