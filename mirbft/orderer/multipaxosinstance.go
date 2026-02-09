@@ -978,6 +978,27 @@ func (i *mpxInstance) SetMembers(members []int32) {
 		i.leader = leaderID
 		i.currentBallot = int64(uint64(0)<<32 | uint64(leaderID))
 		fmt.Printf("[MPX][INST] sn=%d SetMembers: members=%v quorum=%d leader=%d\n", i.sn, members, i.quorum, leaderID)
+		
+		// ✅ FIX: Se este nó é o líder, envia PREPARE para iniciar protocolo
+		if leaderID == membership.OwnID && !i.prepSent {
+			i.prepSent = true
+			prep := &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
+				Prepare: &pb.MPxPrepare{
+					Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+					Ballot:  uint64(i.currentBallot),
+					GroupId: i.bucketId,
+				},
+			}}
+			pm := &pb.ProtocolMessage{
+				SenderId: membership.OwnID,
+				Sn:       i.sn,
+				Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: prep},
+			}
+			fmt.Printf("[MPX][INST] sn=%d sending initial PREPARE as leader\n", i.sn)
+			if i.parent.emit != nil {
+				i.parent.emit(pm)
+			}
+		}
 	} else {
 		fmt.Printf("[MPX][INST] sn=%d SetMembers: members=%v quorum=%d (leader already set=%d)\n", i.sn, members, i.quorum, i.leader)
 	}
