@@ -283,10 +283,18 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			}
 		}
 		
-		// Forwarded request: NÃO adicionar ao bucket (já foi adicionado no proxy)
-		// Apenas marca como recebida para liveness
-		if gsnForward.Req.GSN > 0 && gsnForward.Req.GroupId > 0 {
-			o.MarkRequestReceived(gsnForward.Req.GSN, gsnForward.Req.GroupId)
+		// ✅ INJETAR NO BUCKET DO NÓ DESTINO
+		req := gsnForward.Req
+		if req != nil && req.GetRequestId() != nil {
+			// Adiciona ao bucket se for grupo 0 (GSN/META) ou se somos membro do grupo
+			if req.GroupId == 0 || o.am.IsMember(req.GroupId, membership.OwnID) {
+				fmt.Printf("[FORWARD] Injecting forwarded request into bucket (groupId=%d gsn=%d)\n", req.GroupId, req.GSN)
+				request.AddReqMsg(req)
+			}
+			// Marca como recebida para liveness
+			if req.GSN > 0 && req.GroupId > 0 {
+				o.MarkRequestReceived(req.GSN, req.GroupId)
+			}
 		}
 		return
 	}
