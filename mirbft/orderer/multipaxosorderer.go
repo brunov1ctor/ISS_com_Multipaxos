@@ -611,7 +611,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 						inst.SetMembers(members)
 						o.dispatcher.store(currentSN, inst)
 						inst.startWorkers(&o.stopWg)
-						o.backlog.drainTo(currentSN, inst.enqueue)`r`n`t`t`t`t`tfmt.Printf(`[MPX][INST] sn=%d created for group %d, leader=%d\n`, currentSN, gid, inst.leader)`r`n`t`t`t`t} else {
+						o.backlog.drainTo(currentSN, inst.enqueue)
+					fmt.Printf("[MPX][INST] sn=%d created for group %d, leader=%d\n", currentSN, gid, inst.leader)
+				} else {
 						// Instância já existe, atualiza bucketIndex e bucketId se necessário
 						inst.mu.Lock()
 						if inst.bucketId == 0 {
@@ -734,5 +736,6 @@ func (o *MultiPaxosOrderer) GetActiveInstance(groupID uint32) *mpxInstance {
 	
 	return inst
 }
+
 
 
