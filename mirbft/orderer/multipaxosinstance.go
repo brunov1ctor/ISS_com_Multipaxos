@@ -420,21 +420,24 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	if ballot >= i.acceptedBallot {
 		i.acceptedBallot = ballot
 	}
-	// ✅ FIX SIGNATURE: ACCEPT contém Batch completo (como PBFT PREPREPARE)
+	
+	// ✅ FIX: ACCEPT contém Batch completo - ARMAZENA para uso no COMMIT
 	batch := a.GetBatch()
 	if batch == nil {
 		fmt.Printf("[MPX][INST] sn=%d ACCEPT without batch (rejecting)\n", i.sn)
 		return
 	}
-	// Armazena valor e calcula digest
+	
+	// ✅ CRÍTICO: Armazena valor localmente (followers precisam disso para onCommit)
 	i.lastVal = &pb.MPxValue{
 		Id:    &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(from)},
 		Batch: batch,
 	}
 	digestSlice := request.BatchDigest(batch)
 	copy(i.lastDigest[:], digestSlice)
-	fmt.Printf("[MPX][INST] sn=%d accepted batch with %d requests, digest=%x\n", i.sn, len(batch.Requests), i.lastDigest)
-	// ✅ FIX: Acceptor NÃO conta votos, apenas envia ACCEPTED ao líder
+	fmt.Printf("[MPX][INST] sn=%d STORED batch from ACCEPT with %d requests, digest=%x\n", i.sn, len(batch.Requests), i.lastDigest)
+	
+	// Envia ACCEPTED ao líder
 	accepted := &pb.MPxMsg{Type: &pb.MPxMsg_Accepted{Accepted: &pb.MPxAccepted{
 		Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
 		Ballot:  ballot,
@@ -491,11 +494,10 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	
 	// Incorporada lógica da função duplicada ProposeIfDue() aqui
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
-		// ✅ FIX: COMMIT envia Batch completo (não apenas digest)
+		// ✅ COMMIT envia apenas digest (followers já têm batch do ACCEPT)
 		commit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
 			Commit: &pb.MPxCommit{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Batch:   i.lastVal.GetBatch(),  // ✅ Batch completo
 				Digest:  i.lastDigest[:],
 				GroupId: i.bucketId,
 			},
@@ -506,13 +508,13 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: commit},
 		}
 		if i.parent.emit != nil {
-			fmt.Printf("[MPX][INST] sn=%d QUORUM reached (%d/%d), sending COMMIT (full batch)\n", i.sn, i.acceptCount, i.quorum)
+			fmt.Printf("[MPX][INST] sn=%d QUORUM reached (%d/%d), sending COMMIT (digest only)\n", i.sn, i.acceptCount, i.quorum)
 			i.parent.emit(pmOut)
 		}
 		
-		// Chama onCommit diretamente com batch completo
+		// Chama onCommit diretamente
 		i.mu.Unlock()
-		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Batch: i.lastVal.GetBatch(), Digest: i.lastDigest[:], GroupId: i.bucketId})
+		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Digest: i.lastDigest[:], GroupId: i.bucketId})
 		i.mu.Lock()
 	}
 }
@@ -523,37 +525,31 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 		return
 	}
 	
-	// ✅ FIX: COMMIT agora contém Batch completo
-	batch := c.GetBatch()
-	if batch == nil {
-		fmt.Printf("[MPX][INST] sn=%d NIL commit (no batch)\n", i.sn)
+	// ✅ COMMIT contém apenas digest - usa batch armazenado do ACCEPT
+	if len(c.GetDigest()) == 0 {
+		fmt.Printf("[MPX][INST] sn=%d NIL commit (no digest)\n", i.sn)
 		i.phase = phaseCommitted
 		i.closed = true
 		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
 		return
 	}
 	
-	// Valida digest se fornecido
-	if len(c.GetDigest()) > 0 {
-		var commitDigest [32]byte
-		copy(commitDigest[:], c.GetDigest())
-		receivedDigest := request.BatchDigest(batch)
-		if !bytesEqual(commitDigest[:], receivedDigest) {
-			fmt.Printf("[MPX][INST] sn=%d commit digest mismatch: expected=%x got=%x\n", 
-				i.sn, commitDigest, receivedDigest)
-			return
-		}
+	// Valida digest recebido contra batch local (armazenado no onAccept)
+	var commitDigest [32]byte
+	copy(commitDigest[:], c.GetDigest())
+	
+	if i.lastVal == nil || i.lastVal.GetBatch() == nil {
+		fmt.Printf("[MPX][INST] sn=%d COMMIT received but no local batch from ACCEPT (digest=%x)\n", i.sn, commitDigest)
+		// TODO: Implementar fetch do batch via MissingEntry
+		return
 	}
 	
-	// Armazena batch recebido
-	if i.lastVal == nil {
-		i.lastVal = &pb.MPxValue{
-			Id:    &pb.MPxInstanceId{Sn: i.sn},
-			Batch: batch,
-		}
+	// Valida digest
+	if commitDigest != i.lastDigest {
+		fmt.Printf("[MPX][INST] sn=%d commit digest mismatch: expected=%x got=%x\n", 
+			i.sn, i.lastDigest, commitDigest)
+		return
 	}
-	digestSlice := request.BatchDigest(batch)
-	copy(i.lastDigest[:], digestSlice)
 	
 	i.phase = phaseCommitted
 	if i.lastReqBatch != nil {
@@ -562,7 +558,7 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	}
 	
 	var crossOpGSN uint64
-	b := batch
+	b := i.lastVal.GetBatch()
 	
 	// Extrai GSN das requests se presente
 	for _, req := range b.Requests {
