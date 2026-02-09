@@ -491,11 +491,12 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	
 	// Incorporada lógica da função duplicada ProposeIfDue() aqui
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
-		// ✅ FIX SIGNATURE: Envia apenas digest no COMMIT
+		// ✅ FIX: COMMIT envia Batch completo (não apenas digest)
 		commit := &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
 			Commit: &pb.MPxCommit{
 				Id:      &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-				Digest:  i.lastDigest[:],  // Apenas digest
+				Batch:   i.lastVal.GetBatch(),  // ✅ Batch completo
+				Digest:  i.lastDigest[:],
 				GroupId: i.bucketId,
 			},
 		}}
@@ -505,13 +506,13 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 			Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: commit},
 		}
 		if i.parent.emit != nil {
-			fmt.Printf("[MPX][INST] sn=%d QUORUM reached (%d/%d), sending COMMIT (digest only)\n", i.sn, i.acceptCount, i.quorum)
+			fmt.Printf("[MPX][INST] sn=%d QUORUM reached (%d/%d), sending COMMIT (full batch)\n", i.sn, i.acceptCount, i.quorum)
 			i.parent.emit(pmOut)
 		}
 		
-		// Chama onCommit diretamente com digest
+		// Chama onCommit diretamente com batch completo
 		i.mu.Unlock()
-		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Digest: i.lastDigest[:], GroupId: i.bucketId})
+		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Batch: i.lastVal.GetBatch(), Digest: i.lastDigest[:], GroupId: i.bucketId})
 		i.mu.Lock()
 	}
 }
@@ -521,40 +522,47 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	if i.phase == phaseCommitted {
 		return
 	}
-	// ✅ FIX SIGNATURE: COMMIT agora contém apenas digest
-	// Valida digest e usa Batch local
-	if len(c.GetDigest()) == 0 {
-		fmt.Printf("[MPX][INST] sn=%d NIL commit (no digest)\n", i.sn)
+	
+	// ✅ FIX: COMMIT agora contém Batch completo
+	batch := c.GetBatch()
+	if batch == nil {
+		fmt.Printf("[MPX][INST] sn=%d NIL commit (no batch)\n", i.sn)
 		i.phase = phaseCommitted
 		i.closed = true
 		tracing.MainTrace.Event(tracing.COMMIT, int64(i.sn), 0)
 		return
 	}
-	// Valida digest recebido contra digest local
-	var commitDigest [32]byte
-	copy(commitDigest[:], c.GetDigest())
-	if i.lastVal != nil && commitDigest != i.lastDigest {
-		fmt.Printf("[MPX][INST] sn=%d commit digest mismatch: expected=%x got=%x\n", 
-			i.sn, i.lastDigest, commitDigest)
-		return
+	
+	// Valida digest se fornecido
+	if len(c.GetDigest()) > 0 {
+		var commitDigest [32]byte
+		copy(commitDigest[:], c.GetDigest())
+		receivedDigest := request.BatchDigest(batch)
+		if !bytesEqual(commitDigest[:], receivedDigest) {
+			fmt.Printf("[MPX][INST] sn=%d commit digest mismatch: expected=%x got=%x\n", 
+				i.sn, commitDigest, receivedDigest)
+			return
+		}
 	}
+	
+	// Armazena batch recebido
 	if i.lastVal == nil {
-		// Não tem valor local - armazena digest para validação futura
-		i.lastDigest = commitDigest
-		fmt.Printf("[MPX][INST] sn=%d commit received but no local Batch (digest=%x)\n", i.sn, commitDigest)
+		i.lastVal = &pb.MPxValue{
+			Id:    &pb.MPxInstanceId{Sn: i.sn},
+			Batch: batch,
+		}
 	}
+	digestSlice := request.BatchDigest(batch)
+	copy(i.lastDigest[:], digestSlice)
+	
 	i.phase = phaseCommitted
 	if i.lastReqBatch != nil {
 		request.RemoveBatch(i.lastReqBatch)
 		i.lastReqBatch = nil
 	}
+	
 	var crossOpGSN uint64
-	// ✅ FIX SIGNATURE: Usa Batch local (nunca foi serializado)
-	if i.lastVal == nil || i.lastVal.GetBatch() == nil {
-		fmt.Printf("[MPX][INST] sn=%d onCommit no local Batch available\n", i.sn)
-		return
-	}
-	b := i.lastVal.GetBatch()
+	b := batch
 	
 	// Extrai GSN das requests se presente
 	for _, req := range b.Requests {
@@ -1002,6 +1010,19 @@ func tracePropose(sn int32, size int) {
 func traceCommit(sn int32, size int) {
 	fmt.Printf("[TRACE] COMMIT sn=%d size=%d\n", sn, size)
 	tracing.MainTrace.Event(tracing.COMMIT, int64(sn), int64(size))
+}
+
+// bytesEqual - Compara dois slices de bytes
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 // validateBatchHomogeneity - Valida que todas as requests no batch pertencem ao mesmo grupo
 // Garante que instâncias não processem requests de grupos diferentes
