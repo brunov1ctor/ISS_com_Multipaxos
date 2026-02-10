@@ -562,12 +562,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	fmt.Printf("[MPX][LEADER] Group %d leader=%d (ownID=%d, isLeader=%v)\n", 
 		groupId, groupLeader, membership.OwnID, groupLeader == membership.OwnID)
 	
-	// Apenas líder propõe (incluindo grupo 0)
-	if groupLeader != membership.OwnID {
-		fmt.Printf("[MPX][SKIP] Group %d: not leader (leader=%d, ownID=%d)\n", 
-			groupId, groupLeader, membership.OwnID)
-		return
-	}
+	// Don't skip non-leaders - all members must process segments
+	// Only the leader will propose (check happens inside ProposeIfDue)
+	// Non-leaders still need to receive messages, vote, and commit
 	
 	// Calculate bucketIndex: must match GroupId for correct bucket locking
 	// ✅ FIX: bucketIndex = groupId (not array position)
