@@ -154,10 +154,10 @@ func (o *MultiPaxosMulticastOrderer) createGroupOrderers(mngr manager.Manager) {
 		groupOrderer.ownedGroupID = gid // ✅ CRITICAL FIX: Each orderer owns its own group
 		groupOrderer.skipHandlerRegistration = true // Não registra handler global
 		
-		// Usa runLocalSNLoop() para TODOS os grupos (Simple e Single)
-		// segmentChan = nil força uso de runLocalSNLoop() que é 300-500x mais rápido
-		// Segment manager causa contenção quando múltiplos grupos competem por segmentos
-		fmt.Printf("[MULTICAST] Group %d will use runLocalSNLoop() (no segment manager)\n", gid)
+		// ✅ Cria segmentChan para TODOS os grupos (Simple e Single)
+		// Multicast orderer fará fan-out dos segmentos
+		groupOrderer.segmentChan = make(chan manager.Segment, 64)
+		fmt.Printf("[MULTICAST] Created segment channel for group %d\n", gid)
 		
 		// SN intercalado: cada grupo começa do seu slot no espaço global
 		groupOrderer.Init(mngr)
@@ -213,15 +213,37 @@ func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
 }
 // Start - Inicia todos os orderers de grupo e configura fan-out de segmentos
 func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
-	// ✅ FIX: Removido fan-out de segmentos - todos os grupos usam runLocalSNLoop()
-	// Segment manager causa overhead de 300-500x quando múltiplos grupos competem
-	// runLocalSNLoop() é mais eficiente para multicast
+	// ✅ Fan-out de segmentos para TODOS os grupos (Simple e Single)
+	segCh := o.mgr.SubscribeOrderer()
+	go func() {
+		for seg := range segCh {
+			all := o.am.GetDefinedGroups()
+			if len(all) == 0 || all[0] != 0 {
+				all = append([]uint32{0}, all...)
+			}
+			numGroups := int32(len(all))
+			if numGroups == 0 {
+				numGroups = 1
+			}
+			gid := uint32(seg.FirstSN() % numGroups)
+			o.orderersMu.RLock()
+			ord := o.groupOrderers[gid]
+			o.orderersMu.RUnlock()
+			if ord == nil || ord.segmentChan == nil {
+				continue
+			}
+			select {
+			case ord.segmentChan <- seg:
+			default:
+				fmt.Printf("[MULTICAST][SEG] drop seg firstSN=%d gid=%d (chan full)\n", seg.FirstSN(), gid)
+			}
+		}
+	}()
 	
-	// Start normal dos orderers
 	o.orderersMu.RLock()
 	defer o.orderersMu.RUnlock()
 	for gid, orderer := range o.groupOrderers {
-		fmt.Printf("[MULTICAST] Starting orderer for group %d (using runLocalSNLoop)\n", gid)
+		fmt.Printf("[MULTICAST] Starting orderer for group %d\n", gid)
 		orderer.Start(wg)
 	}
 }
