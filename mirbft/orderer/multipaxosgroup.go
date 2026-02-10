@@ -205,19 +205,14 @@ func (am *AtomicMulticast) IsMember(groupID uint32, nodeID int32) bool {
 }
 
 // GetGroupLeaderForSegment - Seleciona líder determinístico do grupo baseado no segmento
-// Usa round-robin dentro do grupo: round = firstSN / numGroups
-// Garante que sempre existe um líder válido (membro do grupo)
+// Usa mesma fórmula que SetMembers: leader = members[sn % len(members)]
+// Garante consistência entre runSegment() e SetMembers()
 func (am *AtomicMulticast) GetGroupLeaderForSegment(gid uint32, firstSN int32, numGroups int32) int32 {
 	members := am.GetGroupMembers(gid)
 	if members == nil || len(members) == 0 {
 		return -1
 	}
 	
-	if numGroups <= 0 {
-		numGroups = 1
-	}
-	
-	round := firstSN / numGroups
-	idx := int(round % int32(len(members)))
+	idx := int(firstSN % int32(len(members)))
 	return members[idx]
 }
