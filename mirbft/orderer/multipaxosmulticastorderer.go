@@ -813,13 +813,14 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		}
 	}
 
-	// ✅ FIX: Para grupo 0 (GSN/META), NUNCA adiciona ao bucket local
-	// Sempre envia via rede para garantir consenso
-	if groupID == 0 {
-		fmt.Printf("[SEND] Group 0: sending via network only (system messages need consensus)\n")
-	} else if isMember {
-		// ✅ ATALHO: Para outros grupos, se é membro, adiciona ao bucket local
+	// ✅ FIX: Adiciona ao bucket local se for membro (incluindo grupo 0)
+	if isMember {
 		fmt.Printf("[SEND] Adding to local bucket for group %d (I am member)\n", groupID)
+		request.AddReqMsg(req)
+	} else if groupID == 0 {
+		// ✅ CRITICAL: Grupo 0 DEVE adicionar localmente mesmo se não for "membro oficial"
+		// Todos os nós participam do grupo 0 (sequenciador)
+		fmt.Printf("[SEND] Group 0: adding to local bucket (all nodes are sequencers)\n")
 		request.AddReqMsg(req)
 	} else {
 		// ✅ PROXY: Não é membro, encaminha para membros do grupo via rede
