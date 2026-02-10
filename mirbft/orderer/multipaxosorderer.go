@@ -353,11 +353,9 @@ func (o *MultiPaxosOrderer) runLocalSNLoop() {
 		return
 	}
 	
-	// Verifica se é membro do grupo
-	if !o.am.IsMember(groupId, membership.OwnID) {
-		fmt.Printf("[MPX][LOCAL-SN] Not a member of group %d, exiting\n", groupId)
-		return
-	}
+	// ✅ REMOVED: Don't skip processing for non-member groups
+	// All peers must process all groups to maintain consensus
+	// Membership check happens at announce time (in multipaxosinstance.go deliverCommit)
 	
 	// Calcula numGroups para mapeamento SN local → global
 	allGroupIDs := o.am.GetDefinedGroups()
@@ -550,12 +548,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	
 	groupId := o.ownedGroupID
 	fmt.Printf("[MPX] runSegment: firstSN=%d processing for group %d\n", firstSN, groupId)
-	
-	// ✅ Verifica se é membro do grupo antes de processar
-	if groupId != 0 && !o.am.IsMember(groupId, membership.OwnID) {
-		fmt.Printf("[MPX][SEGMENT] Skipping group %d (not a member)\n", groupId)
-		return
-	}
 	
 	members := o.am.GetGroupMembers(groupId)
 	if members == nil {
