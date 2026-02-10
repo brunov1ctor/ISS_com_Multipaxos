@@ -100,14 +100,13 @@ type MultiPaxosOrderer struct {
 	firstSNMu      sync.RWMutex   // Protege currentFirstSN
 }
 // inferGroupIDFromSN removed - not used (group determined by segment)
-func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
+	func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 	o.mgr = mgr
 	o.backlog = newMPXBacklog()
 	o.last = -1
 	o.maxBatchSize = int(config.Config.BatchSize)
 	o.proposeEvery = config.Config.BatchTimeout
 	if o.am == nil {
-		// ✅ FIX: Usa AtomicMulticast global compartilhado
 		if GetGlobalMulticastOrderer() != nil {
 			o.am = GetGlobalMulticastOrderer().am
 			fmt.Printf("[MPX] Init: using shared AtomicMulticast from global orderer (groups=%v, ownedGroupID=%d)\n", o.am.GetDefinedGroups(), o.ownedGroupID)
@@ -147,41 +146,27 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			messenger.EnqueueMsg(pm, nid)
 		}
 	}
-	// ✅ FIX: Apenas força segmentChan=nil se não foi setado pelo multicast orderer
-	// Para orderer "standalone" (não multicast): pode usar SubscribeOrderer() normalmente
-	// Para orderer "filho" do multicast: recebe channel dedicado (fan-out)
-	if o.segmentChan == nil && !o.skipHandlerRegistration {
-		// Standalone: usa segment manager diretamente
-		if config.Config.LeaderPolicy == "Simple" {
-			o.segmentChan = mgr.SubscribeOrderer()
-			fmt.Printf("[MPX] Using segment manager (Simple policy standalone)\n")
-		} else {
-			o.segmentChan = nil
-			fmt.Printf("[MPX] Using local SN loop (no segments) ownedGroupID=%d\n", o.ownedGroupID)
-		}
-	} else if o.segmentChan != nil {
-		fmt.Printf("[MPX] Using dedicated segment channel (multicast fan-out) ownedGroupID=%d\n", o.ownedGroupID)
-	} else {
-		fmt.Printf("[MPX] Using local SN loop (multicast child) ownedGroupID=%d\n", o.ownedGroupID)
-	}
+	
+	// ✅ CRITICAL: segmentChan já foi setado pelo multicast orderer (fan-out)
+	// Não precisa chamar SubscribeOrderer() novamente
 	if !o.skipHandlerRegistration {
+		// Standalone: usa segment manager diretamente
+		o.segmentChan = mgr.SubscribeOrderer()
 		messenger.OrdererMsgHandler = o.HandleMessage
-		fmt.Printf("[MPX] Registered global message handler\n")
+		fmt.Printf("[MPX] Standalone: subscribed to segments and registered handler\n")
 	} else {
-		fmt.Printf("[MPX] Skipped handler registration (managed by multicast orderer)\n")
+		// Multicast child: segmentChan já foi setado pelo parent
+		fmt.Printf("[MPX] Multicast child: using parent's segment channel (ownedGroupID=%d)\n", o.ownedGroupID)
 	}
+	
 	o.announce = func(sn int32, b *pb.Batch, metadata []byte) {
-		// ✅ FIX: Recebe Batch diretamente (sem unmarshal) para preservar assinaturas
 		if b == nil {
 			fmt.Printf("[MPX][ANNOUNCE][ERR] sn=%d batch is nil\n", sn)
 			return
 		}
-		
-		// ✅ NOP: batch com zero requests (mas bytes não-vazios)
 		if len(b.Requests) == 0 {
 			fmt.Printf("[MPX][ANNOUNCE] sn=%d NOP (empty requests, announcing to log)\n", sn)
 			shouldRespond := true
-			// Marshal apenas para calcular digest
 			batchBytes, _ := proto.Marshal(b)
 			digest := crypto.Hash(batchBytes)
 			now := time.Now().UnixNano()
@@ -196,26 +181,21 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			announcer.Announce(entry)
 			return
 		}
-		
 		var digest []byte
 		if len(metadata) > 0 {
 			digest = metadata
 		} else {
-			// Marshal apenas para calcular digest
 			batchBytes, _ := proto.Marshal(b)
 			digest = crypto.Hash(batchBytes)
 		}
-		
 		shouldRespond := true
 		if len(b.Requests) > 0 && o.am != nil {
 			groupId := b.Requests[0].GetGroupId()
-			// Responde apenas se for membro do grupo (incluindo grupo 0)
 			shouldRespond = o.am.IsMember(groupId, membership.OwnID)
 			fmt.Printf("[MPX][ANNOUNCE] sn=%d groupId=%d ownID=%d shouldRespond=%v\n", sn, groupId, membership.OwnID, shouldRespond)
 		} else {
 			fmt.Printf("[MPX][ANNOUNCE] sn=%d NO REQUESTS or NO AM, shouldRespond=%v\n", sn, shouldRespond)
 		}
-		
 		now := time.Now().UnixNano()
 		entry := &mirlog.Entry{
 			Sn:             sn,
@@ -226,17 +206,13 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			CommitTs:       now,
 		}
 		announcer.Announce(entry)
-		
-		// ✅ META stream: Registra operações multigrupo quando commitadas
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
-			// Extrai GSN e TouchedGroups da primeira requisição
 			if len(b.Requests[0].TouchedGroups) > 1 && b.Requests[0].GSN > 0 {
 				gsn := b.Requests[0].GSN
 				GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, b.Requests[0].TouchedGroups)
 				fmt.Printf("[META-STREAM][REGISTERED] sn=%d GSN %d -> groups %v\n", sn, gsn, b.Requests[0].TouchedGroups)
 			}
 		}
-		
 		fmt.Printf("DELIVER sn=%d delivered=%d\n", sn, len(b.Requests))
 	}
 	fmt.Printf("[MPX] Init ok; cfg: batchSize=%d batchTimeout=%s leaderPolicy=%s\n",
@@ -246,9 +222,8 @@ func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 	o.startOnce.Do(func() {
 		fmt.Printf("[MPX] Start begin (ownedGroupID=%d)\n", o.ownedGroupID)
 		
-		// ✅ FIX: Grupos de dados usam SN local, standalone/grupo0 usa segmentos
+		// ✅ CRITICAL: Usa segment manager como PBFT
 		if o.segmentChan != nil {
-			// Modo segment manager (standalone ou grupo 0)
 			go func() {
 				for seg := range o.segmentChan {
 					logger.Info().
@@ -265,9 +240,7 @@ func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 			}()
 			fmt.Printf("[MPX] Started with segment manager\n")
 		} else {
-			// ✅ Modo SN local (grupos de dados)
-			go o.runLocalSNLoop()
-			fmt.Printf("[MPX] Started with local SN loop for group %d\n", o.ownedGroupID)
+			fmt.Printf("[MPX] No segment channel, orderer will not process segments\n")
 		}
 		
 		fmt.Printf("[MPX] Start done\n")
@@ -341,176 +314,6 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 		},
 	})
 }
-// runLocalSNLoop - Loop de SN local para grupos de dados (sem segment manager)
-// Cada grupo mantém seu próprio espaço SN local: 0,1,2,3...
-// Mas mapeia para SN global único: globalSN = localSN * numGroups + groupID
-// Ordem global é garantida por GSN/META
-func (o *MultiPaxosOrderer) runLocalSNLoop() {
-	groupId := o.ownedGroupID
-	members := o.am.GetGroupMembers(groupId)
-	if members == nil {
-		fmt.Printf("[MPX][LOCAL-SN] Group %d has NO members, exiting\n", groupId)
-		return
-	}
-	
-	// ✅ REMOVED: Don't skip processing for non-member groups
-	// All peers must process all groups to maintain consensus
-	// Membership check happens at announce time (in multipaxosinstance.go deliverCommit)
-	
-	// Calcula numGroups para mapeamento SN local → global
-	allGroupIDs := o.am.GetDefinedGroups()
-	if len(allGroupIDs) == 0 {
-		allGroupIDs = []uint32{0}
-	} else if allGroupIDs[0] != 0 {
-		allGroupIDs = append([]uint32{0}, allGroupIDs...)
-	}
-	numGroups := int32(len(allGroupIDs))
-	if numGroups == 0 {
-		numGroups = 1
-	}
-	
-	fmt.Printf("[MPX][LOCAL-SN] Starting local SN loop for group %d with %d members: %v (numGroups=%d)\n", groupId, len(members), members, numGroups)
-	
-	// ✅ Pipeline window scheduler (correto conforme artigo)
-	nextLocalSN := int32(0)
-	// Window size: número de instâncias de consenso em paralelo
-	// - Valor alinhado com NumBuckets (16) do config.yml
-	// - Balanceia throughput vs uso de recursos
-	// - Para máximo throughput: use 32 (CPUs) ou 64 (WatermarkWindowSize)
-	windowW := int32(16)
-	inFlight := make(map[int32]*mpxInstance)
-	
-	// Função auxiliar: mapeia localSN → globalSN
-	globalOf := func(local int32) int32 {
-		return local*numGroups + int32(groupId)
-	}
-	
-	// ✅ Avanço baseado APENAS no log (fonte de verdade do SMR)
-	// Elimina "salto misterioso" - cada advance é logado explicitamente
-	advance := func() {
-		for {
-			gsn := globalOf(nextLocalSN)
-			if mirlog.GetEntry(gsn) == nil {
-				return
-			}
-			fmt.Printf("[MPX][LOCAL-SN] Group %d: globalSN=%d already COMMITTED in log, advancing localSN=%d→%d\n",
-				groupId, gsn, nextLocalSN, nextLocalSN+1)
-			
-			// Limpa instância antiga se existir
-			if inst, ok := inFlight[gsn]; ok {
-				inst.stopWorkers()
-				delete(inFlight, gsn)
-			}
-			
-			nextLocalSN++
-		}
-	}
-	
-	// ✅ Criação PARALELA de instâncias (reduz latência inicial)
-	ensureWindow := func() {
-		var wg sync.WaitGroup
-		var mu sync.Mutex // Protege inFlight map
-		
-		for off := int32(0); off < windowW; off++ {
-			local := nextLocalSN + off
-			gsn := globalOf(local)
-			
-			// Se já commitou, não precisa de instância
-			if mirlog.GetEntry(gsn) != nil {
-				continue
-			}
-			
-			// Se já existe, não recria
-			mu.Lock()
-			_, exists := inFlight[gsn]
-			mu.Unlock()
-			if exists {
-				continue
-			}
-			
-			// ✅ Cria instância em paralelo
-			wg.Add(1)
-			go func(localSN, globalSN int32) {
-				defer wg.Done()
-				
-				// Cria nova instância
-				inst := o.ensureInstance(globalSN)
-				inst.bucketId = groupId
-				inst.SetMembers(members)
-				o.dispatcher.store(globalSN, inst)
-				inst.startWorkers(&o.stopWg)
-				o.backlog.drainTo(globalSN, inst.enqueue)
-				
-				mu.Lock()
-				inFlight[globalSN] = inst
-				mu.Unlock()
-				
-				fmt.Printf("[MPX][SCHED] group=%d create inst globalSN=%d (localSN=%d) leader=%d\n",
-					groupId, globalSN, localSN, inst.leader)
-			}(local, gsn)
-		}
-		wg.Wait() // Aguarda todas as instâncias serem criadas
-	}
-	
-	// ✅ Processamento PARALELO de instâncias (latência escondida)
-	// Cada instância processa independentemente enquanto outras esperam rede
-	processSome := func(now time.Time) {
-		var wg sync.WaitGroup
-		for off := int32(0); off < windowW; off++ {
-			local := nextLocalSN + off
-			gsn := globalOf(local)
-			
-			inst := inFlight[gsn]
-			if inst == nil {
-				continue
-			}
-			
-			// ✅ Goroutine por instância = paralelismo real
-			wg.Add(1)
-			go func(i *mpxInstance, sn int32) {
-				defer wg.Done()
-				i.tick(now)
-				i.ProposeIfDue()
-			}(inst, gsn)
-		}
-		wg.Wait() // Aguarda todas as instâncias processarem
-	}
-	
-	// Ticker para propostas periódicas
-	ticker := time.NewTicker(o.proposeEvery)
-	defer ticker.Stop()
-	
-	// ✅ FIX: Líder = primeiro membro do grupo (determinístico)
-	isLeader := (membership.OwnID == members[0])
-	fmt.Printf("[MPX][LOCAL-SN] Group %d: ownID=%d leader=%d isLeader=%v\n", groupId, membership.OwnID, members[0], isLeader)
-	fmt.Printf("[MPX][LOCAL-SN] Group %d: Starting ticker loop (interval=%v, isLeader=%v, windowW=%d)\n", 
-		groupId, o.proposeEvery, isLeader, windowW)
-	
-	for {
-		select {
-		case <-ticker.C:
-			// Não-líderes apenas processam mensagens via HandleMessage
-			if !isLeader {
-				continue
-			}
-			
-			now := time.Now()
-			
-			// 1) Avança baseado APENAS no log (fonte de verdade do SMR)
-			advance()
-			
-			// 2) Mantém janela de instâncias em voo
-			ensureWindow()
-			
-			// 3) Processa instâncias da janela (controlado)
-			processSome(now)
-			
-			// 4) Avanço final (caso commit tenha ocorrido durante processamento)
-			advance()
-		}
-	}
-}
-
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	o.firstSNMu.Lock()
 	o.currentFirstSN = seg.FirstSN()
