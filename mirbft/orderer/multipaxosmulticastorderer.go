@@ -213,30 +213,25 @@ func (o *MultiPaxosMulticastOrderer) LoadGroupsFromYAML(filename string) error {
 }
 // Start - Inicia todos os orderers de grupo e configura fan-out de segmentos
 func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
-	// ✅ Fan-out de segmentos para TODOS os grupos (Simple e Single)
+	// ✅ CRITICAL: Todos os grupos recebem TODOS os segmentos
+	// Cada grupo processa apenas seus SNs (SN % numGroups == groupID)
 	segCh := o.mgr.SubscribeOrderer()
 	go func() {
 		for seg := range segCh {
-			all := o.am.GetDefinedGroups()
-			if len(all) == 0 || all[0] != 0 {
-				all = append([]uint32{0}, all...)
-			}
-			numGroups := int32(len(all))
-			if numGroups == 0 {
-				numGroups = 1
-			}
-			gid := uint32(seg.FirstSN() % numGroups)
+			// Envia para TODOS os grupos
 			o.orderersMu.RLock()
-			ord := o.groupOrderers[gid]
+			for gid, ord := range o.groupOrderers {
+				if ord == nil || ord.segmentChan == nil {
+					continue
+				}
+				select {
+				case ord.segmentChan <- seg:
+					fmt.Printf("[MULTICAST][SEG] Sent segment firstSN=%d to group %d\n", seg.FirstSN(), gid)
+				default:
+					fmt.Printf("[MULTICAST][SEG] drop seg firstSN=%d gid=%d (chan full)\n", seg.FirstSN(), gid)
+				}
+			}
 			o.orderersMu.RUnlock()
-			if ord == nil || ord.segmentChan == nil {
-				continue
-			}
-			select {
-			case ord.segmentChan <- seg:
-			default:
-				fmt.Printf("[MULTICAST][SEG] drop seg firstSN=%d gid=%d (chan full)\n", seg.FirstSN(), gid)
-			}
 		}
 	}()
 	
