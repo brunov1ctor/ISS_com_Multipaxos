@@ -809,7 +809,18 @@ func (i *mpxInstance) deliverCommit() {
 		
 		fmt.Printf("[GSN-ALL] sn=%d committed gsn=%d (sequential order verified)\n", i.sn, crossOpGSN)
 	}
+	// ✅ FIX: Verifica se é membro do grupo antes de anunciar
 	if i.announce != nil {
+		// Verifica membership para grupos de dados (não grupo 0)
+		if i.bucketId != 0 && i.parent != nil && i.parent.am != nil {
+			if !i.parent.am.IsMember(i.bucketId, membership.OwnID) {
+				fmt.Printf("[MPX][INST] sn=%d SKIP announce (not member of group %d)\n", i.sn, i.bucketId)
+				i.closed = true
+				traceCommit(i.sn, len(b.Requests))
+				return
+			}
+		}
+		
 		fmt.Printf("[MPX][INST] sn=%d announcing commit, size=%d\n", i.sn, len(b.Requests))
 		digestBytes := i.lastDigest[:]
 		i.announce(i.sn, b, digestBytes)  // ✅ Passa Batch diretamente
