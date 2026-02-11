@@ -798,7 +798,9 @@ func sanitizeGroups(in []uint32) []uint32 {
 // ✅ FIX: Se proxy não é membro, encaminha para membros do grupo
 // Garante que o líder do grupo SEMPRE receba a request (liveness)
 func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {
+	fmt.Printf("[SEND][DEBUG] Called for group %d\n", groupID)
 	members := o.am.GetGroupMembers(groupID)
+	fmt.Printf("[SEND][DEBUG] Group %d members: %v\n", groupID, members)
 	if members == nil || len(members) == 0 {
 		fmt.Printf("[SEND] Group %d has no members, dropping\n", groupID)
 		return
@@ -812,6 +814,7 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 			break
 		}
 	}
+	fmt.Printf("[SEND][DEBUG] Group %d isMember=%v (ownID=%d)\n", groupID, isMember, membership.OwnID)
 
 	// ✅ FIX: Adiciona ao bucket local se for membro (incluindo grupo 0)
 	if isMember {
@@ -1108,11 +1111,16 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ Single-group: Seta GroupId e deixa AddReqMsg processar
+	// ✅ PATCH 2: Single-group - encaminha para membros do grupo
 	if len(req.TouchedGroups) == 1 {
 		req.GroupId = req.TouchedGroups[0]
-		fmt.Printf("[PREPROCESS] Single-group: group=%d (no GSN/META needed)\n", req.GroupId)
-		return false // Deixa AddReqMsg processar normalmente
+		fmt.Printf("[PREPROCESS] Single-group: group=%d, forwarding to members\n", req.GroupId)
+		
+		// ✅ Encaminha para membros do grupo (não adiciona localmente se não for membro)
+		o.sendToGroup(req, req.GroupId)
+		
+		// ✅ Retorna true: já tratou a request (não precisa AddReqMsg local)
+		return true
 	}
 	
 	// ✅ Cross-group: Obtém GSN e publica META

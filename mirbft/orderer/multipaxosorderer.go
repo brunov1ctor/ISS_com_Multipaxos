@@ -315,19 +315,8 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 	})
 }
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
-	o.firstSNMu.Lock()
-	o.currentFirstSN = seg.FirstSN()
-	o.firstSNMu.Unlock()
-	o.segMu.Lock()
-	if o.currentSegCancel != nil {
-		o.currentSegCancel()
-	}
-	stopCh := make(chan struct{})
-	o.currentSegCancel = func() { close(stopCh) }
-	o.segMu.Unlock()
-	
-	// ✅ FIX: SN intercalado - cada orderer processa apenas SEU grupo
-	// Calcula qual grupo este segmento pertence
+	// ✅ FIX CRÍTICO: Verifica grupo ANTES de cancelar segmento anterior
+	// Evita race condition onde segmento de outro grupo mata ticker do grupo correto
 	firstSN := seg.FirstSN()
 	allGroupIDs := o.am.GetDefinedGroups()
 	if len(allGroupIDs) == 0 {
@@ -348,6 +337,18 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		fmt.Printf("[MPX] runSegment: firstSN=%d belongs to group %d, skipping (ownedGroupID=%d)\n", firstSN, segmentGroupID, o.ownedGroupID)
 		return
 	}
+	
+	// ✅ Agora sim: cancela segmento anterior (apenas do MESMO grupo)
+	o.firstSNMu.Lock()
+	o.currentFirstSN = seg.FirstSN()
+	o.firstSNMu.Unlock()
+	o.segMu.Lock()
+	if o.currentSegCancel != nil {
+		o.currentSegCancel()
+	}
+	stopCh := make(chan struct{})
+	o.currentSegCancel = func() { close(stopCh) }
+	o.segMu.Unlock()
 	
 	groupId := o.ownedGroupID
 	fmt.Printf("[MPX] runSegment: firstSN=%d processing for group %d\n", firstSN, groupId)
