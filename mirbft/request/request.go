@@ -360,9 +360,12 @@ func isControlMessage(payload []byte) bool {
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 	// MultiPaxos preprocessing: se preprocessor está configurado, usa ele
 	if requestPreprocessor != nil {
-		if !requestPreprocessor(reqMsg) {
-			return nil // Preprocessor rejeitou ou encaminhou a request
+		if requestPreprocessor(reqMsg) {
+			return nil // Preprocessor bloqueou (já processou)
 		}
+		// Preprocessor retornou false: continua com pipeline padrão
+		fmt.Printf("[ADD] Preprocessor returned false, continuing with standard pipeline (clientId=%d clientSn=%d groupId=%d)\n",
+			reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId)
 	}
 	
 
@@ -377,13 +380,22 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		Prev:     nil,
 	}
 	
+	fmt.Printf("[ADD] Created Request object: clientId=%d clientSn=%d bucket=%d\n",
+		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, req.Bucket.GetId())
+	
 	// MultiPaxos: Campos adicionais (só preenchidos se existirem)
 	if len(reqMsg.TouchedGroups) > 0 {
 		req.OpID = GenerateOpID(reqMsg)
 		req.GSN = reqMsg.GSN
 	}
 	
-	return Add(req)
+	result := Add(req)
+	if result != nil {
+		fmt.Printf("[ADD] Successfully added to bucket %d\n", result.Bucket.GetId())
+	} else {
+		fmt.Printf("[ADD] Failed to add (returned nil)\n")
+	}
+	return result
 }
 
 // GenerateOpID cria identificador determinístico para operação
