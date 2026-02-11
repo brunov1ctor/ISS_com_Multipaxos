@@ -1064,12 +1064,19 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v payload=%s\n", 
 		rid.GetClientId(), rid.GetClientSn(), req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
-	// ✅ Se já tem GroupId, foi preprocessado (single-group ou cross-group)
-	// Single-group: GroupId > 0, GSN = 0
-	// Cross-group: GroupId > 0, GSN > 0
-	if req.GroupId > 0 {
-		fmt.Printf("[PREPROCESS] Already has GroupId=%d GSN=%d (preprocessed), skipping\n", req.GroupId, req.GSN)
+	// ✅ Early-exit apenas se já foi COMPLETAMENTE preprocessado:
+	// - Single-group já processado: GroupId > 0 && len(TouchedGroups) <= 1
+	// - Cross-group já com GSN: GroupId > 0 && GSN > 0
+	// Cross-group SEM GSN precisa processar: GroupId > 0 && GSN == 0 && len(TouchedGroups) > 1
+	if req.GroupId > 0 && (len(req.TouchedGroups) <= 1 || req.GSN > 0) {
+		fmt.Printf("[PREPROCESS] Already preprocessed: GroupId=%d GSN=%d TouchedGroups=%v, skipping\n", req.GroupId, req.GSN, req.TouchedGroups)
 		return false
+	}
+	
+	// ✅ Cross-group que precisa processar: tem GroupId mas não tem GSN
+	if req.GroupId > 0 && req.GSN == 0 && len(req.TouchedGroups) > 1 {
+		fmt.Printf("[PREPROCESS] Cross-group needs processing: GroupId=%d TouchedGroups=%v\n", req.GroupId, req.TouchedGroups)
+		// Continua para obter GSN e fazer fanout
 	}
 	
 	// ✅ FILTRO GERAL: Bloqueia TODAS mensagens SYSTEM:* de virarem carga de aplicação
