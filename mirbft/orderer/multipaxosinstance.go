@@ -786,9 +786,6 @@ func (i *mpxInstance) deliverCommit() {
 		return
 	}
 	
-	if len(b.Requests) > 0 && len(b.Requests[0].TouchedGroups) > 0 {
-		// touchedGroups = b.Requests[0].TouchedGroups // Removed unused variable
-	}
 	if crossOpGSN > 0 && GetGlobalMulticastOrderer() != nil {
 		// Removida publicação redundante de META
 		// META é publicado apenas UMA vez pelo proxy no requesthandler.go
