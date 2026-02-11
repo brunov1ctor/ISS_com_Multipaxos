@@ -228,12 +228,12 @@ func SetMETAPublisher(fn func(uint64, []uint32)) {
 	metaPublisher = fn
 }
 
-// ✅ LIVENESS: SetRequestReceivedMarker configura callback para marcar requests recebidas
+// LIVENESS: SetRequestReceivedMarker configura callback para marcar requests recebidas
 func SetRequestReceivedMarker(fn func(uint64, uint32)) {
 	requestReceivedMarker = fn
 }
 
-// ✅ LIVENESS: SetRequestCacher configura callback para cache de requests
+// LIVENESS: SetRequestCacher configura callback para cache de requests
 func SetRequestCacher(fn func(uint64, *pb.ClientRequest)) {
 	requestCacher = fn
 }
@@ -358,48 +358,14 @@ func isControlMessage(payload []byte) bool {
 
 // Allocates a new Request object from a client request message and adds it by calling Add().
 func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
-	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil (alinhado com artigo)
-	if reqMsg.GetRequestId() == nil {
-		fmt.Printf("[ADD-REQ][ERROR] Rejecting request with nil RequestId\n")
-		return nil
+	// MultiPaxos preprocessing: se preprocessor está configurado, usa ele
+	if requestPreprocessor != nil {
+		if !requestPreprocessor(reqMsg) {
+			return nil // Preprocessor rejeitou ou encaminhou a request
+		}
 	}
 	
-	// Fast-path: mensagens de controle não entram em bucket
-	if isControlMessage(reqMsg.Payload) {
-		return nil
-	}
-	
-	// ✅ CORREÇÃO: GroupId já deve estar setado ANTES de calcular bucket
-	// Bucket é calculado A PARTIR do GroupId (não o contrário)
-	// GetBucketNr() usa req.GetGroupId() internamente
-	
-	// Calcula bucket usando GroupId já definido
-	bucketNr := GetBucketNr(reqMsg)
-	
-	// ✅ DEBUG: Log estado da request (safe: RequestId já validado)
-	rid := reqMsg.GetRequestId()
-	fmt.Printf("[ADD-REQ][ENTRY] req=%p clientId=%d clientSn=%d groupId=%d bucket=%d touchedGroups=%v gsn=%d\n",
-		reqMsg, rid.GetClientId(), rid.GetClientSn(), reqMsg.GroupId, bucketNr, reqMsg.TouchedGroups, reqMsg.GSN)
-	
-	// ✅ 3) LIVENESS: Marca request como recebida (para watchdog)
-	if reqMsg.GSN > 0 && reqMsg.GroupId > 0 && requestReceivedMarker != nil {
-		requestReceivedMarker(reqMsg.GSN, reqMsg.GroupId)
-	}
-	
-	// ✅ 3) LIVENESS: Cache request (se ainda não foi cacheada no proxy)
-	if reqMsg.GSN > 0 && requestCacher != nil {
-		requestCacher(reqMsg.GSN, reqMsg)
-	}
-	
-	// ✅ DEBUG: Log quando request é adicionada
-	payloadPreview := reqMsg.Payload
-	if len(payloadPreview) > 50 {
-		payloadPreview = payloadPreview[:50]
-	}
-	isSystem := strings.HasPrefix(string(reqMsg.Payload), "SYSTEM:")
-	fmt.Printf("[ADD-REQ] clientId=%d clientSn=%d groupId=%d bucket=%d gsn=%d touchedGroups=%v isSystem=%v payload=%s\n",
-		rid.GetClientId(), rid.GetClientSn(), reqMsg.GroupId, bucketNr, reqMsg.GSN, reqMsg.TouchedGroups, isSystem, string(payloadPreview))
-	
+
 	req := &Request{
 		Msg:      reqMsg,
 		Digest:   Digest(reqMsg),
@@ -409,21 +375,15 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		InFlight: false,
 		Next:     nil,
 		Prev:     nil,
-		OpID:     GenerateOpID(reqMsg),
-		GSN:      reqMsg.GSN,
 	}
 	
-	if proxyInterceptor != nil {
-		proxyInterceptor(req)
+	// MultiPaxos: Campos adicionais (só preenchidos se existirem)
+	if len(reqMsg.TouchedGroups) > 0 {
+		req.OpID = GenerateOpID(reqMsg)
+		req.GSN = reqMsg.GSN
 	}
 	
-	addedReq := Add(req)
-	if addedReq != nil {
-		fmt.Printf("[ADD-REQ] Successfully added to bucket=%d group=%d\n", bucketNr, reqMsg.GroupId)
-	} else {
-		fmt.Printf("[ADD-REQ][WARN] Failed to add to bucket=%d group=%d\n", bucketNr, reqMsg.GroupId)
-	}
-	return addedReq
+	return Add(req)
 }
 
 // GenerateOpID cria identificador determinístico para operação
@@ -558,21 +518,19 @@ func getBucket(req *pb.ClientRequest) *Bucket {
 }
 
 func GetBucketNr(req *pb.ClientRequest) int {
-	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil
-	rid := req.GetRequestId()
-	if rid == nil {
-		fmt.Printf("[BUCKET][ERROR] Request with nil RequestId, using bucket 0\n")
-		return 0
-	}
-	
 	n := len(Buckets)
 	if n == 0 {
 		return 0
 	}
 	
-	// ✅ CORREÇÃO: bucket intercalado por grupo
-	// Fórmula: bucket = groupId + numGroups * hash
-	// Garante que grupo g só usa buckets onde b % numGroups == g
+	// Se groupMembersGetter não foi inicializado (PBFT/HotStuff/Raft),
+	// usa lógica original simples
+	if groupMembersGetter == nil {
+		// Lógica original do PBFT: (clientID + clientSN) % numBuckets
+		return int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(n))
+	}
+	
+	// MultiPaxos: bucket intercalado por grupo
 	numGroups := getNumGroups()
 	if numGroups <= 0 {
 		numGroups = 1
@@ -586,23 +544,14 @@ func GetBucketNr(req *pb.ClientRequest) int {
 		g = g % numGroups
 	}
 	
-	// ✅ FIX: Hash distribui uniformemente entre os buckets do grupo
-	// bucketsPerGroup = quantos buckets cada grupo pode usar
-	// Com 16 buckets e 5 grupos: 16/5 = 3 (alguns grupos terão 4)
 	bucketsPerGroup := n / numGroups
 	if bucketsPerGroup <= 0 {
 		bucketsPerGroup = 1
 	}
 	
-	// Hash seleciona offset dentro dos buckets do grupo
-	// Usa módulo grande para distribuir melhor
-	h := int((rid.GetClientId() + rid.GetClientSn()) % int32(bucketsPerGroup*10)) % bucketsPerGroup
-	
-	// Bucket final: g + numGroups * h
-	// Garante que bucket % numGroups == g
+	h := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(bucketsPerGroup*10)) % bucketsPerGroup
 	b := g + numGroups*h
 	
-	// Garante que não ultrapassa limite
 	if b >= n {
 		b = g + numGroups*((b-g)/numGroups % bucketsPerGroup)
 	}
@@ -667,19 +616,12 @@ func Digest(req *pb.ClientRequest) []byte {
 }
 
 func RequestIDToBytes(req *pb.ClientRequest) []byte {
-	// ✅ VALIDAÇÃO: Garante RequestId nunca é nil
-	rid := req.GetRequestId()
-	if rid == nil {
-		fmt.Printf("[REQUEST-ID][ERROR] Request with nil RequestId, returning empty bytes\n")
-		return []byte{}
-	}
-	
 	buffer := make([]byte, 0, 0)
 	sn := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sn, uint32(rid.GetClientSn()))
+	binary.LittleEndian.PutUint32(sn, uint32(req.RequestId.ClientSn))
 	buffer = append(buffer, sn...)
 	id := make([]byte, 4)
-	binary.LittleEndian.PutUint32(id, uint32(rid.GetClientId()))
+	binary.LittleEndian.PutUint32(id, uint32(req.RequestId.ClientId))
 	buffer = append(buffer, id...)
 	return buffer
 }
