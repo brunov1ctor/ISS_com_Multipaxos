@@ -1100,13 +1100,16 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia
 	}
 	
-	// ✅ Mapeia requisição para grupos usando ReplicaMapper
-	fmt.Printf("[PREPROCESS] Calling ReplicaMapper...\n")
-	req.TouchedGroups = request.ReplicaMapper(req.Payload)
-	
-	// ✅ DETERMINISMO: Ordena TouchedGroups (segunda camada de segurança)
-	sort.Slice(req.TouchedGroups, func(i, j int) bool { return req.TouchedGroups[i] < req.TouchedGroups[j] })
-	fmt.Printf("[PREPROCESS] ReplicaMapper returned groups=%v (sorted)\n", req.TouchedGroups)
+	// ✅ Mapeia requisição para grupos usando ReplicaMapper (apenas se ainda não foi calculado)
+	if len(req.TouchedGroups) == 0 {
+		fmt.Printf("[PREPROCESS] Calling ReplicaMapper...\n")
+		req.TouchedGroups = request.ReplicaMapper(req.Payload)
+		// ✅ DETERMINISMO: Ordena TouchedGroups
+		sort.Slice(req.TouchedGroups, func(i, j int) bool { return req.TouchedGroups[i] < req.TouchedGroups[j] })
+		fmt.Printf("[PREPROCESS] ReplicaMapper returned groups=%v (sorted)\n", req.TouchedGroups)
+	} else {
+		fmt.Printf("[PREPROCESS] TouchedGroups already set=%v (forwarded request)\n", req.TouchedGroups)
+	}
 	
 	// ✅ VALIDAÇÃO: Remove grupo 0 se ReplicaMapper retornou (não deve acontecer)
 	for i := 0; i < len(req.TouchedGroups); i++ {

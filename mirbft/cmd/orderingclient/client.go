@@ -273,9 +273,7 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	}
 
 	// Cliente NÃO deve setar GroupId/TouchedGroups - deixa o preprocessor do servidor fazer isso
-	// Apenas calcula touchedGroups para decidir roteamento (proxy vs bucket)
-	touchedGroups := request.ReplicaMapper(payload)
-	
+	// Servidor vai calcular via ReplicaMapper para garantir determinismo
 	req := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
 			ClientId: c.ownClientID,
@@ -283,8 +281,8 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 		},
 		Payload:       payload,
 		Signature:     nil,
-		GroupId:       0, // Sempre 0 - servidor vai setar via preprocessor
-		TouchedGroups: touchedGroups, // Envia para roteamento no cliente, mas servidor vai recalcular
+		GroupId:       0,          // Sempre 0 - servidor vai setar
+		TouchedGroups: nil,        // Sempre nil - servidor vai calcular
 	}
 
 	// ALWAYS sign fresh (never reuse precomputed signatures)
@@ -782,41 +780,15 @@ func (c *client) newBucketsReady(epoch int32) *pb.BucketAssignment {
 
 func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 	// If request has no TouchedGroups, send to proxy for preprocessing
-	if len(req.TouchedGroups) == 0 {
-		// Send to proxy (orderer 0) for GSN assignment
-		if config.Config.CrossOpProxyNodeID >= 0 {
-			c.log.Info().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", config.Config.CrossOpProxyNodeID).Msg("NO TouchedGroups, sending to proxy")
-			return []int32{config.Config.CrossOpProxyNodeID}
-		}
-		// Fallback: send to orderer 0 if proxy not configured
-		c.log.Info().Int32("clSn", req.RequestId.ClientSn).Msg("NO TouchedGroups, sending to orderer 0 (default proxy)")
-		return []int32{0}
-	}
-	
-	// PROXY MODE: Cross-ops sempre vão para o proxy configurado
-	if config.Config.CrossOpProxyNodeID >= 0 && len(req.TouchedGroups) > 1 {
-		c.log.Info().Int32("clSn", req.RequestId.ClientSn).Interface("groups", req.TouchedGroups).Int32("proxy", config.Config.CrossOpProxyNodeID).Msg("Cross-op request, sending to proxy")
+	// Cliente SEMPRE envia para proxy para preprocessamento
+	// Servidor vai calcular TouchedGroups e fazer roteamento correto
+	if config.Config.CrossOpProxyNodeID >= 0 {
+		c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", config.Config.CrossOpProxyNodeID).Msg("Sending to proxy for preprocessing")
 		return []int32{config.Config.CrossOpProxyNodeID}
 	}
-	
-	// Calculate bucket using same hash as server: (clientId + clientSn) % maxBucketID+1
-	b := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(c.maxBucketID+1))
-	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int("bucket", b).Int("maxBucket", c.maxBucketID).Interface("groups", req.TouchedGroups).Msg("Calculated bucket")
-	
-	owner, ok := c.currentBucketAssignment[b]
-	if !ok {
-		c.log.Warn().Int32("clSn", req.RequestId.ClientSn).Int("bucket", b).Msg("Bucket NOT FOUND, trying fallback")
-		// Fallback: try bucket 0
-		owner, ok = c.currentBucketAssignment[0]
-		if !ok {
-			// Last resort: send to all orderers
-			c.log.Error().Msg("No bucket assignment found, sending to all")
-			return membership.AllNodeIDs()
-		}
-	}
-	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int("bucket", b).Int32("orderer", owner).Msg("Bucket -> orderer")
-
-	return []int32{owner}
+	// Fallback: send to orderer 0 if proxy not configured
+	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Msg("Sending to orderer 0 (default proxy)")
+	return []int32{0}
 }
 
 // Creates a string representation of a bucket assignment for the purpose of using it as a map key.
