@@ -1064,9 +1064,11 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v payload=%s\n", 
 		rid.GetClientId(), rid.GetClientSn(), req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
-	// ✅ Se já tem GSN E GroupId, foi preprocessado (forwarded ou cross-group)
-	if req.GSN > 0 && req.GroupId > 0 {
-		fmt.Printf("[PREPROCESS] Already has GSN=%d GroupId=%d (forwarded), skipping\n", req.GSN, req.GroupId)
+	// ✅ Se já tem GroupId, foi preprocessado (single-group ou cross-group)
+	// Single-group: GroupId > 0, GSN = 0
+	// Cross-group: GroupId > 0, GSN > 0
+	if req.GroupId > 0 {
+		fmt.Printf("[PREPROCESS] Already has GroupId=%d GSN=%d (preprocessed), skipping\n", req.GroupId, req.GSN)
 		return false
 	}
 	
