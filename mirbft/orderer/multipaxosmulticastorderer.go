@@ -821,6 +821,34 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 	}
 }
 
+// sendToGroupExceptSelf - Envia request para o grupo via rede, EXCETO para si mesmo
+// ✅ Usado quando o nó atual é membro e já vai adicionar localmente
+func (o *MultiPaxosMulticastOrderer) sendToGroupExceptSelf(req *pb.ClientRequest, groupID uint32) {
+	members := o.am.GetGroupMembers(groupID)
+	if members == nil || len(members) == 0 {
+		fmt.Printf("[SEND] Group %d has no members, dropping\n", groupID)
+		return
+	}
+
+	// ✅ REDE: Envia apenas para OUTROS membros (não para si mesmo)
+	for _, nodeID := range members {
+		if nodeID == membership.OwnID {
+			continue // Pula si mesmo
+		}
+		pm := &pb.ProtocolMessage{
+			SenderId: membership.OwnID,
+			Sn:       -1,
+			Msg: &pb.ProtocolMessage_GsnReqForward{
+				GsnReqForward: &pb.GSNReqForward{
+					Req: req,
+				},
+			},
+		}
+		messenger.EnqueueMsg(pm, nodeID)
+		fmt.Printf("[SEND] Forwarded to node %d (group %d member, excluding self)\n", nodeID, groupID)
+	}
+}
+
 // ProxyInterceptor - Intercepta requests para processamento de GSN
 // Usado pelo sistema de requests para coordenar operações cross-group
 func (o *MultiPaxosMulticastOrderer) ProxyInterceptor(gsn uint64, touchedGroups []uint32, req *pb.ClientRequest) {
@@ -1084,17 +1112,17 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		req.GroupId = req.TouchedGroups[0]
 		fmt.Printf("[PREPROCESS] Single-group: group=%d\n", req.GroupId)
 		
-		// ✅ Multicast para todos os membros (followers precisam ter batch)
-		o.sendToGroup(req, req.GroupId)
-		
 		// ✅ Se este nó é membro, permite adição local (retorna false)
 		if o.am.IsMember(req.GroupId, membership.OwnID) {
 			fmt.Printf("[PREPROCESS] This node is member, allowing local add\n")
+			// ✅ Multicast apenas para OUTROS membros (não para si mesmo)
+			o.sendToGroupExceptSelf(req, req.GroupId)
 			return false // Permite pipeline padrão adicionar ao bucket
 		}
 		
-		// ✅ Não é membro: já encaminhou, retorna true
-		return true
+		// ✅ Não é membro: encaminha para todos os membros
+		o.sendToGroup(req, req.GroupId)
+		return true // Bloqueia adição local
 	}
 	
 	// ✅ Cross-group: Obtém GSN e publica META
