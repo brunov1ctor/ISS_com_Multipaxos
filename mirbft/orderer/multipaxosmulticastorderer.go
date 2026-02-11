@@ -1079,15 +1079,21 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true // Bloqueia requisição inválida
 	}
 	
-	// ✅ PATCH 2: Single-group - encaminha para membros do grupo
+	// ✅ Single-group: inject local + multicast
 	if len(req.TouchedGroups) == 1 {
 		req.GroupId = req.TouchedGroups[0]
-		fmt.Printf("[PREPROCESS] Single-group: group=%d, forwarding to members\n", req.GroupId)
+		fmt.Printf("[PREPROCESS] Single-group: group=%d\n", req.GroupId)
 		
-		// ✅ Encaminha para membros do grupo (não adiciona localmente se não for membro)
+		// ✅ Se este nó é membro, injeta localmente (líder precisa ter no bucket)
+		if o.am.IsMember(req.GroupId, membership.OwnID) {
+			fmt.Printf("[PREPROCESS] Injecting locally (member of group %d)\n", req.GroupId)
+			request.AddReqMsg(req)
+		}
+		
+		// ✅ Multicast para todos os membros (followers precisam ter batch)
 		o.sendToGroup(req, req.GroupId)
 		
-		// ✅ Retorna true: já tratou a request (não precisa AddReqMsg local)
+		// ✅ Retorna true: já processou (evita duplicação pelo pipeline padrão)
 		return true
 	}
 	
