@@ -795,50 +795,18 @@ func sanitizeGroups(in []uint32) []uint32 {
 }
 
 // sendToGroup - Envia request para o grupo via rede (messenger)
-// ✅ FIX: Se proxy não é membro, encaminha para membros do grupo
-// Garante que o líder do grupo SEMPRE receba a request (liveness)
+// ✅ FIX: NUNCA chama AddReqMsg (evita loop infinito com PreprocessRequest)
+// Apenas encaminha via rede para membros do grupo
 func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {
-	fmt.Printf("[SEND][DEBUG] Called for group %d\n", groupID)
 	members := o.am.GetGroupMembers(groupID)
-	fmt.Printf("[SEND][DEBUG] Group %d members: %v\n", groupID, members)
 	if members == nil || len(members) == 0 {
 		fmt.Printf("[SEND] Group %d has no members, dropping\n", groupID)
 		return
 	}
 
-	// ✅ FIX: Verifica se proxy é membro do grupo
-	isMember := false
+	// ✅ REDE: Envia para TODOS os membros do grupo via rede
+	// Não adiciona localmente aqui - isso será feito quando a mensagem chegar via HandleMessage
 	for _, nodeID := range members {
-		if nodeID == membership.OwnID {
-			isMember = true
-			break
-		}
-	}
-	fmt.Printf("[SEND][DEBUG] Group %d isMember=%v (ownID=%d)\n", groupID, isMember, membership.OwnID)
-
-	// ✅ FIX: Adiciona ao bucket local se for membro (incluindo grupo 0)
-	if isMember {
-		fmt.Printf("[SEND] Adding to local bucket for group %d (I am member)\n", groupID)
-		request.AddReqMsg(req)
-	} else if groupID == 0 {
-		// ✅ CRITICAL: Grupo 0 DEVE adicionar localmente mesmo se não for "membro oficial"
-		// Todos os nós participam do grupo 0 (sequenciador)
-		fmt.Printf("[SEND] Group 0: adding to local bucket (all nodes are sequencers)\n")
-		request.AddReqMsg(req)
-	} else {
-		// ✅ PROXY: Não é membro, encaminha para membros do grupo via rede
-		fmt.Printf("[SEND] Forwarding to group %d members (I am NOT member)\n", groupID)
-	}
-
-	// ✅ REDE: Envia para TODOS os membros do grupo (garante liveness)
-	for _, nodeID := range members {
-		// Para grupo 0 (GSN/META), SEMPRE envia via rede para TODOS (incluindo si mesmo)
-		// Para outros grupos, pula envio para si mesmo se já adicionou localmente
-		if nodeID == membership.OwnID && groupID != 0 {
-			continue // Já adicionou localmente acima (se for membro de grupo != 0)
-		}
-		
-		// Envia para membros via rede
 		pm := &pb.ProtocolMessage{
 			SenderId: membership.OwnID,
 			Sn:       -1,
