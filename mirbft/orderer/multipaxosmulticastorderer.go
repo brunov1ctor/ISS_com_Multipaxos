@@ -1065,22 +1065,25 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		rid.GetClientId(), rid.GetClientSn(), req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
 	// ✅ Early-exit: Já foi completamente preprocessado
-	// Single-group: GroupId > 0 && (TouchedGroups vazio OU tem só 1 elemento)
-	// Cross-group: GroupId > 0 && GSN > 0 (já tem GSN atribuído)
-	if req.GroupId > 0 {
-		// Se já tem GSN, foi preprocessado (cross-group completo)
-		if req.GSN > 0 {
-			fmt.Printf("[PREPROCESS] Already preprocessed (has GSN): GroupId=%d GSN=%d TouchedGroups=%v, skipping\n", req.GroupId, req.GSN, req.TouchedGroups)
-			return false
-		}
-		// Se TouchedGroups <= 1, é single-group já processado
-		if len(req.TouchedGroups) <= 1 {
-			fmt.Printf("[PREPROCESS] Already preprocessed (single-group): GroupId=%d TouchedGroups=%v, skipping\n", req.GroupId, req.TouchedGroups)
-			return false
-		}
-		// Se GroupId > 0 && GSN == 0 && len(TouchedGroups) > 1: é cross-group que precisa processar
-		fmt.Printf("[PREPROCESS] Cross-group needs processing: GroupId=%d TouchedGroups=%v\n", req.GroupId, req.TouchedGroups)
-		// Continua para obter GSN e fazer fanout
+	// Cross-group com GSN: já foi processado completamente
+	if req.GroupId > 0 && req.GSN > 0 {
+		fmt.Printf("[PREPROCESS] Already preprocessed (has GSN): GroupId=%d GSN=%d TouchedGroups=%v, skipping\n", req.GroupId, req.GSN, req.TouchedGroups)
+		return false
+	}
+	
+	// Single-group já processado: tem GroupId mas TouchedGroups <= 1
+	if req.GroupId > 0 && len(req.TouchedGroups) <= 1 {
+		fmt.Printf("[PREPROCESS] Already preprocessed (single-group): GroupId=%d TouchedGroups=%v, skipping\n", req.GroupId, req.TouchedGroups)
+		return false
+	}
+	
+	// ❌ BUG: Request com GroupId E TouchedGroups > 1 mas SEM GSN = estado inválido
+	// Isso indica que a request foi parcialmente processada (tem GroupId de um fanout anterior)
+	// mas ainda não tem GSN. Isso NÃO deveria acontecer no fluxo normal.
+	// Solução: Trata como já preprocessada e permite pipeline padrão
+	if req.GroupId > 0 && len(req.TouchedGroups) > 1 && req.GSN == 0 {
+		fmt.Printf("[PREPROCESS] Invalid state: GroupId=%d TouchedGroups=%v but no GSN (forwarded clone?), allowing pipeline\n", req.GroupId, req.TouchedGroups)
+		return false // Permite pipeline padrão processar
 	}
 	
 	// ✅ FILTRO GERAL: Bloqueia TODAS mensagens SYSTEM:* de virarem carga de aplicação
