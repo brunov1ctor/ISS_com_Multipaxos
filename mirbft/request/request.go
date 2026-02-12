@@ -324,7 +324,6 @@ func GetGroupMembersGetter() func(uint32) []int32 {
 // getNumGroups retorna número total de grupos (incluindo grupo 0)
 func getNumGroups() int {
 	if groupMembersGetter == nil {
-		fmt.Printf("[getNumGroups] groupMembersGetter is nil, returning fallback 5\n")
 		return 5 // Fallback para 5 grupos se não inicializado
 	}
 	// Conta grupos definidos (assume grupos sequenciais 0,1,2,3,4...)
@@ -337,9 +336,7 @@ func getNumGroups() int {
 			}
 		}
 	}
-	result := maxGroup + 1
-	fmt.Printf("[getNumGroups] Found %d groups (maxGroup=%d)\n", result, maxGroup)
-	return result // +1 porque grupos começam em 0
+	return maxGroup + 1 // +1 porque grupos começam em 0
 }
 
 // getNumDataGroups retorna número de grupos de dados (exclui grupo 0)
@@ -546,6 +543,11 @@ func GetBucketNr(req *pb.ClientRequest) int {
 	}
 	
 	// MultiPaxos: bucket intercalado por grupo
+	// Fórmula: bucket = groupId + numGroups * offset
+	// Exemplo com 5 grupos e 80 buckets:
+	//   Grupo 0: buckets 0, 5, 10, 15, 20...
+	//   Grupo 1: buckets 1, 6, 11, 16, 21...
+	//   Grupo 3: buckets 3, 8, 13, 18, 23...
 	numGroups := getNumGroups()
 	if numGroups <= 0 {
 		numGroups = 1
@@ -559,17 +561,23 @@ func GetBucketNr(req *pb.ClientRequest) int {
 		g = g % numGroups
 	}
 	
+	// Calcula offset dentro do grupo baseado em clientId+clientSn
 	bucketsPerGroup := n / numGroups
 	if bucketsPerGroup <= 0 {
 		bucketsPerGroup = 1
 	}
 	
-	h := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(bucketsPerGroup*10)) % bucketsPerGroup
-	b := g + numGroups*h
+	// Hash para distribuir uniformemente dentro do grupo
+	hash := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(bucketsPerGroup))
+	b := g + numGroups*hash
 	
+	// Garante que bucket está dentro do range válido
 	if b >= n {
-		b = g + numGroups*((b-g)/numGroups % bucketsPerGroup)
+		b = g + numGroups*(hash % bucketsPerGroup)
 	}
+	
+	fmt.Printf("[GetBucketNr] clientId=%d clientSn=%d groupId=%d -> bucket=%d (numGroups=%d, bucketsPerGroup=%d, hash=%d)\n",
+		req.RequestId.ClientId, req.RequestId.ClientSn, g, b, numGroups, bucketsPerGroup, hash)
 	
 	return b
 }
