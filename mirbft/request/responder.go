@@ -140,18 +140,18 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 					continue
 				}
 				
-				fmt.Printf("[OUTPUT-PROC][FIRST] sn=%d opid=%s group=%d responding (first valid)\n", 
-					e.Sn, opID, req.GetGroupId())
-			}
-			
-			// CSMR Output Processing: filtra por membership
-			// Crash model: primeira resposta válida é suficiente
-			if r.isMemberFunc != nil && req.GroupId != 0 {
-				if !r.isMemberFunc(req.GroupId, membership.OwnID) {
-					fmt.Printf("[OUTPUT-PROC][SKIP] sn=%d req=%d group=%d (not in R(x))\n",
-						e.Sn, csn, req.GroupId)
-					skipped++
-					continue
+				fmt.Printf("[OUTPUT-PROC][CROSS-GROUP] sn=%d opid=%s gsn=%d responding (no membership check)\n", 
+					e.Sn, opID, req.GSN)
+			} else {
+				// CSMR Output Processing: filtra por membership APENAS para single-group ops
+				// Crash model: primeira resposta válida é suficiente
+				if r.isMemberFunc != nil && req.GroupId != 0 {
+					if !r.isMemberFunc(req.GroupId, membership.OwnID) {
+						fmt.Printf("[OUTPUT-PROC][SKIP] sn=%d req=%d group=%d (not in R(x))\n",
+							e.Sn, csn, req.GroupId)
+						skipped++
+						continue
+					}
 				}
 			}
 
