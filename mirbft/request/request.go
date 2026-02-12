@@ -324,6 +324,7 @@ func GetGroupMembersGetter() func(uint32) []int32 {
 // getNumGroups retorna número total de grupos (incluindo grupo 0)
 func getNumGroups() int {
 	if groupMembersGetter == nil {
+		fmt.Printf("[getNumGroups] groupMembersGetter is nil, returning fallback 5\n")
 		return 5 // Fallback para 5 grupos se não inicializado
 	}
 	// Conta grupos definidos (assume grupos sequenciais 0,1,2,3,4...)
@@ -336,7 +337,9 @@ func getNumGroups() int {
 			}
 		}
 	}
-	return maxGroup + 1 // +1 porque grupos começam em 0
+	result := maxGroup + 1
+	fmt.Printf("[getNumGroups] Found %d groups (maxGroup=%d)\n", result, maxGroup)
+	return result // +1 porque grupos começam em 0
 }
 
 // getNumDataGroups retorna número de grupos de dados (exclui grupo 0)
