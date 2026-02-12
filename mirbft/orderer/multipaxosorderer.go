@@ -329,14 +329,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		numGroups = 1
 	}
 	
-	// ✅ FIX CRÍTICO: Grupo = firstSN % numGroups
-	segmentGroupID := uint32(firstSN % numGroups)
-	
-	// ✅ FIX: Processa apenas se este orderer gerencia este grupo
-	if o.ownedGroupID != segmentGroupID {
-		fmt.Printf("[MPX] runSegment: firstSN=%d belongs to group %d, skipping (ownedGroupID=%d)\n", firstSN, segmentGroupID, o.ownedGroupID)
-		return
-	}
+	// ✅ FIX CRÍTICO: Com interleaved SN, TODOS os grupos processam TODOS os segmentos
+	// Cada grupo pega seus SNs específicos (grupo 1 pega SNs 1,6,11... grupo 2 pega 2,7,12...)
+	// A verificação de "qual grupo processa qual segmento" estava ERRADA e causava deadlock
+	fmt.Printf("[MPX] runSegment: firstSN=%d processing for group %d (interleaved SN mode)\n", firstSN, o.ownedGroupID)
 	
 	// ✅ Agora sim: cancela segmento anterior (apenas do MESMO grupo)
 	o.firstSNMu.Lock()
