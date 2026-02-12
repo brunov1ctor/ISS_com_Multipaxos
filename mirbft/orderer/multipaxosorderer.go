@@ -389,6 +389,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 					}
 					now := time.Now()
 					if mirlog.GetEntry(currentSN) != nil {
+						fmt.Printf("[MPX][TICK] sn=%d already in log, skipping (advancing by %d)\n", currentSN, numGroups)
 						currentSN += numGroups
 						continue
 					}
