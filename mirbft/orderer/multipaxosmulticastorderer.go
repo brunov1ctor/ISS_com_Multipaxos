@@ -28,11 +28,6 @@ const (
 	SYSTEM_GSN_REQUEST = "SYSTEM:GSN_REQUEST:"
 )
 
-// Funções auxiliares para identificar mensagens do sistema
-func isMETAStream(req *pb.ClientRequest) bool {
-	return strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM)
-}
-
 var globalMulticastOrderer *MultiPaxosMulticastOrderer
 
 func GetGlobalMulticastOrderer() *MultiPaxosMulticastOrderer {
@@ -52,13 +47,6 @@ type MultiPaxosMulticastOrderer struct {
 	gsnReqMu           sync.Mutex
 	gsnSeqCounter      uint32
 	metaSeqCounter     uint32
-	
-	// GSN Batching - processa múltiplas requests em um consenso
-	gsnBatchPending    []uint64           // IDs das requests aguardando batch
-	gsnBatchMu         sync.Mutex
-	gsnBatchTimer      *time.Timer
-	gsnBatchSize       int                // Tamanho máximo do batch (default: 32)
-	gsnBatchTimeout    time.Duration      // Timeout para cortar batch (default: 5ms)
 	
 	// META Stream
 	gsnMetadata map[uint64][]uint32
@@ -115,15 +103,7 @@ func (o *MultiPaxosMulticastOrderer) initComponents() {
 	// SN intercalado: Apenas campos necessários (sem mapeamento SN→grupo)
 	o.gsnMetadata = make(map[uint64][]uint32)
 	o.gsnRequestsPending = make(map[uint64]chan uint64)
-	// ✅ RECUPERAÇÃO: nextGSN será reconstruído do log após Init()
 	o.nextGSN = 1
-	
-	// ✅ GSN BATCHING: Inicializa batching para reduzir consensos
-	o.gsnBatchPending = make([]uint64, 0, 32)
-	o.gsnBatchSize = 32        // Processa até 32 GSN em um consenso
-	o.gsnBatchTimeout = 5 * time.Millisecond // Corta batch após 5ms
-	
-	fmt.Printf("[MULTICAST] GSN Batching: size=%d timeout=%v\n", o.gsnBatchSize, o.gsnBatchTimeout)
 	
 	// ✅ LIVENESS: Inicializa rastreamento de requests perdidas
 	o.missingRequests = make(map[uint64]map[uint32]time.Time)
@@ -167,9 +147,9 @@ func (o *MultiPaxosMulticastOrderer) createGroupOrderers(mngr manager.Manager) {
 		// ✅ PERFORMANCE FIX: Group 0 (GSN sequencer) precisa ser MUITO mais rápido
 		// BatchTimeout padrão (1000ms) é muito lento para sequenciador
 		if gid == 0 {
-			// Override proposeEvery para 50ms (20x mais rápido que grupos de dados)
-			groupOrderer.proposeEvery = 50 * time.Millisecond
-			fmt.Printf("[MULTICAST] Created GSN SEQUENCER (group 0) - proposeEvery=50ms (fast mode)\n")
+			// Override proposeEvery para 1ms (1000x mais rápido que grupos de dados)
+			groupOrderer.proposeEvery = 1 * time.Millisecond
+			fmt.Printf("[MULTICAST] Created GSN SEQUENCER (group 0) - proposeEvery=1ms (ultra-fast mode)\n")
 		} else {
 			fmt.Printf("[MULTICAST] Created orderer for group %d - interleaved SN\n", gid)
 		}
@@ -205,11 +185,10 @@ func (o *MultiPaxosMulticastOrderer) trackSegments() {
 }
 
 func (o *MultiPaxosMulticastOrderer) trackCheckpoints() {
+	// Apenas monitora checkpoints (limpeza removida - não necessária)
 	checkpoints := mirlog.Checkpoints()
-	for checkpoint := range checkpoints {
-		if checkpoint != nil {
-			o.cleanOldMappings(checkpoint.Sn)
-		}
+	for range checkpoints {
+		// Nada a fazer - mantém goroutine viva
 	}
 }
 
@@ -382,96 +361,41 @@ func (o *MultiPaxosMulticastOrderer) GetNumGroups() int {
 }
 
 // GetNextGSN - Obtém próximo GSN via grupo 0 (sequenciador global)
-// ✅ BATCHING: Acumula requests e envia em batch para reduzir consensos
 func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 	clientSn := atomic.AddUint32(&o.gsnSeqCounter, 1)
 	reqID := makeGlobalRequestID(membership.OwnID, clientSn)
 	respChan := make(chan uint64, 1)
 	
-	fmt.Printf("[GSN-REQ][START] nodeId=%d clientSn=%d reqID=%d\n", membership.OwnID, clientSn, reqID)
-	
 	o.gsnReqMu.Lock()
 	o.gsnRequestsPending[reqID] = respChan
-	pendingCount := len(o.gsnRequestsPending)
 	o.gsnReqMu.Unlock()
-	fmt.Printf("[GSN-REQ][PENDING] reqID=%d registered, total pending=%d\n", reqID, pendingCount)
 	
-	// ✅ BATCHING: Adiciona ao batch pendente
-	o.gsnBatchMu.Lock()
-	o.gsnBatchPending = append(o.gsnBatchPending, reqID)
-	batchFull := len(o.gsnBatchPending) >= o.gsnBatchSize
-	
-	// Se batch está cheio, envia imediatamente
-	if batchFull {
-		if o.gsnBatchTimer != nil {
-			o.gsnBatchTimer.Stop()
-		}
-		o.flushGSNBatch()
-	} else if len(o.gsnBatchPending) == 1 {
-		// Primeiro item do batch - inicia timer
-		o.gsnBatchTimer = time.AfterFunc(o.gsnBatchTimeout, func() {
-			o.gsnBatchMu.Lock()
-			o.flushGSNBatch()
-			o.gsnBatchMu.Unlock()
-		})
+	// Envia request imediatamente para grupo 0
+	gsnReq := &pb.ClientRequest{
+		RequestId: &pb.RequestID{
+			ClientId: membership.OwnID,
+			ClientSn: int32(clientSn),
+		},
+		Payload:       []byte(fmt.Sprintf("%s%d:%d", SYSTEM_GSN_REQUEST, reqID, membership.OwnID)),
+		GroupId:       0,
+		TouchedGroups: []uint32{0},
 	}
-	o.gsnBatchMu.Unlock()
+	o.sendToGroup(gsnReq, 0)
 	
 	select {
 	case gsn := <-respChan:
-		fmt.Printf("[GSN-REQ][SUCCESS] Received GSN=%d for reqID=%d\n", gsn, reqID)
 		o.gsnReqMu.Lock()
 		delete(o.gsnRequestsPending, reqID)
-		pendingCount := len(o.gsnRequestsPending)
 		o.gsnReqMu.Unlock()
-		fmt.Printf("[GSN-REQ][CLEANUP] reqID=%d removed, remaining pending=%d\n", reqID, pendingCount)
 		return gsn
 	case <-time.After(time.Duration(config.Config.ClientDrainTime) * time.Millisecond):
-		fmt.Printf("[GSN-REQ][ERROR] Timeout waiting for GSN reqID=%d after %dms\n", reqID, config.Config.ClientDrainTime)
 		o.gsnReqMu.Lock()
 		delete(o.gsnRequestsPending, reqID)
-		pendingCount := len(o.gsnRequestsPending)
-		fmt.Printf("[GSN-REQ][ERROR] Still pending: %d requests\n", pendingCount)
 		o.gsnReqMu.Unlock()
 		return 0
 	}
 }
 
-// flushGSNBatch - Envia batch de GSN_REQUEST para consenso (chamado com lock)
-func (o *MultiPaxosMulticastOrderer) flushGSNBatch() {
-	if len(o.gsnBatchPending) == 0 {
-		return
-	}
-	
-	batch := make([]uint64, len(o.gsnBatchPending))
-	copy(batch, o.gsnBatchPending)
-	o.gsnBatchPending = o.gsnBatchPending[:0]
-	
-	fmt.Printf("[GSN-BATCH][SEND] Flushing batch of %d requests: %v\n", len(batch), batch)
-	
-	payload := fmt.Sprintf("%sBATCH:%d", SYSTEM_GSN_REQUEST, len(batch))
-	for _, reqID := range batch {
-		payload += fmt.Sprintf(":%d", reqID)
-	}
-	
-	gsnReq := &pb.ClientRequest{
-		RequestId: &pb.RequestID{
-			ClientId: membership.OwnID,
-			ClientSn: int32(atomic.AddUint32(&o.gsnSeqCounter, 1)),
-		},
-		Payload:       []byte(payload),
-		GroupId:       0,
-		TouchedGroups: []uint32{0},
-	}
-	
-	fmt.Printf("[GSN-BATCH][SEND] Sending to group 0: %s\n", payload)
-	o.sendToGroup(gsnReq, 0)
-}
-
-func (o *MultiPaxosMulticastOrderer) cleanOldMappings(checkpointSN int32) {
-	// SN intercalado: mantém compatibilidade com log/checkpoint global
-	fmt.Printf("[MULTICAST] Checkpoint %d (interleaved SN space)\n", checkpointSN)
-}
 
 // ADeliver - Verifica ordem determinística baseada em META antes de entregar
 // ✅ FIX: Só entrega quando gsn == nextTouchingGSN (determinístico via META)
