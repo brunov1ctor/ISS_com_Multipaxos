@@ -100,6 +100,17 @@ func Init() {
 	for i := range Buckets {
 		Buckets[i] = NewBucket(i)
 	}
+	
+	// Valida configuração de buckets para MultiPaxos
+	if groupMembersGetter != nil {
+		numGroups := getNumGroups()
+		if numGroups > 0 && config.Config.NumBuckets % numGroups != 0 {
+			logger.Warn().
+				Int("numBuckets", config.Config.NumBuckets).
+				Int("numGroups", numGroups).
+				Msg("[MultiPaxos] NumBuckets should be multiple of numGroups for uniform distribution. Some groups will have fewer buckets.")
+		}
+	}
 
 	// Initialize request handler goroutines.
 	// These threads are reading incoming requests from (buffered) input channels and putting them in Buffers / Buckets.
@@ -363,12 +374,8 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		if requestPreprocessor(reqMsg) {
 			return nil // Preprocessor bloqueou (já processou)
 		}
-		// Preprocessor retornou false: continua com pipeline padrão
-		fmt.Printf("[ADD] Preprocessor returned false, continuing with standard pipeline (clientId=%d clientSn=%d groupId=%d)\n",
-			reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, reqMsg.GroupId)
 	}
 	
-
 	req := &Request{
 		Msg:      reqMsg,
 		Digest:   Digest(reqMsg),
@@ -380,22 +387,13 @@ func AddReqMsg(reqMsg *pb.ClientRequest) *Request {
 		Prev:     nil,
 	}
 	
-	fmt.Printf("[ADD] Created Request object: clientId=%d clientSn=%d bucket=%d\n",
-		reqMsg.RequestId.ClientId, reqMsg.RequestId.ClientSn, req.Bucket.GetId())
-	
 	// MultiPaxos: Campos adicionais (só preenchidos se existirem)
 	if len(reqMsg.TouchedGroups) > 0 {
 		req.OpID = GenerateOpID(reqMsg)
 		req.GSN = reqMsg.GSN
 	}
 	
-	result := Add(req)
-	if result != nil {
-		fmt.Printf("[ADD] Successfully added to bucket %d\n", result.Bucket.GetId())
-	} else {
-		fmt.Printf("[ADD] Failed to add (returned nil)\n")
-	}
-	return result
+	return Add(req)
 }
 
 // GenerateOpID cria identificador determinístico para operação
@@ -421,7 +419,6 @@ func Add(req *Request) *Request {
 	// The request might be backlogged though by the Buffer
 	// (Note that the implementation of backlogging does not require a write lock on the buffer.).
 	if !req.Buffer.Add(req) {
-		fmt.Printf("[ADD][REJECT] clientId=%d clientSn=%d rejected by Buffer.Add (watermark)\n", req.Msg.RequestId.ClientId, req.Msg.RequestId.ClientSn)
 		return nil
 	}
 
@@ -544,10 +541,7 @@ func GetBucketNr(req *pb.ClientRequest) int {
 	
 	// MultiPaxos: bucket intercalado por grupo
 	// Fórmula: bucket = groupId + numGroups * offset
-	// Exemplo com 5 grupos e 80 buckets:
-	//   Grupo 0: buckets 0, 5, 10, 15, 20...
-	//   Grupo 1: buckets 1, 6, 11, 16, 21...
-	//   Grupo 3: buckets 3, 8, 13, 18, 23...
+	// IMPORTANTE: numBuckets deve ser múltiplo de numGroups para distribuição uniforme
 	numGroups := getNumGroups()
 	if numGroups <= 0 {
 		numGroups = 1
@@ -561,23 +555,32 @@ func GetBucketNr(req *pb.ClientRequest) int {
 		g = g % numGroups
 	}
 	
-	// Calcula offset dentro do grupo baseado em clientId+clientSn
+	// Calcula quantos buckets cada grupo pode ter
+	// Com divisão inteira, alguns grupos podem ter 1 bucket a mais
 	bucketsPerGroup := n / numGroups
 	if bucketsPerGroup <= 0 {
 		bucketsPerGroup = 1
 	}
 	
-	// Hash para distribuir uniformemente dentro do grupo
-	hash := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(bucketsPerGroup))
-	b := g + numGroups*hash
-	
-	// Garante que bucket está dentro do range válido
-	if b >= n {
-		b = g + numGroups*(hash % bucketsPerGroup)
+	// Calcula offset usando módulo do número REAL de buckets disponíveis para este grupo
+	// Conta quantos buckets este grupo realmente tem
+	maxOffset := 0
+	for b := g; b < n; b += numGroups {
+		maxOffset++
+	}
+	if maxOffset == 0 {
+		maxOffset = 1
 	}
 	
-	fmt.Printf("[GetBucketNr] clientId=%d clientSn=%d groupId=%d -> bucket=%d (numGroups=%d, bucketsPerGroup=%d, hash=%d)\n",
-		req.RequestId.ClientId, req.RequestId.ClientSn, g, b, numGroups, bucketsPerGroup, hash)
+	// Hash distribuído uniformemente dentro dos buckets REAIS do grupo
+	hash := int((req.RequestId.ClientId + req.RequestId.ClientSn) % int32(maxOffset))
+	b := g + numGroups*hash
+	
+	// Validação final: garante que bucket está dentro do range
+	if b >= n {
+		// Fallback: usa primeiro bucket do grupo
+		b = g
+	}
 	
 	return b
 }
