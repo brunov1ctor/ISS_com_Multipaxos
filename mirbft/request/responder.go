@@ -58,7 +58,7 @@ type Responder struct {
 	isMemberFunc func(groupID uint32, nodeID int32) bool
 	getGroupMembers func(groupID uint32) []int32
 	
-	// ✅ Output Processing: primeira resposta válida (como no artigo)
+	// Output Processing: primeira resposta válida (como no artigo)
 	respondedOps sync.Map // opID -> bool
 }
 
@@ -69,7 +69,7 @@ type Responder struct {
 func NewResponder() *Responder {
 	printVersionBanner()
 	return &Responder{
-		// ✅ FIX: Usa EntriesOutOfOrder() para suportar SN intercalado
+		// Usa EntriesOutOfOrder() para suportar SN intercalado
 		entriesChan:  log.EntriesOutOfOrder(),
 	}
 }
@@ -119,7 +119,7 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 				continue
 			}
 			
-			// ✅ FIX: Não responda operações internas do protocolo (GSN/META) como se fossem cliente
+			// Não responda operações internas do protocolo (GSN/META) como se fossem cliente
 			if bytes.HasPrefix(req.Payload, systemPrefix) {
 				skipped++
 				continue
@@ -128,27 +128,36 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 			cid := req.RequestId.ClientId
 			csn := req.RequestId.ClientSn
 			
-			// ✅ Cross-op: primeira resposta válida (como no artigo)
-			// Atomic order já garantido pelo orderer (GSN)
+			// CSMR Output Processing: verifica membership primeiro
 			if len(req.TouchedGroups) > 1 {
-				opID := GenerateOpID(req)
+				// Cross-group: verifica se está em ALGUM dos grupos tocados
+				inMembership := false
+				if r.isMemberFunc != nil {
+					for _, gid := range req.TouchedGroups {
+						if r.isMemberFunc(gid, membership.OwnID) {
+							inMembership = true
+							break
+						}
+					}
+				} else {
+					inMembership = true
+				}
 				
-				// Deduplicação: responde apenas uma vez
-				if _, loaded := r.respondedOps.LoadOrStore(opID, true); loaded {
-					fmt.Printf("[OUTPUT-PROC][DEDUP] sn=%d opid=%s already responded\n", e.Sn, opID)
+				if !inMembership {
 					skipped++
 					continue
 				}
 				
-				fmt.Printf("[OUTPUT-PROC][CROSS-GROUP] sn=%d opid=%s gsn=%d responding (no membership check)\n", 
-					e.Sn, opID, req.GSN)
+				// Deduplicação: apenas uma réplica responde
+				opID := GenerateOpID(req)
+				if _, loaded := r.respondedOps.LoadOrStore(opID, true); loaded {
+					skipped++
+					continue
+				}
 			} else {
-				// CSMR Output Processing: filtra por membership APENAS para single-group ops
-				// Crash model: primeira resposta válida é suficiente
+				// Single-group: verifica membership do grupo específico
 				if r.isMemberFunc != nil && req.GroupId != 0 {
 					if !r.isMemberFunc(req.GroupId, membership.OwnID) {
-						fmt.Printf("[OUTPUT-PROC][SKIP] sn=%d req=%d group=%d (not in R(x))\n",
-							e.Sn, csn, req.GroupId)
 						skipped++
 						continue
 					}
