@@ -1065,25 +1065,29 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		rid.GetClientId(), rid.GetClientSn(), req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
 	// ✅ Early-exit: Já foi completamente preprocessado
-	// Cross-group com GSN: já foi processado completamente
+	// Cross-group com GSN: já foi processado completamente (forwarded from fanout)
 	if req.GroupId > 0 && req.GSN > 0 {
 		fmt.Printf("[PREPROCESS] Already preprocessed (has GSN): GroupId=%d GSN=%d TouchedGroups=%v, skipping\n", req.GroupId, req.GSN, req.TouchedGroups)
 		return false
 	}
 	
-	// Single-group já processado: tem GroupId mas TouchedGroups <= 1
-	if req.GroupId > 0 && len(req.TouchedGroups) <= 1 {
-		fmt.Printf("[PREPROCESS] Already preprocessed (single-group): GroupId=%d TouchedGroups=%v, skipping\n", req.GroupId, req.TouchedGroups)
+	// Single-group já processado: tem GroupId > 0 mas TouchedGroups <= 1 (forwarded)
+	if req.GroupId > 0 && len(req.TouchedGroups) == 1 {
+		fmt.Printf("[PREPROCESS] Already preprocessed (single-group forwarded): GroupId=%d TouchedGroups=%v, skipping\n", req.GroupId, req.TouchedGroups)
 		return false
 	}
 	
-	// ❌ BUG: Request com GroupId E TouchedGroups > 1 mas SEM GSN = estado inválido
-	// Isso indica que a request foi parcialmente processada (tem GroupId de um fanout anterior)
-	// mas ainda não tem GSN. Isso NÃO deveria acontecer no fluxo normal.
-	// Solução: Trata como já preprocessada e permite pipeline padrão
+	// ❌ CRITICAL: GroupId=0 significa "precisa preprocessing" (cliente não sabe o grupo)
+	// Mesmo que tenha TouchedGroups, se GroupId=0 precisa recalcular
+	if req.GroupId == 0 {
+		fmt.Printf("[PREPROCESS] GroupId=0 detected, needs preprocessing (client doesn't know target group)\n")
+		// Continua para ReplicaMapper abaixo
+	}
+	
+	// ❌ Estado inválido: GroupId > 0 com TouchedGroups > 1 mas sem GSN
 	if req.GroupId > 0 && len(req.TouchedGroups) > 1 && req.GSN == 0 {
 		fmt.Printf("[PREPROCESS] Invalid state: GroupId=%d TouchedGroups=%v but no GSN (forwarded clone?), allowing pipeline\n", req.GroupId, req.TouchedGroups)
-		return false // Permite pipeline padrão processar
+		return false
 	}
 	
 	// ✅ FILTRO GERAL: Bloqueia TODAS mensagens SYSTEM:* de virarem carga de aplicação
