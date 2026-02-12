@@ -347,6 +347,15 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		Msg:      &pb.ProtocolMessage_Multipaxos{Multipaxos: promise},
 	}
 	leaderID := int32(prepare.GetId().GetLead())
+	
+	// ✅ SEMPRE envia PROMISE pela rede (mesmo se for o líder)
+	// Líder precisa que followers recebam PREPARE para responderem
+	fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d to leader=%d\n", i.sn, ballot, groupId, leaderID)
+	if i.parent.emit != nil {
+		i.parent.emit(out)
+	}
+	
+	// Se for o próprio líder, processa localmente também
 	if leaderID == membership.OwnID {
 		fmt.Printf("[MPX][INST] sn=%d PREPARE from self, setting as leader\n", i.sn)
 		i.leader = membership.OwnID
@@ -361,14 +370,8 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 				i.prepared = true
 				i.phase = phasePrepared
 				fmt.Printf("[MPX][INST] sn=%d QUORUM de promises atingido, entrando em steady-state\n", i.sn)
-				// ✅ Chama ProposeIfDue imediatamente ao atingir quorum
 				go i.ProposeIfDue()
 			}
-		}
-	} else {
-		fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d to leader=%d\n", i.sn, ballot, groupId, leaderID)
-		if i.parent.emit != nil {
-			i.parent.emit(out)
 		}
 	}
 }
