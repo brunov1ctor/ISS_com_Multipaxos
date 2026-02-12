@@ -123,6 +123,8 @@ func (o *MultiPaxosMulticastOrderer) initComponents() {
 	o.gsnBatchSize = 32        // Processa até 32 GSN em um consenso
 	o.gsnBatchTimeout = 5 * time.Millisecond // Corta batch após 5ms
 	
+	fmt.Printf("[MULTICAST] GSN Batching: size=%d timeout=%v\n", o.gsnBatchSize, o.gsnBatchTimeout)
+	
 	// ✅ LIVENESS: Inicializa rastreamento de requests perdidas
 	o.missingRequests = make(map[uint64]map[uint32]time.Time)
 	o.requestCache = make(map[uint64]*pb.ClientRequest)
@@ -161,12 +163,18 @@ func (o *MultiPaxosMulticastOrderer) createGroupOrderers(mngr manager.Manager) {
 		
 		// SN intercalado: cada grupo começa do seu slot no espaço global
 		groupOrderer.Init(mngr)
-		o.groupOrderers[gid] = groupOrderer
+		
+		// ✅ PERFORMANCE FIX: Group 0 (GSN sequencer) precisa ser MUITO mais rápido
+		// BatchTimeout padrão (1000ms) é muito lento para sequenciador
 		if gid == 0 {
-			fmt.Printf("[MULTICAST] Created GSN SEQUENCER (group 0) - GSN/META only\n")
+			// Override proposeEvery para 50ms (20x mais rápido que grupos de dados)
+			groupOrderer.proposeEvery = 50 * time.Millisecond
+			fmt.Printf("[MULTICAST] Created GSN SEQUENCER (group 0) - proposeEvery=50ms (fast mode)\n")
 		} else {
 			fmt.Printf("[MULTICAST] Created orderer for group %d - interleaved SN\n", gid)
 		}
+		
+		o.groupOrderers[gid] = groupOrderer
 	}
 }
 
