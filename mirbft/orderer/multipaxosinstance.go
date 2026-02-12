@@ -877,12 +877,8 @@ func (i *mpxInstance) ProposeIfDue() {
 			return
 		}
 		
-		fmt.Printf("[MPX][PROPOSE] sn=%d calling CutBatch (maxBatchSize=%d, proposeEvery=%v)\n", i.sn, i.parent.maxBatchSize, i.proposeEvery)
-		
 		// ✅ NOVA LÓGICA: Usa BucketGroup agregado para cortar batch de TODOS os buckets do grupo
 		rb := i.groupBucketGroup.CutBatch(i.parent.maxBatchSize, i.proposeEvery)
-		
-		fmt.Printf("[MPX][PROPOSE] sn=%d CutBatch returned, rb=%v\n", i.sn, rb != nil)
 		
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			// NOP: Preenche buraco no log sequencial

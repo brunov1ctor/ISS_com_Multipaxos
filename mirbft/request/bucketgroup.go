@@ -102,10 +102,8 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	isGroup0 := false
 	if len(bg.buckets) > 0 {
 		numGroups := getNumGroups()
-		logger.Debug().Int("numGroups", numGroups).Int("firstBucketId", bg.buckets[0].id).Msg("[CutBatch] Checking group")
 		if numGroups > 0 && bg.buckets[0].id % numGroups == 0 {
 			isGroup0 = true
-			logger.Debug().Msg("[CutBatch] Detected Group 0")
 		}
 	}
 	
@@ -121,13 +119,9 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 		}
 	}
 
-	logger.Debug().Int("totalRequests", int(bg.totalRequests)).Int("size", size).Bool("isGroup0", isGroup0).Msg("[CutBatch] Before wait")
-	
 	// Wait for batch to fill or for the timeout to fire.
 	// May release and re-acquire the bucket locks before returning.
 	bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
-	
-	logger.Debug().Int("totalRequests", int(bg.totalRequests)).Msg("[CutBatch] After wait")
 
 	// Grupos de dados: prioriza cross-ops
 	if !isGroup0 {
