@@ -739,7 +739,8 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 	// ✅ Adiciona localmente se este nó é membro
 	for _, nodeID := range members {
 		if nodeID == membership.OwnID {
-			fmt.Printf("[SEND] Adding locally to bucket (group %d, local member)\n", groupID)
+			bucketNr := request.GetBucketNr(req)
+			fmt.Printf("[SEND] Adding locally to bucket %d (group %d, payload=%.50s)\n", bucketNr, groupID, req.Payload)
 			request.AddReqMsg(req)
 			break
 		}
