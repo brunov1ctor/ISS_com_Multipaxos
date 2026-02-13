@@ -267,7 +267,10 @@ func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
 		Next:     nil,
 		Prev:     nil,
 	}
+	bucketNr := req.Bucket.GetId()
+	fmt.Printf("[SYSTEM-ADD] Bucket %d BEFORE add: len=%d\n", bucketNr, req.Bucket.Len())
 	storedReq, _ := req.Bucket.AddRequest(req)
+	fmt.Printf("[SYSTEM-ADD] Bucket %d AFTER add: len=%d stored=%v\n", bucketNr, req.Bucket.Len(), storedReq != nil)
 	return storedReq != nil
 }
 

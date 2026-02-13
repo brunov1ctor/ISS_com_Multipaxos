@@ -112,7 +112,10 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	if isGroup0 {
 		fmt.Printf("[CUTBATCH] Group 0 detected, checking %d buckets for system requests\n", len(bg.buckets))
 		for _, b := range bg.buckets {
-			fmt.Printf("[CUTBATCH] Checking bucket %d, len=%d\n", b.id, b.Len())
+			fmt.Printf("[CUTBATCH] Bucket %d: len=%d, FirstRequest=%v\n", b.id, b.Len(), b.FirstRequest != nil)
+			if b.FirstRequest != nil {
+				fmt.Printf("[CUTBATCH] Bucket %d FirstRequest: payload=%.50s\n", b.id, b.FirstRequest.Msg.Payload)
+			}
 			if sysReq := b.FindSystemRequest(); sysReq != nil {
 				b.RemoveNoLock(sysReq)
 				newBatch.Requests = append(newBatch.Requests, sysReq)
