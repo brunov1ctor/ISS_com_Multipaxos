@@ -728,8 +728,7 @@ func sanitizeGroups(in []uint32) []uint32 {
 }
 
 // sendToGroup - Envia request para o grupo via rede (messenger)
-// ✅ FIX: NUNCA chama AddReqMsg (evita loop infinito com PreprocessRequest)
-// Apenas encaminha via rede para membros do grupo
+// ✅ FIX: Adiciona localmente se o nó é membro, envia via rede para outros
 func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {
 	members := o.am.GetGroupMembers(groupID)
 	if members == nil || len(members) == 0 {
@@ -737,8 +736,16 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		return
 	}
 
-	// ✅ REDE: Envia para TODOS os membros do grupo via rede
-	// Não adiciona localmente aqui - isso será feito quando a mensagem chegar via HandleMessage
+	// ✅ Adiciona localmente se este nó é membro
+	for _, nodeID := range members {
+		if nodeID == membership.OwnID {
+			fmt.Printf("[SEND] Adding locally to bucket (group %d, local member)\n", groupID)
+			request.AddReqMsg(req)
+			break
+		}
+	}
+
+	// ✅ REDE: Envia para TODOS os membros do grupo via rede (incluindo si mesmo para redundância)
 	for _, nodeID := range members {
 		pm := &pb.ProtocolMessage{
 			SenderId: membership.OwnID,
