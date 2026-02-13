@@ -257,20 +257,32 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 // AddSystemMessage adds a SYSTEM message directly to bucket, bypassing Buffer/Watermark
 // Returns true if successfully added, false otherwise
 func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
+	bucketNr := GetBucketNr(reqMsg)
+	fmt.Printf("[SYSTEM-ADD] Calculated bucket=%d for GroupId=%d\n", bucketNr, reqMsg.GetGroupId())
+	
+	if bucketNr < 0 || bucketNr >= len(Buckets) {
+		fmt.Printf("[SYSTEM-ADD] ERROR: Invalid bucket %d (total=%d)\n", bucketNr, len(Buckets))
+		return false
+	}
+	
+	bucket := Buckets[bucketNr]
 	req := &Request{
 		Msg:      reqMsg,
 		Digest:   Digest(reqMsg),
-		Buffer:   nil, // No buffer for system messages
-		Bucket:   getBucket(reqMsg),
-		Verified: true, // System messages don't need signature verification
+		Buffer:   nil,
+		Bucket:   bucket,
+		Verified: true,
 		InFlight: false,
 		Next:     nil,
 		Prev:     nil,
 	}
-	bucketNr := req.Bucket.GetId()
-	fmt.Printf("[SYSTEM-ADD] Bucket %d BEFORE add: len=%d\n", bucketNr, req.Bucket.Len())
-	storedReq, _ := req.Bucket.AddRequest(req)
-	fmt.Printf("[SYSTEM-ADD] Bucket %d AFTER add: len=%d stored=%v\n", bucketNr, req.Bucket.Len(), storedReq != nil)
+	
+	fmt.Printf("[SYSTEM-ADD] Bucket %d BEFORE: len=%d, FirstReq=%v\n", bucketNr, bucket.Len(), bucket.FirstRequest != nil)
+	bucket.Lock()
+	storedReq, _ := bucket.addNoLock(req)
+	bucket.Unlock()
+	fmt.Printf("[SYSTEM-ADD] Bucket %d AFTER: len=%d, FirstReq=%v, stored=%v\n", bucketNr, bucket.Len(), bucket.FirstRequest != nil, storedReq != nil)
+	
 	return storedReq != nil
 }
 
