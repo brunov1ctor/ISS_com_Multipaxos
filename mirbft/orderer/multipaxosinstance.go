@@ -351,8 +351,13 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	// ✅ SEMPRE envia PROMISE pela rede (mesmo se for o líder)
 	// Líder precisa que followers recebam PREPARE para responderem
 	fmt.Printf("[MPX][INST] sn=%d sending PROMISE ballot=%d groupId=%d to leader=%d\n", i.sn, ballot, groupId, leaderID)
-	if i.parent.emit != nil {
+	if i.parent == nil {
+		fmt.Printf("[MPX][INST][ERROR] sn=%d parent is NIL, cannot send PROMISE\n", i.sn)
+	} else if i.parent.emit == nil {
+		fmt.Printf("[MPX][INST][ERROR] sn=%d parent.emit is NIL, cannot send PROMISE\n", i.sn)
+	} else {
 		i.parent.emit(out)
+		fmt.Printf("[MPX][INST] sn=%d PROMISE sent via parent.emit\n", i.sn)
 	}
 	
 	// Se for o próprio líder, processa localmente também
