@@ -1005,6 +1005,14 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v payload=%s\n", 
 		rid.GetClientId(), rid.GetClientSn(), req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
+	// ✅ CRITICAL FIX: System messages for group 0 bypass ALL preprocessing
+	// GSN_REQUEST and META_STREAM are already properly formatted for group 0 consensus
+	if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || 
+	   strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
+		fmt.Printf("[PREPROCESS] System message for group 0, bypassing all preprocessing\n")
+		return false // Allow immediate addition to bucket
+	}
+	
 	// ✅ Early-exit: Já foi completamente preprocessado
 	// Cross-group com GSN: já foi processado completamente (forwarded from fanout)
 	if req.GroupId > 0 && req.GSN > 0 {
@@ -1031,15 +1039,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return false
 	}
 	
-	// ✅ FILTRO GERAL: Bloqueia TODAS mensagens SYSTEM:* de virarem carga de aplicação
-	// Apenas GSN_REQUEST e META_STREAM devem entrar no consenso (grupo 0)
+	// ✅ FILTRO GERAL: Bloqueia outras mensagens SYSTEM:* de virarem carga de aplicação
+	// (GSN_REQUEST e META_STREAM já foram tratados no early-exit acima)
 	if strings.HasPrefix(string(req.Payload), "SYSTEM:") {
-		// Permite apenas mensagens sistêmicas conhecidas para grupo 0
-		if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || 
-		   strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
-			fmt.Printf("[PREPROCESS] System request for group 0, allowing\n")
-			return false // Deixa sistema processar normalmente
-		}
 		// Bloqueia outras mensagens SYSTEM:* (ex: SYSTEM:GSN_RESPONSE já tratada no HandleMessage)
 		fmt.Printf("[PREPROCESS] Blocking unknown SYSTEM:* message (not for consensus)\n")
 		return true // Bloqueia
