@@ -254,6 +254,23 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 	requestPreprocessor = fn
 }
 
+// AddSystemMessage adds a SYSTEM message directly to bucket, bypassing Buffer/Watermark
+// Returns true if successfully added, false otherwise
+func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
+	req := &Request{
+		Msg:      reqMsg,
+		Digest:   Digest(reqMsg),
+		Buffer:   nil, // No buffer for system messages
+		Bucket:   getBucket(reqMsg),
+		Verified: true, // System messages don't need signature verification
+		InFlight: false,
+		Next:     nil,
+		Prev:     nil,
+	}
+	storedReq, _ := req.Bucket.AddRequest(req)
+	return storedReq != nil
+}
+
 
 
 // ReplicaMapper - Mapeia payload para grupos (particionamento por intervalo)
