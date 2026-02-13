@@ -388,7 +388,8 @@ func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
 		delete(o.gsnRequestsPending, reqID)
 		o.gsnReqMu.Unlock()
 		return gsn
-	case <-time.After(time.Duration(config.Config.ClientDrainTime) * time.Millisecond):
+	case <-time.After(10 * time.Second):
+		fmt.Printf("[GSN-REQ][TIMEOUT] Failed to get GSN for reqID=%d after 10s\n", reqID)
 		o.gsnReqMu.Lock()
 		delete(o.gsnRequestsPending, reqID)
 		o.gsnReqMu.Unlock()
