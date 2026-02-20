@@ -119,6 +119,10 @@ type mpxInstance struct {
 	currentBallot int64             // Ballot atual
 	inProposal bool                 // Debounce: evita build batch múltiplo no mesmo tick
 	
+	// Timestamps para medição de latência (como PBFT)
+	acceptTs int64                  // Timestamp quando ACCEPT é recebido (equivalente a preprepare.Ts)
+	lastAcceptedTs int64            // Timestamp do último ACCEPTED recebido (equivalente a batch.lastCommitTs)
+	
 	// Estado para fetch de batch faltante
 	pendingCommitDigest *[32]byte  // Digest do commit pendente (aguardando batch)
 	fetchInFlight       bool        // Se já disparou fetch
@@ -456,6 +460,10 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	}
 	digestSlice := request.BatchDigest(batch)
 	copy(i.lastDigest[:], digestSlice)
+	
+	// Armazena timestamp do ACCEPT (como preprepare.Ts no PBFT)
+	i.acceptTs = time.Now().UnixNano()
+	
 	fmt.Printf("[MPX][INST] sn=%d STORED batch from ACCEPT with %d requests, digest=%x\n", i.sn, len(batch.Requests), i.lastDigest)
 	
 	// Envia ACCEPTED ao líder
@@ -511,6 +519,12 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	// ✅ Conta voto UMA ÚNICA VEZ
 	i.acceptedFrom[pm.SenderId] = struct{}{}
 	i.acceptCount++
+	
+	// Atualiza timestamp do último ACCEPTED (como batch.lastCommitTs no PBFT)
+	if i.lastAcceptedTs == 0 || time.Now().UnixNano() > i.lastAcceptedTs {
+		i.lastAcceptedTs = time.Now().UnixNano()
+	}
+	
 	fmt.Printf("[MPX][INST] sn=%d vote from=%d counted, acceptCount=%d/%d\n", i.sn, pm.SenderId, i.acceptCount, i.quorum)
 	
 	// Incorporada lógica da função duplicada ProposeIfDue() aqui

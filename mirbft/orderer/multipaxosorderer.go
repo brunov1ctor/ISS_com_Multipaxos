@@ -196,14 +196,32 @@ type MultiPaxosOrderer struct {
 		} else {
 			fmt.Printf("[MPX][ANNOUNCE] sn=%d NO REQUESTS or NO AM, shouldRespond=%v\n", sn, shouldRespond)
 		}
-		now := time.Now().UnixNano()
+		// Obtém timestamps da instância (como PBFT)
+		var proposeTs, commitTs int64
+		if inst, ok := o.dispatcher.load(sn); ok && inst != nil {
+			proposeTs = inst.acceptTs
+			commitTs = inst.lastAcceptedTs
+			if proposeTs == 0 || commitTs == 0 {
+				now := time.Now().UnixNano()
+				if proposeTs == 0 {
+					proposeTs = now
+				}
+				if commitTs == 0 {
+					commitTs = now
+				}
+			}
+		} else {
+			now := time.Now().UnixNano()
+			proposeTs = now
+			commitTs = now
+		}
 		entry := &mirlog.Entry{
 			Sn:             sn,
 			Batch:          b,
 			Digest:         digest,
 			ShouldRespond:  &shouldRespond,
-			ProposeTs:      now,
-			CommitTs:       now,
+			ProposeTs:      proposeTs,
+			CommitTs:       commitTs,
 		}
 		announcer.Announce(entry)
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
