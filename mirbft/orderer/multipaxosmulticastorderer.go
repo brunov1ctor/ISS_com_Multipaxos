@@ -741,7 +741,14 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		if nodeID == membership.OwnID {
 			bucketNr := request.GetBucketNr(req)
 			fmt.Printf("[SEND] Adding locally to bucket %d (group %d, payload=%.50s)\n", bucketNr, groupID, req.Payload)
-			request.AddReqMsg(req)
+			
+			// ✅ CRITICAL FIX: SYSTEM messages bypass preprocessor
+			if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || 
+			   strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
+				request.AddSystemMessage(req)
+			} else {
+				request.AddReqMsg(req)
+			}
 			break
 		}
 	}
