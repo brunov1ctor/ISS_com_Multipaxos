@@ -15,6 +15,7 @@
 package request
 
 import (
+	"fmt"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -108,14 +109,18 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	
 	// FAST-PATH: Se é Group 0 e há SYSTEM messages, NÃO espera timeout
 	if isGroup0 {
+		fmt.Printf("[CutBatch] Group 0 fast-path, checking %d buckets\n", len(bg.buckets))
 		for _, b := range bg.buckets {
-			if sysReq := b.FindSystemRequest(); sysReq != nil {
+			sysReq := b.FindSystemRequest()
+			fmt.Printf("[CutBatch] Bucket %d: sysReq=%v\n", b.id, sysReq != nil)
+			if sysReq != nil {
 				b.RemoveNoLock(sysReq)
 				newBatch.Requests = append(newBatch.Requests, sysReq)
 				logger.Debug().Int("bucketId", b.id).Msg("Cut batch with system request (Group 0 - fast path)")
 				return &newBatch
 			}
 		}
+		fmt.Printf("[CutBatch] Group 0: No SYSTEM messages found in any bucket\n")
 	}
 
 	// Wait for batch to fill or for the timeout to fire.
