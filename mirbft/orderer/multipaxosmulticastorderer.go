@@ -752,6 +752,7 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 			// ✅ CRITICAL FIX: SYSTEM messages bypass preprocessor
 			if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || 
 			   strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
+				fmt.Printf("[SEND] SYSTEM detected, calling AddSystemMessage\n")
 				request.AddSystemMessage(req)
 			} else {
 				request.AddReqMsg(req)

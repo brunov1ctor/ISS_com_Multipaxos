@@ -256,11 +256,14 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 
 // AddSystemMessage adds a SYSTEM message directly to bucket, bypassing Buffer/Watermark
 func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
+	fmt.Printf("[AddSystemMessage] Called for bucket calculation\n")
 	bucketNr := GetBucketNr(reqMsg)
 	if bucketNr < 0 || bucketNr >= len(Buckets) {
+		fmt.Printf("[AddSystemMessage] Invalid bucket %d\n", bucketNr)
 		return false
 	}
 	
+	fmt.Printf("[AddSystemMessage] Adding to bucket %d\n", bucketNr)
 	bucket := Buckets[bucketNr]
 	req := &Request{
 		Msg:      reqMsg,
@@ -277,6 +280,7 @@ func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
 	storedReq, _ := bucket.addNoLock(req)
 	bucket.Unlock()
 	
+	fmt.Printf("[AddSystemMessage] Result: %v\n", storedReq != nil)
 	return storedReq != nil
 }
 
