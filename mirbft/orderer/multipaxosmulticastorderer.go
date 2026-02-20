@@ -991,6 +991,14 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 // PreprocessRequest - Preprocessa request para atomic multicast
 // Retorna true se já processou (não precisa processamento padrão)
 func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bool {
+	// ✅ CRITICAL FIX: System messages MUST be checked FIRST, before ANY other logic
+	// Messages created by sendToGroup() already have touchedGroups=[0] set,
+	// so they would hit early-exit logic if we check touchedGroups first
+	if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || 
+	   strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
+		return request.AddSystemMessage(req)
+	}
+	
 	payloadPreview := req.Payload
 	if len(payloadPreview) > 50 {
 		payloadPreview = payloadPreview[:50]
@@ -1004,12 +1012,6 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	}
 	fmt.Printf("[PREPROCESS] Called for clientId=%d clientSn=%d groupId=%d touchedGroups=%v payload=%s\n", 
 		rid.GetClientId(), rid.GetClientSn(), req.GroupId, req.TouchedGroups, string(payloadPreview))
-	
-	// ✅ CRITICAL FIX: System messages for group 0 bypass ALL preprocessing
-	if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || 
-	   strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
-		return request.AddSystemMessage(req)
-	}
 	
 	// ✅ Early-exit: Já foi completamente preprocessado
 	// Cross-group com GSN: já foi processado completamente (forwarded from fanout)
