@@ -1006,13 +1006,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		rid.GetClientId(), rid.GetClientSn(), req.GroupId, req.TouchedGroups, string(payloadPreview))
 	
 	// ✅ CRITICAL FIX: System messages for group 0 bypass ALL preprocessing
-	// GSN_REQUEST and META_STREAM are added directly to buckets without watermark checks
 	if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || 
 	   strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
-		fmt.Printf("[PREPROCESS] System message for group 0, adding directly to bucket\n")
-		success := request.AddSystemMessage(req)
-		fmt.Printf("[PREPROCESS] System message added to bucket: success=%v\n", success)
-		return true // Block normal pipeline (already processed)
+		return request.AddSystemMessage(req)
 	}
 	
 	// ✅ Early-exit: Já foi completamente preprocessado
