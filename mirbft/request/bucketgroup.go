@@ -15,7 +15,6 @@
 package request
 
 import (
-	"fmt"
 	"sort"
 	"sync/atomic"
 	"time"
