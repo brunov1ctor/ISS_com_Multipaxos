@@ -192,22 +192,21 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	isBroadcast := !o.skipHandlerRegistration
 	if isBroadcast { numGroups = 1 }
 
-	// Broadcast: ignora segmentos duplicados (manager envia 1 por líder)
-	if isBroadcast {
-		o.firstSNMu.RLock()
-		prevFirstSN := o.currentFirstSN
-		o.firstSNMu.RUnlock()
-		if prevFirstSN == seg.FirstSN() && prevFirstSN > 0 {
-			return // Já processando este segmento
-		}
-	}
-
-	o.firstSNMu.Lock(); o.currentFirstSN = seg.FirstSN(); o.firstSNMu.Unlock()
 	o.segMu.Lock()
-	if o.currentSegCancel != nil { o.currentSegCancel() }
+	if isBroadcast && o.currentSegCancel != nil {
+		// Broadcast: primeiro segmento já está rodando, ignora duplicados
+		o.segMu.Unlock()
+		return
+	}
+	if !isBroadcast && o.currentSegCancel != nil {
+		// Multicast: cancela segmento anterior
+		o.currentSegCancel()
+	}
 	stopCh := make(chan struct{})
 	o.currentSegCancel = func() { close(stopCh) }
 	o.segMu.Unlock()
+
+	o.firstSNMu.Lock(); o.currentFirstSN = seg.FirstSN(); o.firstSNMu.Unlock()
 
 	groupId := o.ownedGroupID
 	members := o.am.GetGroupMembers(groupId)
@@ -266,6 +265,10 @@ func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 	o.instMu.Lock()
 	if seg.LastSN() > o.last { atomic.StoreInt32(&o.last, seg.LastSN()) }
 	o.instMu.Unlock()
+	// Reset para permitir próximo segmento
+	o.segMu.Lock()
+	o.currentSegCancel = nil
+	o.segMu.Unlock()
 }
 
 func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
