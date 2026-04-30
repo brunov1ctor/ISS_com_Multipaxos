@@ -189,6 +189,8 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	if len(allGroupIDs) == 0 { allGroupIDs = []uint32{0} }
 	numGroups := int32(len(allGroupIDs))
 	if numGroups == 0 { numGroups = 1 }
+	// Broadcast mode: single orderer processes ALL SNs sequentially
+	if !o.skipHandlerRegistration { numGroups = 1 }
 
 	o.firstSNMu.Lock(); o.currentFirstSN = seg.FirstSN(); o.firstSNMu.Unlock()
 	o.segMu.Lock()
