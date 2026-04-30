@@ -144,11 +144,21 @@ func (i *mpxInstance) enqueue(pm *pb.ProtocolMessage) {
 
 func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	switch t := mpx.Type.(type) {
-	case *pb.MPxMsg_Prepare:  i.onPrepare(t.Prepare)
-	case *pb.MPxMsg_Promise:  i.onPromise(pm.GetSenderId(), t.Promise)
-	case *pb.MPxMsg_Accept:   i.onAccept(pm.GetSenderId(), t.Accept)
-	case *pb.MPxMsg_Accepted: i.onAccepted(pm, t.Accepted)
-	case *pb.MPxMsg_Commit:   i.onCommit(t.Commit)
+	case *pb.MPxMsg_Prepare:
+		fmt.Printf("[MPX] sn=%d PREPARE from=%d\n", i.sn, pm.GetSenderId())
+		i.onPrepare(t.Prepare)
+	case *pb.MPxMsg_Promise:
+		fmt.Printf("[MPX] sn=%d PROMISE from=%d\n", i.sn, pm.GetSenderId())
+		i.onPromise(pm.GetSenderId(), t.Promise)
+	case *pb.MPxMsg_Accept:
+		fmt.Printf("[MPX] sn=%d ACCEPT from=%d\n", i.sn, pm.GetSenderId())
+		i.onAccept(pm.GetSenderId(), t.Accept)
+	case *pb.MPxMsg_Accepted:
+		fmt.Printf("[MPX] sn=%d ACCEPTED from=%d\n", i.sn, pm.GetSenderId())
+		i.onAccepted(pm, t.Accepted)
+	case *pb.MPxMsg_Commit:
+		fmt.Printf("[MPX] sn=%d COMMIT from=%d\n", i.sn, pm.GetSenderId())
+		i.onCommit(t.Commit)
 	}
 }
 
@@ -209,6 +219,7 @@ func (i *mpxInstance) onPromise(from int32, _ *pb.MPxPromise) {
 	i.promisedFrom[from] = struct{}{}
 	i.promiseCount++
 	if i.promiseCount >= i.quorum && !i.prepared {
+		fmt.Printf("[MPX] sn=%d QUORUM promises=%d/%d\n", i.sn, i.promiseCount, i.quorum)
 		i.prepared = true; i.phase = phasePrepared; go i.ProposeIfDue()
 	}
 }
@@ -257,6 +268,7 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 	i.lastAcceptedTs = time.Now().UnixNano()
 
 	if i.acceptCount >= i.quorum && i.lastVal != nil && i.phase != phaseCommitted {
+		fmt.Printf("[MPX] sn=%d QUORUM accepted=%d/%d -> COMMIT\n", i.sn, i.acceptCount, i.quorum)
 		if i.parent.emit != nil {
 			i.parent.emit(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
 				Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Commit{
@@ -341,6 +353,7 @@ func (i *mpxInstance) deliverCommit() {
 			if strings.HasPrefix(payload, "SYSTEM:META_STREAM:") {
 				var gsn uint64
 				if n, _ := fmt.Sscanf(payload, "SYSTEM:META_STREAM:%d", &gsn); n >= 1 && len(req.TouchedGroups) > 0 {
+					fmt.Printf("[MPX] sn=%d META gsn=%d groups=%v\n", i.sn, gsn, req.TouchedGroups)
 					GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, req.TouchedGroups)
 				}
 			}
@@ -356,6 +369,7 @@ func (i *mpxInstance) deliverCommit() {
 		if len(req.TouchedGroups) > 1 && req.GSN > 0 { crossOpGSN = req.GSN; break }
 	}
 	if crossOpGSN > 0 && GetGlobalMulticastOrderer() != nil {
+		fmt.Printf("[MPX] sn=%d CROSS-OP gsn=%d group=%d\n", i.sn, crossOpGSN, i.bucketId)
 		if !GetGlobalMulticastOrderer().ADeliver(crossOpGSN, i.bucketId, b) {
 			if i.announce != nil { i.announce(i.sn, b, i.lastDigest[:]) }
 			i.closed = true; traceCommit(i.sn, len(b.Requests))
@@ -371,6 +385,7 @@ func (i *mpxInstance) deliverCommit() {
 				return
 			}
 		}
+		fmt.Printf("[MPX] sn=%d DELIVER group=%d nReq=%d\n", i.sn, i.bucketId, len(b.Requests))
 		i.announce(i.sn, b, i.lastDigest[:])
 	}
 	i.closed = true; traceCommit(i.sn, len(b.Requests))
@@ -389,6 +404,7 @@ func (i *mpxInstance) processGSNRequest(payload string) {
 	gmo.nextGSN++
 	gmo.persistNextGSN()
 	gmo.gsnMu.Unlock()
+	fmt.Printf("[MPX] sn=%d GSN-ASSIGN gsn=%d reqID=%d requester=%d\n", i.sn, gsn, reqID, requester)
 
 	if requester == membership.OwnID {
 		gmo.gsnReqMu.Lock()
@@ -456,6 +472,7 @@ func (i *mpxInstance) ProposeIfDue() {
 	}
 
 	if i.parent.emit != nil {
+		fmt.Printf("[MPX] sn=%d PROPOSE group=%d nReq=%d\n", i.sn, i.bucketId, reqs)
 		i.parent.emit(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
 			Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Accept{
 				Accept: &pb.MPxAccept{
@@ -516,6 +533,7 @@ func (i *mpxInstance) SetMembers(members []int32) {
 
 	if i.leader == -1 {
 		i.leader = i.members[i.sn%n]
+		fmt.Printf("[MPX] sn=%d SetMembers members=%v quorum=%d leader=%d\n", i.sn, members, i.quorum, i.leader)
 		i.currentBallot = int64(uint64(0)<<32 | uint64(i.leader))
 		if i.leader == membership.OwnID && !i.prepSent {
 			i.prepSent = true

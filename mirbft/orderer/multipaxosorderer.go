@@ -200,6 +200,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	groupId := o.ownedGroupID
 	members := o.am.GetGroupMembers(groupId)
 	if members == nil { return }
+	groupLeader := o.am.GetGroupLeaderForSegment(groupId, seg.FirstSN(), numGroups)
+	fmt.Printf("[MPX] SEGMENT group=%d firstSN=%d lastSN=%d members=%v leader=%d ownID=%d\n",
+		groupId, seg.FirstSN(), seg.LastSN(), members, groupLeader, membership.OwnID)
 
 	go func(gid uint32) {
 		t := time.NewTicker(o.proposeEvery)
