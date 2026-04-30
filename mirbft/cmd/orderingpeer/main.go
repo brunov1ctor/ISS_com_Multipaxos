@@ -141,20 +141,10 @@ func main() {
 	chkp = setCheckpointer(config.Config.Checkpointer)
 	rsp = request.NewResponder()
 	
-	// CSMR: Conecta Replica Mapper e Output Processing
+	// Conecta Responder ao multicast orderer para membership-aware responses
 	if mcOrd, ok := ord.(*orderer.MultiPaxosMulticastOrderer); ok {
 		rsp.SetIsMemberFunc(mcOrd.IsMember)
 		rsp.SetGroupMembersFunc(mcOrd.GetGroupMembers)
-		request.SetProxyInterceptor(func(req *request.Request) {
-			if req.Msg != nil {
-				mcOrd.ProxyInterceptor(req.Msg.GSN, req.Msg.TouchedGroups, req.Msg)
-			}
-		})
-		request.SetGSNBarrierChecker(mcOrd.CanProcessCrossOp)
-		request.SetGSNGenerator(mcOrd.GetNextGSN)
-		request.SetGroupMembersGetter(mcOrd.GetGroupMembers)
-		request.SetMETAPublisher(mcOrd.PublishMETAOnce)
-		request.SetRequestPreprocessor(mcOrd.PreprocessRequest)
 	}
 
 	// Initialize modules.
