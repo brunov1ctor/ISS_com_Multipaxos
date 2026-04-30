@@ -190,18 +190,11 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	numGroups := int32(len(allGroupIDs))
 	if numGroups == 0 { numGroups = 1 }
 	isBroadcast := !o.skipHandlerRegistration
+	// Broadcast: todos os SNs sequenciais, multicast: intercalados
 	if isBroadcast { numGroups = 1 }
 
 	o.segMu.Lock()
-	if isBroadcast && o.currentSegCancel != nil {
-		// Broadcast: primeiro segmento já está rodando, ignora duplicados
-		o.segMu.Unlock()
-		return
-	}
-	if !isBroadcast && o.currentSegCancel != nil {
-		// Multicast: cancela segmento anterior
-		o.currentSegCancel()
-	}
+	if o.currentSegCancel != nil { o.currentSegCancel() }
 	stopCh := make(chan struct{})
 	o.currentSegCancel = func() { close(stopCh) }
 	o.segMu.Unlock()
@@ -265,10 +258,6 @@ func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 	o.instMu.Lock()
 	if seg.LastSN() > o.last { atomic.StoreInt32(&o.last, seg.LastSN()) }
 	o.instMu.Unlock()
-	// Reset para permitir próximo segmento
-	o.segMu.Lock()
-	o.currentSegCancel = nil
-	o.segMu.Unlock()
 }
 
 func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
