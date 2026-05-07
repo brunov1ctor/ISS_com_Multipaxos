@@ -190,14 +190,20 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	numGroups := int32(len(allGroupIDs))
 	if numGroups == 0 { numGroups = 1 }
 	isBroadcast := !o.skipHandlerRegistration
-	// Broadcast: todos os SNs sequenciais, multicast: intercalados
 	if isBroadcast { numGroups = 1 }
 
-	o.segMu.Lock()
-	if o.currentSegCancel != nil { o.currentSegCancel() }
-	stopCh := make(chan struct{})
-	o.currentSegCancel = func() { close(stopCh) }
-	o.segMu.Unlock()
+	// Multicast: cancela segmento anterior (novo epoch substitui)
+	// Broadcast: NÃO cancela — segmentos rodam em paralelo (um por líder)
+	var stopCh chan struct{}
+	if !isBroadcast {
+		o.segMu.Lock()
+		if o.currentSegCancel != nil { o.currentSegCancel() }
+		stopCh = make(chan struct{})
+		o.currentSegCancel = func() { close(stopCh) }
+		o.segMu.Unlock()
+	} else {
+		stopCh = make(chan struct{})
+	}
 
 	o.firstSNMu.Lock(); o.currentFirstSN = seg.FirstSN(); o.firstSNMu.Unlock()
 
