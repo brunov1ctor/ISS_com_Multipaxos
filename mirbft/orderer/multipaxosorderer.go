@@ -219,7 +219,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	go func(gid uint32) {
 		t := time.NewTicker(o.proposeEvery)
 		defer t.Stop()
-		currentSN := seg.FirstSN()
+		// Start at the correct SN for this group
+		// In interleaved mode: group X starts at firstSN + X (if firstSN+X <= lastSN)
+		currentSN := seg.FirstSN() + int32(gid)
+		if currentSN > seg.LastSN() { return }
 		for {
 			select {
 			case <-stopCh: return
