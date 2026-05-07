@@ -190,7 +190,9 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	numGroups := int32(len(allGroupIDs))
 	if numGroups == 0 { numGroups = 1 }
 	isBroadcast := !o.skipHandlerRegistration
-	if isBroadcast { numGroups = 1 }
+	// Broadcast: stride = number of parallel segments (leaders)
+	// Multicast: stride = number of groups
+	if isBroadcast { numGroups = int32(len(membership.AllNodeIDs())) }
 
 	// Multicast: cancela segmento anterior (novo epoch substitui)
 	// Broadcast: NÃO cancela — segmentos rodam em paralelo (um por líder)
