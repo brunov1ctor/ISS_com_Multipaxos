@@ -167,6 +167,22 @@ if [[ "${found_tar}" != "true" ]]; then
 fi
 
 # --------------------------------------------------------------------
+# 2b) Garantir que traces de clientes sejam copiados
+#     (clientes rodam em nós separados e o master não tem seus .trc)
+# --------------------------------------------------------------------
+if [[ -n "${instance_info_file:-}" && -f "${instance_info_file:-}" ]]; then
+  while read -r instance_id ctrl_ip data_ip role tag; do
+    [[ -z "${instance_id:-}" ]] && continue
+    [[ "${instance_id:-}" =~ ^# ]] && continue
+    [[ "${role:-}" != "slave" ]] && continue
+    [[ "${tag:-}" == "peers" ]] && continue  # peers já copiados pelo master
+
+    info "Copiando traces do cliente ${instance_id} (${tag}) @ ${ctrl_ip}..."
+    rsync_dir_if_exists "${ctrl_ip}" "${remote_experiment_output_dir}" "${exp_dir}/experiment-output" || true
+  done < "${instance_info_file}"
+fi
+
+# --------------------------------------------------------------------
 # 3) Se baixamos tars, descompactar
 #     Tarballs tipicamente contêm: experiment-output/0000/slave-000/...
 #     Então strip-components=2 remove "experiment-output/<RUN>/".
