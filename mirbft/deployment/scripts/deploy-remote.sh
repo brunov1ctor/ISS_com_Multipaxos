@@ -317,6 +317,7 @@ export REMOTE_EXP_DIR="${remote_exp_dir}"
 export REMOTE_EXPERIMENT_OUTPUT_DIR="${remote_experiment_output_dir}"
 
 set +e
+export instance_info_file
 scripts/fetch-results.sh "$master_ip" "$exp_data_dir" > "$exp_data_dir/$local_result_fetching_log" 2>&1
 fetch_rc=$?
 set -e

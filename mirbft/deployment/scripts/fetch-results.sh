@@ -175,7 +175,7 @@ if [[ -n "${instance_info_file:-}" && -f "${instance_info_file:-}" ]]; then
     [[ -z "${instance_id:-}" ]] && continue
     [[ "${instance_id:-}" =~ ^# ]] && continue
     [[ "${role:-}" != "slave" ]] && continue
-    [[ "${tag:-}" == "peers" ]] && continue  # peers já copiados pelo master
+    [[ "${tag:-}" == "peers" ]] && continue
 
     info "Copiando traces do cliente ${instance_id} (${tag}) @ ${ctrl_ip}..."
     rsync_dir_if_exists "${ctrl_ip}" "${remote_experiment_output_dir}" "${exp_dir}/experiment-output" || true
