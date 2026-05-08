@@ -240,6 +240,7 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	i.lastVal = &pb.MPxValue{Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(from)}, Batch: batch}
 	copy(i.lastDigest[:], request.BatchDigest(batch))
 	i.acceptTs = time.Now().UnixNano()
+	tracing.MainTrace.Event(tracing.PROPOSE, int64(i.sn), int64(len(batch.Requests)))
 
 	accepted := &pb.MPxMsg{Type: &pb.MPxMsg_Accepted{Accepted: &pb.MPxAccepted{
 		Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
