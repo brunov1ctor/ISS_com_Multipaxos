@@ -94,7 +94,7 @@ singleLeaderEpoch=$minEpochLength
 # Parameters to tune:
 batchsizes="4096"           # [requests] Optimized for 128-256 req/s
 batchrates="32"             # [batches/s]
-minBatchTimeout="1000"      # [ms] Balanced timeout
+minBatchTimeout="100"      # [ms] Fast timeout for MultiPaxos Multicast
 maxBatchTimeout="4000"     # [ms] Balanced timeout
 segmentLengths="256"        # [entries] Increased to reduce epoch changes
 viewChangeTimeouts="60000"  # [ms]
