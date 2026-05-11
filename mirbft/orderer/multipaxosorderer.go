@@ -208,7 +208,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 
 	groupId := o.ownedGroupID
 	members := o.am.GetGroupMembers(groupId)
-	if members == nil { return }
+	if members == nil {
+		fmt.Printf("[MPX] SEGMENT SKIP group=%d members=nil (ownedGroupID=%d, definedGroups=%v)\n", groupId, o.ownedGroupID, o.am.GetDefinedGroups())
+		return
+	}
 	groupLeader := o.am.GetGroupLeaderForSegment(groupId, seg.FirstSN(), numGroups)
 	fmt.Printf("[MPX] SEGMENT group=%d firstSN=%d lastSN=%d members=%v leader=%d ownID=%d\n",
 		groupId, seg.FirstSN(), seg.LastSN(), members, groupLeader, membership.OwnID)
