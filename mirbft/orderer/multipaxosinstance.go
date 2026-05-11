@@ -378,14 +378,8 @@ func (i *mpxInstance) deliverCommit() {
 		}
 	}
 
-	// Verifica membership antes de anunciar
+	// Announce commit
 	if i.announce != nil {
-		if i.bucketId != 0 && i.parent != nil && i.parent.am != nil {
-			if !i.parent.am.IsMember(i.bucketId, membership.OwnID) {
-				i.closed = true; traceCommit(i.sn, len(b.Requests))
-				return
-			}
-		}
 		fmt.Printf("[MPX] sn=%d DELIVER group=%d nReq=%d\n", i.sn, i.bucketId, len(b.Requests))
 		i.announce(i.sn, b, i.lastDigest[:])
 	}

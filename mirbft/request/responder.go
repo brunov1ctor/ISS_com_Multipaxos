@@ -155,13 +155,7 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 					continue
 				}
 			} else {
-				// Single-group: verifica membership do grupo específico
-				if r.isMemberFunc != nil && req.GroupId != 0 {
-					if !r.isMemberFunc(req.GroupId, membership.OwnID) {
-						skipped++
-						continue
-					}
-				}
+				// Single-group: responde sempre (o nó recebeu a request do cliente)
 			}
 
 			logger.Trace().
