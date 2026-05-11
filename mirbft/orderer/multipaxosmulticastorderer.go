@@ -72,6 +72,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	o.mgr = mngr
 	// Init components
 	o.am = NewAtomicMulticast()
+	fmt.Printf("[MULTICAST] NewAtomicMulticast: group0 members=%v\n", o.am.GetGroupMembers(0))
 	o.groupOrderers = make(map[uint32]*MultiPaxosOrderer)
 	o.lastDeliveredGSN = make(map[uint32]uint64)
 	o.pendingCommits = make(map[uint32]map[uint64]*PendingCommit)
@@ -87,6 +88,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 		logger.Fatal().Err(err).Msg("Failed to load groups")
 	}
 	o.am.UpdateSequencerGroup()
+	fmt.Printf("[MULTICAST] Groups loaded: %v group0=%v\n", o.am.GetDefinedGroups(), o.am.GetGroupMembers(0))
 	o.am.SetSequencer(o)
 	// Create group orderers
 	for _, gid := range o.am.GetDefinedGroups() {
