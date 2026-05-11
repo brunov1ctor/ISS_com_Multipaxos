@@ -171,7 +171,7 @@ fi
 #     (clientes rodam em nós separados e o master não tem seus .trc)
 # --------------------------------------------------------------------
 if [[ -n "${instance_info_file:-}" && -f "${instance_info_file:-}" ]]; then
-  while read -r instance_id ctrl_ip data_ip role tag; do
+  while read -r instance_id ctrl_ip data_ip role tag || [[ -n "${instance_id:-}" ]]; do
     [[ -z "${instance_id:-}" ]] && continue
     [[ "${instance_id:-}" =~ ^# ]] && continue
     [[ "${role:-}" != "slave" ]] && continue
