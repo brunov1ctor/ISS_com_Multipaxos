@@ -114,9 +114,6 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			batchBytes, _ := proto.Marshal(b); digest = crypto.Hash(batchBytes)
 		}
 		shouldRespond := true
-		if len(b.Requests) > 0 && o.am != nil {
-			shouldRespond = o.am.IsMember(b.Requests[0].GetGroupId(), membership.OwnID)
-		}
 		var proposeTs, commitTs int64
 		if inst, ok := o.dispatcher.load(sn); ok && inst != nil {
 			proposeTs = inst.acceptTs; commitTs = inst.lastAcceptedTs
