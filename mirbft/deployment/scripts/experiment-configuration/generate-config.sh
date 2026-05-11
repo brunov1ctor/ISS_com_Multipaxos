@@ -94,9 +94,9 @@ singleLeaderEpoch=$minEpochLength
 # Parameters to tune:
 batchsizes="4096"           # [requests] Optimized for 128-256 req/s
 batchrates="32"             # [batches/s]
-minBatchTimeout="100"      # [ms] Fast timeout for MultiPaxos Multicast
+minBatchTimeout="1000"      # [ms] Balanced timeout
 maxBatchTimeout="4000"     # [ms] Balanced timeout
-segmentLengths="256"        # [entries] Increased to reduce epoch changes
+segmentLengths="30"        # [entries] Short segments for faster checkpoint/watermark advance
 viewChangeTimeouts="60000"  # [ms]
 nodeToLeaderRatios="1"      # How many nodes are initally leaders, set to 1 to have initially all nodes in the leaderset
 
