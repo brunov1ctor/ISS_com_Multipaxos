@@ -254,7 +254,8 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 	requestPreprocessor = fn
 }
 
-// AddSystemMessage adds a SYSTEM message directly to bucket, bypassing Buffer/Watermark
+// AddSystemMessage adds a SYSTEM message directly to bucket, bypassing Buffer/Watermark.
+// Uses a dedicated linked list append (no index check) to avoid reqID collisions with client requests.
 func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
 	fmt.Printf("[AddSystemMessage] Called for bucket calculation\n")
 	bucketNr := GetBucketNr(reqMsg)
@@ -262,7 +263,7 @@ func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
 		fmt.Printf("[AddSystemMessage] Invalid bucket %d\n", bucketNr)
 		return false
 	}
-	
+
 	fmt.Printf("[AddSystemMessage] Adding to bucket %d\n", bucketNr)
 	bucket := Buckets[bucketNr]
 	req := &Request{
@@ -275,13 +276,18 @@ func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
 		Next:     nil,
 		Prev:     nil,
 	}
-	
+
+	// Bypass index entirely — system messages don't need dedup via reqIndex.
+	// Append directly to the linked list.
 	bucket.Lock()
-	storedReq, _ := bucket.addNoLock(req)
+	bucket.append(req)
+	if bucket.Group != nil {
+		bucket.Group.RequestAdded()
+	}
 	bucket.Unlock()
-	
-	fmt.Printf("[AddSystemMessage] Result: %v\n", storedReq != nil)
-	return storedReq != nil
+
+	fmt.Printf("[AddSystemMessage] Result: true\n")
+	return true
 }
 
 
