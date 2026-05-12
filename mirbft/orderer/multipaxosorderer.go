@@ -124,6 +124,8 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		announcer.Announce(&mirlog.Entry{Sn: sn, Batch: b, Digest: digest,
 			ShouldRespond: &shouldRespond, ProposeTs: proposeTs, CommitTs: commitTs})
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
+			// CSMR Output Processing: notify proxy about committed requests
+			GetGlobalMulticastOrderer().NotifyProxy(b, sn)
 			if len(b.Requests[0].TouchedGroups) > 1 && b.Requests[0].GSN > 0 {
 				GetGlobalMulticastOrderer().RegisterGSNMetadata(b.Requests[0].GSN, b.Requests[0].TouchedGroups)
 			}

@@ -23,7 +23,6 @@ import (
 	logger "github.com/rs/zerolog/log"
 
 	"github.com/hyperledger-labs/mirbft/log"
-	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/tracing"
@@ -107,6 +106,15 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 			continue
 		}
 
+		// CSMR: In multicast mode, the proxy handles responses via COMMIT_NOTIFY.
+		// The Responder only responds for group 0 (sequencer) system messages
+		// or when isMemberFunc is nil (non-multicast mode like PBFT/Raft).
+		if r.isMemberFunc != nil {
+			// Multicast mode: skip responding here — NotifyProxy handles it
+			fmt.Printf("[RESPONDER][CSMR-SKIP] sn=%d nreq=%d (proxy handles via COMMIT_NOTIFY)\n", e.Sn, len(e.Batch.Requests))
+			continue
+		}
+
 		nReq := len(e.Batch.Requests)
 		fmt.Printf("[RESPONDER][ENTRY] sn=%d nreq=%d\n", e.Sn, nReq)
 
@@ -127,36 +135,6 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 
 			cid := req.RequestId.ClientId
 			csn := req.RequestId.ClientSn
-			
-			// CSMR Output Processing: verifica membership primeiro
-			if len(req.TouchedGroups) > 1 {
-				// Cross-group: verifica se está em ALGUM dos grupos tocados
-				inMembership := false
-				if r.isMemberFunc != nil {
-					for _, gid := range req.TouchedGroups {
-						if r.isMemberFunc(gid, membership.OwnID) {
-							inMembership = true
-							break
-						}
-					}
-				} else {
-					inMembership = true
-				}
-				
-				if !inMembership {
-					skipped++
-					continue
-				}
-				
-				// Deduplicação: apenas uma réplica responde
-				opID := GenerateOpID(req)
-				if _, loaded := r.respondedOps.LoadOrStore(opID, true); loaded {
-					skipped++
-					continue
-				}
-			} else {
-				// Single-group: responde sempre (o nó recebeu a request do cliente)
-			}
 
 			logger.Trace().
 				Int32("clientId", cid).
@@ -177,7 +155,7 @@ func (r *Responder) Start(wg *sync.WaitGroup) {
 		}
 
 		if skipped > 0 {
-			fmt.Printf("[RESPONDER][ENTRY][DONE] sn=%d sent=%d skipped=%d (not member) total=%d\n", 
+			fmt.Printf("[RESPONDER][ENTRY][DONE] sn=%d sent=%d skipped=%d (system) total=%d\n", 
 				e.Sn, sent, skipped, nReq)
 		} else {
 			fmt.Printf("[RESPONDER][ENTRY][DONE] sn=%d sent=%d/%d\n", e.Sn, sent, nReq)

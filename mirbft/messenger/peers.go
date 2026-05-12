@@ -136,11 +136,15 @@ func handleMessage(msg *pb.ProtocolMessage, srv pb.Messenger_ListenServer) (fini
 		}
 	case *pb.ProtocolMessage_GsnReqForward:
 		req := m.GsnReqForward.Req
-		// Se for resposta de GSN, roteia para orderer (não para client handler)
+		// Se for resposta de GSN ou COMMIT_NOTIFY, roteia para orderer (não para client handler)
 		if req != nil && len(req.Payload) > 0 {
 			payload := string(req.Payload)
 			if len(payload) >= 20 && payload[:20] == "SYSTEM:GSN_RESPONSE:" {
-				// GSN_RESPONSE deve ir para OrdererMsgHandler completar gsnRequestsPending
+				OrdererMsgHandler(msg)
+				return false
+			}
+			if len(payload) >= 21 && payload[:21] == "SYSTEM:COMMIT_NOTIFY:" {
+				fmt.Printf("[MESSENGER][ROUTE] COMMIT_NOTIFY -> OrdererMsgHandler\n")
 				OrdererMsgHandler(msg)
 				return false
 			}
