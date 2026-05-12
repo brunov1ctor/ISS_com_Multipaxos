@@ -18,6 +18,7 @@ import (
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/messenger"
 	"github.com/hyperledger-labs/mirbft/request"
+	"github.com/hyperledger-labs/mirbft/tracing"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	logger "github.com/rs/zerolog/log"
 )
@@ -56,6 +57,8 @@ type MultiPaxosMulticastOrderer struct {
 	cacheMu            sync.RWMutex
 	publishedMeta      map[uint64]bool
 	publishedMu        sync.RWMutex
+	// CSMR Output Processing: proxy tracks pending requests
+	proxyPending       sync.Map // key: "clientId:clientSn" -> int32 (proxyNodeID)
 }
 
 type PendingCommit struct {
@@ -144,6 +147,15 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 				o.gsnReqMu.Unlock()
 				return
 			}
+		}
+		// CSMR Output Processing: COMMIT_NOTIFY from group replica back to proxy
+		if strings.HasPrefix(payload, "SYSTEM:COMMIT_NOTIFY:") {
+			var clientId, clientSn, orderSn int32
+			if n, _ := fmt.Sscanf(payload, "SYSTEM:COMMIT_NOTIFY:%d:%d:%d", &clientId, &clientSn, &orderSn); n == 3 {
+				fmt.Printf("[CSMR][COMMIT_NOTIFY-RECV] from=%d client=%d clientSn=%d orderSn=%d\n", pm.SenderId, clientId, clientSn, orderSn)
+				o.handleCommitNotify(clientId, clientSn, orderSn)
+			}
+			return
 		}
 		// Inject into bucket
 		req := gsnForward.Req
@@ -373,6 +385,56 @@ func (o *MultiPaxosMulticastOrderer) CacheRequest(gsn uint64, req *pb.ClientRequ
 	if _, exists := o.requestCache[gsn]; !exists { o.requestCache[gsn] = req }
 }
 
+// CSMR Output Processing: handle COMMIT_NOTIFY from group replicas
+func (o *MultiPaxosMulticastOrderer) handleCommitNotify(clientId, clientSn, orderSn int32) {
+	key := fmt.Sprintf("%d:%d", clientId, clientSn)
+	if _, loaded := o.proxyPending.LoadAndDelete(key); loaded {
+		fmt.Printf("[CSMR][PROXY-RESPOND] client=%d clientSn=%d orderSn=%d\n", clientId, clientSn, orderSn)
+		messenger.RespondToClient(clientId, &pb.ClientResponse{
+			OrderSn:  orderSn,
+			ClientSn: clientSn,
+		})
+		tracing.MainTrace.Event(tracing.RESP_SEND, int64(clientId), int64(clientSn))
+	} else {
+		fmt.Printf("[CSMR][COMMIT_NOTIFY-IGNORE] key=%s not in proxyPending (already responded or not proxy)\n", key)
+	}
+}
+
+// CSMR Output Processing: called by group orderer after commit to notify proxy
+func (o *MultiPaxosMulticastOrderer) NotifyProxy(batch *pb.Batch, sn int32) {
+	if batch == nil { return }
+	for _, req := range batch.Requests {
+		if req == nil || req.RequestId == nil { continue }
+		// Skip system messages
+		if strings.HasPrefix(string(req.Payload), "SYSTEM:") { continue }
+		clientId := req.RequestId.ClientId
+		clientSn := req.RequestId.ClientSn
+		// Check if WE are the proxy for this request
+		key := fmt.Sprintf("%d:%d", clientId, clientSn)
+		if _, isProxy := o.proxyPending.Load(key); isProxy {
+			// We are the proxy — respond directly
+			fmt.Printf("[CSMR][NOTIFY-LOCAL] sn=%d client=%d clientSn=%d (I am proxy)\n", sn, clientId, clientSn)
+			o.handleCommitNotify(clientId, clientSn, sn)
+		} else {
+			// We are NOT the proxy — send COMMIT_NOTIFY to all peers
+			fmt.Printf("[CSMR][NOTIFY-REMOTE] sn=%d client=%d clientSn=%d (sending to peers)\n", sn, clientId, clientSn)
+			notifyPayload := fmt.Sprintf("SYSTEM:COMMIT_NOTIFY:%d:%d:%d", clientId, clientSn, sn)
+			for _, nodeID := range membership.AllNodeIDs() {
+				if nodeID == membership.OwnID { continue }
+				messenger.EnqueueMsg(&pb.ProtocolMessage{
+					SenderId: membership.OwnID, Sn: -1,
+					Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
+						Req: &pb.ClientRequest{
+							RequestId: &pb.RequestID{ClientId: clientId, ClientSn: clientSn},
+							Payload:   []byte(notifyPayload),
+						},
+					}},
+				}, nodeID)
+			}
+		}
+	}
+}
+
 func (o *MultiPaxosMulticastOrderer) reforwardWatchdog() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -445,6 +507,8 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
 		return request.AddSystemMessage(req)
 	}
+	// COMMIT_NOTIFY bypass
+	if strings.HasPrefix(string(req.Payload), "SYSTEM:COMMIT_NOTIFY:") { return true }
 	if req.GetRequestId() == nil { return true }
 
 	// Already preprocessed
@@ -454,6 +518,11 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 
 	// Block other SYSTEM messages
 	if strings.HasPrefix(string(req.Payload), "SYSTEM:") { return true }
+
+	// CSMR: Register this node as proxy for this request (Output Processing)
+	key := fmt.Sprintf("%d:%d", req.RequestId.ClientId, req.RequestId.ClientSn)
+	o.proxyPending.Store(key, membership.OwnID)
+	fmt.Printf("[CSMR][PROXY-REG] client=%d clientSn=%d registered as proxy\n", req.RequestId.ClientId, req.RequestId.ClientSn)
 
 	// Map to groups via ReplicaMapper
 	if len(req.TouchedGroups) == 0 {
