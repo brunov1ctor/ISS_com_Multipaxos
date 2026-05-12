@@ -391,6 +391,7 @@ func (i *mpxInstance) processGSNRequest(payload string) {
 	var reqID uint64
 	var requester int32
 	if n, _ := fmt.Sscanf(payload, "SYSTEM:GSN_REQUEST:%d:%d", &reqID, &requester); n < 2 {
+		fmt.Printf("[MPX][GSN] sn=%d PARSE-FAIL payload=%.60s\n", i.sn, payload)
 		return
 	}
 	gmo := GetGlobalMulticastOrderer()
@@ -399,7 +400,7 @@ func (i *mpxInstance) processGSNRequest(payload string) {
 	gmo.nextGSN++
 	gmo.persistNextGSN()
 	gmo.gsnMu.Unlock()
-	fmt.Printf("[MPX] sn=%d GSN-ASSIGN gsn=%d reqID=%d requester=%d\n", i.sn, gsn, reqID, requester)
+	fmt.Printf("[MPX][GSN] sn=%d GSN-ASSIGN gsn=%d reqID=%d requester=%d ownID=%d\n", i.sn, gsn, reqID, requester, membership.OwnID)
 
 	if requester == membership.OwnID {
 		gmo.gsnReqMu.Lock()
@@ -437,7 +438,12 @@ func (i *mpxInstance) ProposeIfDue() {
 	var val *pb.MPxValue
 	reqs := 0
 	if i.lastVal == nil {
-		if i.groupBucketGroup == nil { return }
+		if i.groupBucketGroup == nil {
+			if i.bucketId == 0 {
+				fmt.Printf("[MPX] sn=%d PROPOSE-SKIP group=0 reason=groupBucketGroup nil\n", i.sn)
+			}
+			return
+		}
 		rb := i.groupBucketGroup.CutBatch(i.parent.maxBatchSize, i.proposeEvery)
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			emptyBatch := &pb.Batch{Requests: nil}
@@ -525,6 +531,14 @@ func (i *mpxInstance) SetMembers(members []int32) {
 	n := int32(len(i.members))
 	if n < 1 { n = 1 }
 	i.quorum = n/2 + 1
+
+	// Initialize groupBucketGroup eagerly (don't wait for onPrepare)
+	if i.groupBucketGroup == nil && i.bucketId < uint32(len(request.Buckets)) {
+		fmt.Printf("[MPX] sn=%d INIT-BUCKETS-EAGER group=%d (SetMembers)\n", i.sn, i.bucketId)
+		i.mu.Unlock()
+		i.initGroupBuckets()
+		i.mu.Lock()
+	}
 
 	if i.leader == -1 {
 		i.leader = i.members[i.sn%n]
