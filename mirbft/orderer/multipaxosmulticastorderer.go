@@ -4,12 +4,9 @@ package orderer
 
 import (
 	"fmt"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/crypto"
@@ -23,7 +20,6 @@ import (
 	logger "github.com/rs/zerolog/log"
 )
 
-const gsnStateFile = "/tmp/iss-Bruno/next_gsn.state"
 const (
 	SYSTEM_META_STREAM = "SYSTEM:META_STREAM:"
 	SYSTEM_GSN_REQUEST = "SYSTEM:GSN_REQUEST:"
@@ -34,31 +30,18 @@ var globalMulticastOrderer *MultiPaxosMulticastOrderer
 func GetGlobalMulticastOrderer() *MultiPaxosMulticastOrderer { return globalMulticastOrderer }
 
 type MultiPaxosMulticastOrderer struct {
-	groupOrderers      map[uint32]*MultiPaxosOrderer
-	orderersMu         sync.RWMutex
-	am                 *AtomicMulticast
-	mgr                manager.Manager
-	groupsFilePath     string
-	nextGSN            uint64
-	gsnMu              sync.Mutex
-	gsnRequestsPending map[uint64]chan uint64
-	gsnReqMu           sync.Mutex
-	gsnSeqCounter      uint32
-	metaSeqCounter     uint32
-	gsnMetadata        map[uint64][]uint32
-	metaMu             sync.RWMutex
-	lastDeliveredGSN   map[uint32]uint64
-	expectedGSNMu      sync.RWMutex
-	pendingCommits     map[uint32]map[uint64]*PendingCommit
-	bufferMu           sync.RWMutex
-	missingRequests    map[uint64]map[uint32]time.Time
-	missingMu          sync.RWMutex
-	requestCache       map[uint64]*pb.ClientRequest
-	cacheMu            sync.RWMutex
-	publishedMeta      map[uint64]bool
-	publishedMu        sync.RWMutex
+	groupOrderers  map[uint32]*MultiPaxosOrderer
+	orderersMu     sync.RWMutex
+	am             *AtomicMulticast
+	seq            *Sequencer // Sequenciador dedicado (independente do ISS)
+	mgr            manager.Manager
+	groupsFilePath string
+	missingRequests map[uint64]map[uint32]time.Time
+	missingMu       sync.RWMutex
+	requestCache    map[uint64]*pb.ClientRequest
+	cacheMu         sync.RWMutex
 	// CSMR Output Processing: proxy tracks pending requests
-	proxyPending       sync.Map // key: "clientId:clientSn" -> int32 (proxyNodeID)
+	proxyPending   sync.Map // key: "clientId:clientSn" -> int32 (proxyNodeID)
 }
 
 type PendingCommit struct {
@@ -77,14 +60,8 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	o.am = NewAtomicMulticast()
 	fmt.Printf("[MULTICAST] NewAtomicMulticast: group0 members=%v\n", o.am.GetGroupMembers(0))
 	o.groupOrderers = make(map[uint32]*MultiPaxosOrderer)
-	o.lastDeliveredGSN = make(map[uint32]uint64)
-	o.pendingCommits = make(map[uint32]map[uint64]*PendingCommit)
-	o.gsnMetadata = make(map[uint64][]uint32)
-	o.gsnRequestsPending = make(map[uint64]chan uint64)
-	o.nextGSN = 1
 	o.missingRequests = make(map[uint64]map[uint32]time.Time)
 	o.requestCache = make(map[uint64]*pb.ClientRequest)
-	o.publishedMeta = make(map[uint64]bool)
 	// Load groups
 	if o.groupsFilePath == "" { o.groupsFilePath = "/tmp/iss-Bruno/config/groups.yml" }
 	if err := o.am.LoadGroupsFromYAML(o.groupsFilePath); err != nil {
@@ -93,22 +70,24 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	o.am.UpdateSequencerGroup()
 	fmt.Printf("[MULTICAST] Groups loaded: %v group0=%v\n", o.am.GetDefinedGroups(), o.am.GetGroupMembers(0))
 	o.am.SetSequencer(o)
-	// Create group orderers
+	// Create standalone sequencer (independent from ISS)
+	o.seq = NewSequencer(o.am.GetGroupMembers(0))
+	o.seq.Start()
+	// Create group orderers for DATA groups only (not group 0)
 	for _, gid := range o.am.GetDefinedGroups() {
+		if gid == 0 { continue } // Group 0 handled by Sequencer
 		ord := &MultiPaxosOrderer{am: o.am, ownedGroupID: gid, skipHandlerRegistration: true}
 		ord.segmentChan = make(chan manager.Segment, 64)
 		ord.Init(mngr)
-		if gid == 0 { ord.proposeEvery = 1 * time.Millisecond }
 		o.groupOrderers[gid] = ord
 	}
 	// Setup handlers
 	messenger.OrdererMsgHandler = o.HandleMessage
-	request.SetGSNGenerator(o.GetNextGSN)
+	request.SetGSNGenerator(o.seq.GetNextGSN)
 	request.SetGroupMembersGetter(o.GetGroupMembers)
 	request.SetRequestReceivedMarker(o.MarkRequestReceived)
 	request.SetRequestCacher(o.CacheRequest)
 	request.SetRequestPreprocessor(o.PreprocessRequest)
-	o.loadNextGSN()
 	go o.reforwardWatchdog()
 }
 
@@ -136,17 +115,21 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	if gsnForward := pm.GetGsnReqForward(); gsnForward != nil {
 		payload := string(gsnForward.Req.Payload)
-		// GSN_RESPONSE fast-path
+		// GSN_RESPONSE -> Sequencer
 		if strings.HasPrefix(payload, "SYSTEM:GSN_RESPONSE:") {
-			var reqID, gsn uint64
-			if n, _ := fmt.Sscanf(payload, "SYSTEM:GSN_RESPONSE:%d:%d", &reqID, &gsn); n == 2 {
-				o.gsnReqMu.Lock()
-				if ch, exists := o.gsnRequestsPending[reqID]; exists {
-					select { case ch <- gsn: default: }
-				}
-				o.gsnReqMu.Unlock()
-				return
-			}
+			o.seq.HandleGSNResponse(payload)
+			return
+		}
+		// GSN_REQUEST -> Sequencer (leader processes)
+		if strings.HasPrefix(payload, SYSTEM_GSN_REQUEST) {
+			o.seq.HandleGSNRequest(payload, pm.SenderId)
+			return
+		}
+		// META_STREAM -> Sequencer
+		if strings.HasPrefix(payload, SYSTEM_META_STREAM) {
+			req := gsnForward.Req
+			o.seq.HandleMETAStream(payload, req.GetTouchedGroups(), req.GetGSN())
+			return
 		}
 		// CSMR Output Processing: COMMIT_NOTIFY from group replica back to proxy
 		if strings.HasPrefix(payload, "SYSTEM:COMMIT_NOTIFY:") {
@@ -157,15 +140,11 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			}
 			return
 		}
-		// Inject into bucket
+		// Inject into bucket (data requests)
 		req := gsnForward.Req
 		if req != nil && req.GetRequestId() != nil {
-			if req.GroupId == 0 || o.am.IsMember(req.GroupId, membership.OwnID) {
-				if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
-					request.AddSystemMessage(req)
-				} else {
-					request.AddReqMsg(req)
-				}
+			if o.am.IsMember(req.GroupId, membership.OwnID) {
+				request.AddReqMsg(req)
 			}
 			if req.GSN > 0 && req.GroupId > 0 { o.MarkRequestReceived(req.GSN, req.GroupId) }
 		}
@@ -208,139 +187,17 @@ func (o *MultiPaxosMulticastOrderer) GetGroupMembers(groupID uint32) []int32 {
 	return o.am.GetGroupMembers(groupID)
 }
 
-func makeGlobalRequestID(nodeID int32, localCounter uint32) uint64 {
-	return uint64(nodeID)<<32 | uint64(localCounter)
-}
-
-func (o *MultiPaxosMulticastOrderer) GetNextGSN() uint64 {
-	clientSn := atomic.AddUint32(&o.gsnSeqCounter, 1)
-	reqID := makeGlobalRequestID(membership.OwnID, clientSn)
-	respChan := make(chan uint64, 1)
-	o.gsnReqMu.Lock()
-	o.gsnRequestsPending[reqID] = respChan
-	o.gsnReqMu.Unlock()
-
-	o.sendToGroup(&pb.ClientRequest{
-		RequestId: &pb.RequestID{ClientId: membership.OwnID, ClientSn: int32(clientSn)},
-		Payload: []byte(fmt.Sprintf("%s%d:%d", SYSTEM_GSN_REQUEST, reqID, membership.OwnID)),
-		GroupId: 0, TouchedGroups: []uint32{0},
-	}, 0)
-
-	select {
-	case gsn := <-respChan:
-		o.gsnReqMu.Lock(); delete(o.gsnRequestsPending, reqID); o.gsnReqMu.Unlock()
-		return gsn
-	case <-time.After(10 * time.Second):
-		o.gsnReqMu.Lock(); delete(o.gsnRequestsPending, reqID); o.gsnReqMu.Unlock()
-		return 0
-	}
+// Delegate to Sequencer
+func (o *MultiPaxosMulticastOrderer) RegisterGSNMetadata(gsn uint64, touchedGroups []uint32) {
+	o.seq.RegisterMetadata(gsn, touchedGroups)
 }
 
 func (o *MultiPaxosMulticastOrderer) ADeliver(gsn uint64, groupID uint32, _ *pb.Batch) bool {
-	o.expectedGSNMu.Lock()
-	defer o.expectedGSNMu.Unlock()
-	lastDelivered := o.lastDeliveredGSN[groupID]
-	if gsn <= lastDelivered { return true }
-
-	nextCandidate := lastDelivered + 1
-	for nextCandidate < gsn {
-		o.metaMu.RLock()
-		_, metaExists := o.gsnMetadata[nextCandidate]
-		touches := metaExists && o.gsnTouchesGroup(nextCandidate, groupID)
-		o.metaMu.RUnlock()
-		if !metaExists { return false }
-		if touches { return false }
-		nextCandidate++
-	}
-
-	o.metaMu.RLock()
-	_, metaExists := o.gsnMetadata[gsn]
-	touches := metaExists && o.gsnTouchesGroup(gsn, groupID)
-	o.metaMu.RUnlock()
-	if !metaExists { return false }
-	if !touches { return true }
-	o.lastDeliveredGSN[groupID] = gsn
-	return true
+	return o.seq.ADeliver(gsn, groupID)
 }
 
 func (o *MultiPaxosMulticastOrderer) BufferCommit(gsn uint64, groupID uint32, batch *pb.Batch, announce func(int32, *pb.Batch, []byte), sn int32, digest []byte) {
-	o.bufferMu.Lock()
-	defer o.bufferMu.Unlock()
-	if o.pendingCommits[groupID] == nil { o.pendingCommits[groupID] = make(map[uint64]*PendingCommit) }
-	o.pendingCommits[groupID][gsn] = &PendingCommit{gsn: gsn, groupID: groupID, batch: batch, announce: announce, sn: sn, digest: digest}
-}
-
-func (o *MultiPaxosMulticastOrderer) drainBuffer(groupID uint32) {
-	o.bufferMu.Lock()
-	defer o.bufferMu.Unlock()
-	if o.pendingCommits[groupID] == nil { return }
-	for {
-		o.expectedGSNMu.RLock()
-		lastDelivered := o.lastDeliveredGSN[groupID]
-		o.expectedGSNMu.RUnlock()
-		nextCandidate := lastDelivered + 1
-		for {
-			o.metaMu.RLock()
-			_, metaExists := o.gsnMetadata[nextCandidate]
-			touches := metaExists && o.gsnTouchesGroup(nextCandidate, groupID)
-			o.metaMu.RUnlock()
-			if !metaExists { return }
-			if touches { break }
-			nextCandidate++
-		}
-		pending, exists := o.pendingCommits[groupID][nextCandidate]
-		if !exists { return }
-		pending.announce(pending.sn, pending.batch, pending.digest)
-		o.expectedGSNMu.Lock()
-		o.lastDeliveredGSN[groupID] = nextCandidate
-		o.expectedGSNMu.Unlock()
-		delete(o.pendingCommits[groupID], nextCandidate)
-	}
-}
-
-func (o *MultiPaxosMulticastOrderer) RegisterGSNMetadata(gsn uint64, touchedGroups []uint32) {
-	o.metaMu.Lock()
-	if len(touchedGroups) == 0 { o.metaMu.Unlock(); return }
-	if _, exists := o.gsnMetadata[gsn]; exists { o.metaMu.Unlock(); return }
-	o.gsnMetadata[gsn] = make([]uint32, len(touchedGroups))
-	copy(o.gsnMetadata[gsn], touchedGroups)
-	o.metaMu.Unlock()
-
-	o.missingMu.Lock()
-	if o.missingRequests[gsn] == nil { o.missingRequests[gsn] = make(map[uint32]time.Time) }
-	for _, gid := range touchedGroups {
-		if gid > 0 { o.missingRequests[gsn][gid] = time.Now() }
-	}
-	o.missingMu.Unlock()
-
-	for _, gid := range touchedGroups {
-		o.bufferMu.RLock()
-		_, exists := o.pendingCommits[gid][gsn]
-		o.bufferMu.RUnlock()
-		if exists { o.drainBuffer(gid) }
-	}
-}
-
-func (o *MultiPaxosMulticastOrderer) gsnTouchesGroup(gsn uint64, groupID uint32) bool {
-	touched, exists := o.gsnMetadata[gsn]
-	if !exists { return false }
-	for _, g := range touched { if g == groupID { return true } }
-	return false
-}
-
-func (o *MultiPaxosMulticastOrderer) PublishGSNMetadata(gsn uint64, touchedGroups []uint32) {
-	o.publishedMu.Lock()
-	if o.publishedMeta[gsn] { o.publishedMu.Unlock(); return }
-	o.publishedMeta[gsn] = true
-	o.publishedMu.Unlock()
-	if len(touchedGroups) == 0 { return }
-
-	metaSn := atomic.AddUint32(&o.metaSeqCounter, 1)
-	o.sendToGroup(&pb.ClientRequest{
-		RequestId: &pb.RequestID{ClientId: membership.OwnID, ClientSn: int32(metaSn)},
-		Payload: []byte(fmt.Sprintf("%s%d", SYSTEM_META_STREAM, gsn)),
-		GroupId: 0, TouchedGroups: touchedGroups, GSN: gsn,
-	}, 0)
+	o.seq.BufferCommit(gsn, groupID, batch, announce, sn, digest)
 }
 
 func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {
@@ -348,11 +205,7 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 	if len(members) == 0 { return }
 	for _, nodeID := range members {
 		if nodeID == membership.OwnID {
-			if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
-				request.AddSystemMessage(req)
-			} else {
-				request.AddReqMsg(req)
-			}
+			request.AddReqMsg(req)
 			break
 		}
 	}
@@ -489,18 +342,7 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 	o.orderersMu.RUnlock()
 }
 
-func (o *MultiPaxosMulticastOrderer) loadNextGSN() {
-	b, err := os.ReadFile(gsnStateFile)
-	if err == nil {
-		if v, err2 := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); err2 == nil && v > 0 {
-			o.nextGSN = v; return
-		}
-	}
-}
 
-func (o *MultiPaxosMulticastOrderer) persistNextGSN() {
-	_ = os.WriteFile(gsnStateFile, []byte(fmt.Sprintf("%d\n", o.nextGSN)), 0644)
-}
 
 func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bool {
 	// System messages bypass preprocessor
@@ -547,9 +389,9 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	}
 
 	// Cross-group: get GSN + publish META + fanout
-	gsn := o.GetNextGSN()
+	gsn := o.seq.GetNextGSN()
 	if gsn == 0 { return true }
-	o.PublishGSNMetadata(gsn, req.TouchedGroups)
+	o.seq.PublishMETA(gsn, req.TouchedGroups)
 	o.CacheRequest(gsn, &pb.ClientRequest{
 		RequestId: req.RequestId, Payload: req.Payload, Signature: req.Signature,
 		Pubkey: req.Pubkey, TouchedGroups: req.TouchedGroups, GSN: gsn,
