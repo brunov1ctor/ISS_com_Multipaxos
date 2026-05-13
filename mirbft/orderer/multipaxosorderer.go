@@ -197,25 +197,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 
 	groupId := o.ownedGroupID
 
-	// Multicast: grupos de dados cancelam segmento anterior (novo epoch substitui)
-	// Grupo 0 (sequenciador) NUNCA cancela — deve rodar continuamente
-	// Broadcast: NÃO cancela — segmentos rodam em paralelo (um por líder)
+	// Cada segmento roda em paralelo (um por líder, SNs interleaved)
+	// NÃO cancela segmentos anteriores — múltiplos líderes operam simultaneamente
 	var stopCh chan struct{}
-	if !isBroadcast {
-		if groupId == 0 {
-			// Sequencer: never cancel, always run
-			stopCh = make(chan struct{})
-		} else {
-			// Data groups: cancel previous segment to avoid ballot conflicts
-			o.segMu.Lock()
-			if o.currentSegCancel != nil { o.currentSegCancel() }
-			stopCh = make(chan struct{})
-			o.currentSegCancel = func() { close(stopCh) }
-			o.segMu.Unlock()
-		}
-	} else {
-		stopCh = make(chan struct{})
-	}
+	stopCh = make(chan struct{})
 
 	members := o.am.GetGroupMembers(groupId)
 	if members == nil {
