@@ -576,7 +576,7 @@ func (b *Bucket) FindMinCrossOpByGSN() *Request {
 	
 	r := b.FirstRequest
 	for r != nil {
-		if len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 && r.Msg.GSN < minGSN {
+		if !r.InFlight && len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 && r.Msg.GSN < minGSN {
 			// Verifica barreira de GSN para atomic global order
 			if gsnBarrierChecker == nil || gsnBarrierChecker(r.Msg.GSN) {
 				minGSN = r.Msg.GSN
