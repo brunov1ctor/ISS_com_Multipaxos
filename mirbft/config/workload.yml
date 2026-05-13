@@ -14,10 +14,10 @@
 #   Multiple keys (TX)   -> multi-group operation (requires atomic multicast)
 
 workload:
-  # Single-group operations (80%)
-  - weight: 80
+  # Single-group operations
+  - weight: 100
     pattern: "GET K{seqNr:08d}"
-  
-  # Multi-group operations (20%) - offset +1000 avoids hash collisions
-  - weight: 20
+
+  # Multi-group operations (cross-partition, requires sequencer)
+  - weight: 0
     pattern: "TX K{seqNr:08d},K{seqNr+1000:08d}"
