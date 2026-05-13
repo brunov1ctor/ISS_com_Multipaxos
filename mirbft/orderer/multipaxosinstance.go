@@ -358,7 +358,8 @@ func (i *mpxInstance) deliverCommit() {
 	if crossOpGSN > 0 && GetGlobalMulticastOrderer() != nil {
 		fmt.Printf("[MPX] sn=%d CROSS-OP gsn=%d group=%d\n", i.sn, crossOpGSN, i.bucketId)
 		if !GetGlobalMulticastOrderer().ADeliver(crossOpGSN, i.bucketId, b) {
-			if i.announce != nil { i.announce(i.sn, b, i.lastDigest[:]) }
+			// Cannot deliver yet — buffer until META arrives and ordering is satisfied
+			GetGlobalMulticastOrderer().BufferCommit(crossOpGSN, i.bucketId, b, i.announce, i.sn, i.lastDigest[:])
 			i.closed = true; traceCommit(i.sn, len(b.Requests))
 			return
 		}
@@ -414,6 +415,8 @@ func (i *mpxInstance) ProposeIfDue() {
 			for _, req := range rb.Requests {
 				if len(req.Msg.TouchedGroups) > 1 && req.Msg.GSN == 0 { rb.Resurrect(); return }
 			}
+			// Mark requests as in-flight to prevent duplicate proposals
+			rb.MarkInFlight()
 			i.lastReqBatch = rb
 			reqs = len(batchMsg.Requests)
 			val = &pb.MPxValue{Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)}, Batch: batchMsg}
