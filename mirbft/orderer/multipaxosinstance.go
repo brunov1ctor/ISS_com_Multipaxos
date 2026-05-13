@@ -4,12 +4,10 @@ package orderer
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
-	"github.com/hyperledger-labs/mirbft/messenger"
 	"github.com/hyperledger-labs/mirbft/request"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/statetransfer"
@@ -344,21 +342,9 @@ func (i *mpxInstance) deliverCommit() {
 		return
 	}
 
-	// Grupo 0: processa mensagens de sistema (GSN_REQUEST, META_STREAM)
+	// Grupo 0: mensagens de sistema são processadas pelo Sequencer standalone
+	// (não chegam aqui pois grupo 0 não tem instâncias ISS)
 	if i.bucketId == 0 && GetGlobalMulticastOrderer() != nil {
-		for _, req := range b.Requests {
-			payload := string(req.Payload)
-			if strings.HasPrefix(payload, "SYSTEM:GSN_REQUEST:") {
-				i.processGSNRequest(payload)
-			}
-			if strings.HasPrefix(payload, "SYSTEM:META_STREAM:") {
-				var gsn uint64
-				if n, _ := fmt.Sscanf(payload, "SYSTEM:META_STREAM:%d", &gsn); n >= 1 && len(req.TouchedGroups) > 0 {
-					fmt.Printf("[MPX] sn=%d META gsn=%d groups=%v\n", i.sn, gsn, req.TouchedGroups)
-					GetGlobalMulticastOrderer().RegisterGSNMetadata(gsn, req.TouchedGroups)
-				}
-			}
-		}
 		if i.announce != nil { i.announce(i.sn, b, i.lastDigest[:]) }
 		i.closed = true; traceCommit(i.sn, len(b.Requests))
 		return
@@ -386,40 +372,7 @@ func (i *mpxInstance) deliverCommit() {
 	i.closed = true; traceCommit(i.sn, len(b.Requests))
 }
 
-// processGSNRequest processa uma GSN_REQUEST individual do grupo 0
-func (i *mpxInstance) processGSNRequest(payload string) {
-	var reqID uint64
-	var requester int32
-	if n, _ := fmt.Sscanf(payload, "SYSTEM:GSN_REQUEST:%d:%d", &reqID, &requester); n < 2 {
-		fmt.Printf("[MPX][GSN] sn=%d PARSE-FAIL payload=%.60s\n", i.sn, payload)
-		return
-	}
-	gmo := GetGlobalMulticastOrderer()
-	gmo.gsnMu.Lock()
-	gsn := gmo.nextGSN
-	gmo.nextGSN++
-	gmo.persistNextGSN()
-	gmo.gsnMu.Unlock()
-	fmt.Printf("[MPX][GSN] sn=%d GSN-ASSIGN gsn=%d reqID=%d requester=%d ownID=%d\n", i.sn, gsn, reqID, requester, membership.OwnID)
 
-	if requester == membership.OwnID {
-		gmo.gsnReqMu.Lock()
-		if ch, exists := gmo.gsnRequestsPending[reqID]; exists {
-			ch <- gsn; delete(gmo.gsnRequestsPending, reqID)
-		}
-		gmo.gsnReqMu.Unlock()
-	} else {
-		messenger.EnqueueMsg(&pb.ProtocolMessage{
-			SenderId: membership.OwnID, Sn: -1,
-			Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
-				Req: &pb.ClientRequest{
-					RequestId: &pb.RequestID{ClientId: requester, ClientSn: 0},
-					Payload: []byte(fmt.Sprintf("SYSTEM:GSN_RESPONSE:%d:%d", reqID, gsn)),
-				},
-			}},
-		}, requester)
-	}
-}
 
 func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()

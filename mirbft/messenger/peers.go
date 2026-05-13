@@ -136,10 +136,18 @@ func handleMessage(msg *pb.ProtocolMessage, srv pb.Messenger_ListenServer) (fini
 		}
 	case *pb.ProtocolMessage_GsnReqForward:
 		req := m.GsnReqForward.Req
-		// Se for resposta de GSN ou COMMIT_NOTIFY, roteia para orderer (não para client handler)
+		// Se for resposta de GSN, GSN_REQUEST ou COMMIT_NOTIFY, roteia para orderer (não para client handler)
 		if req != nil && len(req.Payload) > 0 {
 			payload := string(req.Payload)
 			if len(payload) >= 20 && payload[:20] == "SYSTEM:GSN_RESPONSE:" {
+				OrdererMsgHandler(msg)
+				return false
+			}
+			if len(payload) >= 18 && payload[:18] == "SYSTEM:GSN_REQUEST:" {
+				OrdererMsgHandler(msg)
+				return false
+			}
+			if len(payload) >= 19 && payload[:19] == "SYSTEM:META_STREAM:" {
 				OrdererMsgHandler(msg)
 				return false
 			}
