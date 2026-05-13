@@ -76,3 +76,13 @@ func (c *ContiguousSegment) Buckets() *request.BucketGroup {
 func (c *ContiguousSegment) BatchSize() int {
 	return config.Config.BatchSize
 }
+
+// SetFields allows programmatic creation of a segment for bootstrap purposes.
+func (c *ContiguousSegment) SetFields(segID int, leaders []int32, followers []int32, snOffset int32, snLength int32, startsAfter int32) {
+	c.segID = segID
+	c.leaders = leaders
+	c.followers = followers
+	c.snOffset = snOffset
+	c.snLength = snLength
+	c.startsAfter = startsAfter
+}

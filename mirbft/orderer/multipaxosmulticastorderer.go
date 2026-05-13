@@ -92,6 +92,28 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 }
 
 func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
+	// Bootstrap: create initial instances so groups are ready before client sends requests.
+	// This runs AFTER messenger.Connect() and discovery.SyncPeer(), so peer connections exist.
+	numNodes := int32(len(membership.AllNodeIDs()))
+	if numNodes < 1 { numNodes = 1 }
+	snLength := int32(config.Config.SegmentLength) * numNodes
+	initialSeg := &manager.ContiguousSegment{}
+	initialSeg.SetFields(0, membership.AllNodeIDs(), membership.AllNodeIDs(), 0, snLength, -1)
+	for gid, ord := range o.groupOrderers {
+		members := o.am.GetGroupMembers(gid)
+		if members == nil { continue }
+		firstSN := int32(gid)
+		inst := ord.ensureInstance(firstSN)
+		inst.setSegment(initialSeg)
+		inst.bucketId = gid
+		inst.SetMembers(members)
+		ord.dispatcher.store(firstSN, inst)
+		inst.startWorkers(&ord.stopWg)
+		ord.RunSegmentDirect(initialSeg)
+		fmt.Printf("[MULTICAST] Bootstrap: group=%d firstSN=%d members=%v ready\n", gid, firstSN, members)
+	}
+	fmt.Printf("[MULTICAST] Bootstrap: %d data groups ready (SN 0-%d)\n", len(o.groupOrderers), initialSeg.LastSN())
+
 	segCh := o.mgr.SubscribeOrderer()
 	go func() {
 		for seg := range segCh {

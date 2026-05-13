@@ -270,6 +270,12 @@ func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
 	return newMPXInstance(o, sn, o.announce, o.maxBatchSize, o.proposeEvery)
 }
 
+// RunSegmentDirect runs a segment immediately without waiting for the segment channel.
+// Used for bootstrap to ensure instances are ready before client sends requests.
+func (o *MultiPaxosOrderer) RunSegmentDirect(seg manager.Segment) {
+	o.runSegment(seg)
+}
+
 func (o *MultiPaxosOrderer) Sign(data []byte) ([]byte, error) { return nil, nil }
 func (o *MultiPaxosOrderer) CheckSig(data []byte, senderID int32, signature []byte) error { return nil }
 
