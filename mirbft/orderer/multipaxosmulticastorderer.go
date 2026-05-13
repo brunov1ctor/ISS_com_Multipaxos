@@ -393,6 +393,8 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		req.TouchedGroups = request.ReplicaMapper(req.Payload)
 		sort.Slice(req.TouchedGroups, func(i, j int) bool { return req.TouchedGroups[i] < req.TouchedGroups[j] })
 	}
+	fmt.Printf("[CSMR][PREPROCESS] client=%d clientSn=%d touchedGroups=%v payload=%.30s\n",
+		req.RequestId.ClientId, req.RequestId.ClientSn, req.TouchedGroups, string(req.Payload))
 	// Remove group 0
 	filtered := req.TouchedGroups[:0]
 	for _, g := range req.TouchedGroups { if g != 0 { filtered = append(filtered, g) } }
