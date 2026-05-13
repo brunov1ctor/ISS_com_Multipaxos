@@ -130,7 +130,9 @@ func (s *Sequencer) IsLeader() bool {
 // Se não, envia GSN_REQUEST ao líder e aguarda resposta.
 func (s *Sequencer) GetNextGSN() uint64 {
 	if s.IsLeader() {
-		return s.allocateGSN()
+		gsn := s.allocateGSN()
+		fmt.Printf("[SEQUENCER][GetNextGSN] allocated gsn=%d (local leader)\n", gsn)
+		return gsn
 	}
 
 	// Não é líder: envia request ao líder
@@ -274,9 +276,11 @@ func (s *Sequencer) HandleGSNResponse(payload string) {
 
 // PublishMETA publica metadata de um cross-group request para todos os membros do grupo 0.
 func (s *Sequencer) PublishMETA(gsn uint64, touchedGroups []uint32) {
+	fmt.Printf("[SEQUENCER][PublishMETA] gsn=%d touchedGroups=%v\n", gsn, touchedGroups)
 	s.publishedMu.Lock()
 	if s.publishedMeta[gsn] {
 		s.publishedMu.Unlock()
+		fmt.Printf("[SEQUENCER][PublishMETA] gsn=%d ALREADY PUBLISHED (dedup)\n", gsn)
 		return
 	}
 	s.publishedMeta[gsn] = true
