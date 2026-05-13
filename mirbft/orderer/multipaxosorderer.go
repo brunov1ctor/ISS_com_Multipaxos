@@ -193,6 +193,10 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	// Multicast: stride = number of groups
 	if isBroadcast { numGroups = int32(len(membership.AllNodeIDs())) }
 
+	o.firstSNMu.Lock(); o.currentFirstSN = seg.FirstSN(); o.firstSNMu.Unlock()
+
+	groupId := o.ownedGroupID
+
 	// Multicast: grupos de dados cancelam segmento anterior (novo epoch substitui)
 	// Grupo 0 (sequenciador) NUNCA cancela — deve rodar continuamente
 	// Broadcast: NÃO cancela — segmentos rodam em paralelo (um por líder)
@@ -213,9 +217,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		stopCh = make(chan struct{})
 	}
 
-	o.firstSNMu.Lock(); o.currentFirstSN = seg.FirstSN(); o.firstSNMu.Unlock()
-
-	groupId := o.ownedGroupID
 	members := o.am.GetGroupMembers(groupId)
 	if members == nil {
 		fmt.Printf("[MPX] SEGMENT SKIP group=%d members=nil (ownedGroupID=%d, definedGroups=%v)\n", groupId, o.ownedGroupID, o.am.GetDefinedGroups())
