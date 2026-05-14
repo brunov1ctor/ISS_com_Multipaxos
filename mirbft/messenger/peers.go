@@ -136,7 +136,6 @@ func handleMessage(msg *pb.ProtocolMessage, srv pb.Messenger_ListenServer) (fini
 		}
 	case *pb.ProtocolMessage_GsnReqForward:
 		req := m.GsnReqForward.Req
-		// Se for resposta de GSN, GSN_REQUEST ou COMMIT_NOTIFY, roteia para orderer (não para client handler)
 		if req != nil && len(req.Payload) > 0 {
 			payload := string(req.Payload)
 			if len(payload) >= 20 && payload[:20] == "SYSTEM:GSN_RESPONSE:" {
@@ -157,8 +156,8 @@ func handleMessage(msg *pb.ProtocolMessage, srv pb.Messenger_ListenServer) (fini
 				return false
 			}
 		}
-		// Caso contrário, é request normal de cliente
-		handleClientRequest(req)
+		// All GsnReqForward data requests go to OrdererMsgHandler (bypasses client Buffer/watermark)
+		OrdererMsgHandler(msg)
 	case *pb.ProtocolMessage_Close:
 		logger.Info().Int32("peerId", msg.SenderId).Msg("Connection closed by gRPC client.")
 		return true

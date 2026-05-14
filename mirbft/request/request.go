@@ -254,6 +254,42 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 	requestPreprocessor = fn
 }
 
+// AddDirectToBucket adds a data request directly to its bucket, bypassing Buffer/Watermark.
+// Used for cross-group and forwarded requests that already have GroupId set.
+// These requests have the same clientId/clientSn as the original but must not go through
+// the client watermark window (which may reject them as duplicates or out-of-window).
+func AddDirectToBucket(reqMsg *pb.ClientRequest) {
+	bucketNr := GetBucketNr(reqMsg)
+	if bucketNr < 0 || bucketNr >= len(Buckets) {
+		fmt.Printf("[AddDirectToBucket] INVALID bucket=%d groupId=%d\n", bucketNr, reqMsg.GetGroupId())
+		return
+	}
+	bucket := Buckets[bucketNr]
+	req := &Request{
+		Msg:      reqMsg,
+		Digest:   Digest(reqMsg),
+		Buffer:   nil,
+		Bucket:   bucket,
+		Verified: true,
+		InFlight: false,
+		Next:     nil,
+		Prev:     nil,
+	}
+	if len(reqMsg.TouchedGroups) > 0 {
+		req.OpID = GenerateOpID(reqMsg)
+		req.GSN = reqMsg.GSN
+	}
+	bucket.Lock()
+	bucket.append(req)
+	if bucket.Group != nil {
+		bucket.Group.RequestAdded()
+	}
+	bucket.Unlock()
+	rid := reqMsg.GetRequestId()
+	fmt.Printf("[AddDirectToBucket] bucket=%d group=%d client=%d sn=%d gsn=%d\n",
+		bucketNr, reqMsg.GetGroupId(), rid.GetClientId(), rid.GetClientSn(), reqMsg.GSN)
+}
+
 // AddSystemMessage adds a SYSTEM message directly to bucket, bypassing Buffer/Watermark.
 // Uses a dedicated linked list append (no index check) to avoid reqID collisions with client requests.
 func AddSystemMessage(reqMsg *pb.ClientRequest) bool {

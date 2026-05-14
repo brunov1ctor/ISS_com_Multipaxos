@@ -162,11 +162,11 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			}
 			return
 		}
-		// Inject into bucket (data requests)
+		// Inject into bucket (data requests) — bypass Buffer/watermark
 		req := gsnForward.Req
 		if req != nil && req.GetRequestId() != nil {
 			if o.am.IsMember(req.GroupId, membership.OwnID) {
-				request.AddReqMsg(req)
+				request.AddDirectToBucket(req)
 			}
 			if req.GSN > 0 && req.GroupId > 0 { o.MarkRequestReceived(req.GSN, req.GroupId) }
 		}
@@ -227,11 +227,13 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 	if len(members) == 0 { return }
 	for _, nodeID := range members {
 		if nodeID == membership.OwnID {
-			request.AddReqMsg(req)
+			// Bypass Buffer/watermark — inject directly into bucket
+			request.AddDirectToBucket(req)
 			break
 		}
 	}
 	for _, nodeID := range members {
+		if nodeID == membership.OwnID { continue }
 		messenger.EnqueueMsg(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: -1,
 			Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{Req: req}}}, nodeID)
 	}
