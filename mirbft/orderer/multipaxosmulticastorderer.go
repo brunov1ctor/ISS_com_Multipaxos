@@ -166,13 +166,9 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		req := gsnForward.Req
 		if req != nil && req.GetRequestId() != nil {
 			if o.am.IsMember(req.GroupId, membership.OwnID) {
-				if req.GSN > 0 {
-					// Cross-group: bypass Buffer/watermark
-					request.AddDirectToBucket(req)
-				} else {
-					// Single-group forwarded: use normal path (maintains client watermark)
-					request.AddReqMsg(req)
-				}
+				// All forwarded requests bypass Buffer/watermark
+				// (watermark is managed by the proxy that received from client)
+				request.AddDirectToBucket(req)
 			}
 			if req.GSN > 0 && req.GroupId > 0 { o.MarkRequestReceived(req.GSN, req.GroupId) }
 		}
