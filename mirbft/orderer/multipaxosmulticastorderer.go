@@ -162,11 +162,17 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			}
 			return
 		}
-		// Inject into bucket (data requests) — bypass Buffer/watermark
+		// Inject into bucket (data requests)
 		req := gsnForward.Req
 		if req != nil && req.GetRequestId() != nil {
 			if o.am.IsMember(req.GroupId, membership.OwnID) {
-				request.AddDirectToBucket(req)
+				if req.GSN > 0 {
+					// Cross-group: bypass Buffer/watermark
+					request.AddDirectToBucket(req)
+				} else {
+					// Single-group forwarded: use normal path (maintains client watermark)
+					request.AddReqMsg(req)
+				}
 			}
 			if req.GSN > 0 && req.GroupId > 0 { o.MarkRequestReceived(req.GSN, req.GroupId) }
 		}
