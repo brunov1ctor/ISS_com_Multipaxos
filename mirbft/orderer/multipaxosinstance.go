@@ -415,8 +415,6 @@ func (i *mpxInstance) ProposeIfDue() {
 			for _, req := range rb.Requests {
 				if len(req.Msg.TouchedGroups) > 1 && req.Msg.GSN == 0 { rb.Resurrect(); return }
 			}
-			// Mark requests as in-flight to prevent duplicate proposals
-			rb.MarkInFlight()
 			i.lastReqBatch = rb
 			reqs = len(batchMsg.Requests)
 			val = &pb.MPxValue{Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)}, Batch: batchMsg}
