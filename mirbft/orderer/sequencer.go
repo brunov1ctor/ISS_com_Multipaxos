@@ -293,13 +293,13 @@ func (s *Sequencer) PublishMETA(gsn uint64, touchedGroups []uint32) {
 	// Registra localmente
 	s.RegisterMetadata(gsn, touchedGroups)
 
-	// Broadcast META para todos os nós (não só grupo 0)
+	// Broadcast META para todos os nós (com prioridade para evitar buffer overflow)
 	metaPayload := fmt.Sprintf("%s%d", SYSTEM_META_STREAM, gsn)
 	for _, nodeID := range membership.AllNodeIDs() {
 		if nodeID == membership.OwnID {
 			continue
 		}
-		messenger.EnqueueMsg(&pb.ProtocolMessage{
+		messenger.EnqueuePriorityMsg(&pb.ProtocolMessage{
 			SenderId: membership.OwnID, Sn: -1,
 			Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
 				Req: &pb.ClientRequest{
