@@ -16,9 +16,6 @@ package orderer
 
 import (
 	"fmt"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,8 +25,6 @@ import (
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	logger "github.com/rs/zerolog/log"
 )
-
-const sequencerStateFile = "/tmp/iss-Bruno/next_gsn.state"
 
 func makeGlobalRequestID(nodeID int32, localCounter uint32) uint64 {
 	return uint64(nodeID)<<32 | uint64(localCounter)
@@ -99,8 +94,7 @@ func NewSequencer(members []int32) *Sequencer {
 		stopCh:           make(chan struct{}),
 	}
 
-	s.loadState()
-
+	// GSN always starts at 1 — each experiment is independent, no stale state
 	fmt.Printf("[SEQUENCER] Init: members=%v leader=%d ownID=%d\n", members, leader, membership.OwnID)
 	logger.Info().
 		Int32("leader", leader).
@@ -116,8 +110,8 @@ func (s *Sequencer) Start() {
 		return
 	}
 	s.started = true
-	fmt.Printf("[SEQUENCER] Started (leader=%d, ownID=%d, isLeader=%v)\n",
-		s.leader, membership.OwnID, s.IsLeader())
+	fmt.Printf("[SEQUENCER] Started (leader=%d, ownID=%d, isLeader=%v, nextGSN=%d)\n",
+		s.leader, membership.OwnID, s.IsLeader(), s.nextGSN)
 }
 
 // IsLeader retorna true se este nó é o líder do sequenciador.
@@ -177,7 +171,6 @@ func (s *Sequencer) allocateGSN() uint64 {
 	s.gsnMu.Lock()
 	gsn := s.nextGSN
 	s.nextGSN++
-	s.persistState()
 	s.gsnMu.Unlock()
 	return gsn
 }
@@ -363,9 +356,11 @@ func (s *Sequencer) ADeliver(gsn uint64, groupID uint32) bool {
 		touches := metaExists && s.touchesGroup(nextCandidate, groupID)
 		s.metaMu.RUnlock()
 		if !metaExists {
+			fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: missing META for gsn=%d (lastDelivered=%d)\n", gsn, groupID, nextCandidate, lastDelivered)
 			return false
 		}
 		if touches {
+			fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: prior gsn=%d touches this group (not yet delivered)\n", gsn, groupID, nextCandidate)
 			return false
 		}
 		nextCandidate++
@@ -376,12 +371,15 @@ func (s *Sequencer) ADeliver(gsn uint64, groupID uint32) bool {
 	touches := metaExists && s.touchesGroup(gsn, groupID)
 	s.metaMu.RUnlock()
 	if !metaExists {
+		fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: missing META for own gsn\n", gsn, groupID)
 		return false
 	}
 	if !touches {
+		fmt.Printf("[ADeliver] OK gsn=%d group=%d: does not touch this group, skip\n", gsn, groupID)
 		return true
 	}
 	s.lastDeliveredGSN[groupID] = gsn
+	fmt.Printf("[ADeliver] DELIVERED gsn=%d group=%d (lastDelivered updated)\n", gsn, groupID)
 	return true
 }
 
@@ -451,17 +449,4 @@ func (s *Sequencer) touchesGroup(gsn uint64, groupID uint32) bool {
 	return false
 }
 
-// loadState carrega o próximo GSN do disco.
-func (s *Sequencer) loadState() {
-	b, err := os.ReadFile(sequencerStateFile)
-	if err == nil {
-		if v, err2 := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); err2 == nil && v > 0 {
-			s.nextGSN = v
-		}
-	}
-}
 
-// persistState salva o próximo GSN no disco.
-func (s *Sequencer) persistState() {
-	_ = os.WriteFile(sequencerStateFile, []byte(fmt.Sprintf("%d\n", s.nextGSN)), 0644)
-}
