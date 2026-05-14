@@ -320,8 +320,11 @@ func (s *Sequencer) HandleMETAStream(payload string, touchedGroups []uint32, gsn
 		// Parse GSN from payload
 		fmt.Sscanf(payload, "SYSTEM:META_STREAM:%d", &gsn)
 	}
+	fmt.Printf("[SEQUENCER][META-RECV] gsn=%d touchedGroups=%v payload=%.40s\n", gsn, touchedGroups, payload)
 	if gsn > 0 && len(touchedGroups) > 0 {
 		s.RegisterMetadata(gsn, touchedGroups)
+	} else {
+		fmt.Printf("[SEQUENCER][META-RECV] IGNORED gsn=%d len(touched)=%d\n", gsn, len(touchedGroups))
 	}
 }
 
