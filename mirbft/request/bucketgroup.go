@@ -127,15 +127,23 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	// May release and re-acquire the bucket locks before returning.
 	bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
 
-	// Grupos de dados: prioriza cross-ops
+	// Grupos de dados: prioriza cross-ops (encontra menor GSN global entre todos os buckets)
 	if !isGroup0 {
+		var minCrossOp *Request
+		var minCrossOpBucket *Bucket
 		for _, b := range bg.buckets {
 			if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
-				b.RemoveNoLock(crossOp)
-				newBatch.Requests = append(newBatch.Requests, crossOp)
-				logger.Debug().Int("bucketId", b.id).Uint64("gsn", crossOp.Msg.GSN).Msg("Cut batch with single cross-op")
-				return &newBatch
+				if minCrossOp == nil || crossOp.Msg.GSN < minCrossOp.Msg.GSN {
+					minCrossOp = crossOp
+					minCrossOpBucket = b
+				}
 			}
+		}
+		if minCrossOp != nil {
+			minCrossOpBucket.RemoveNoLock(minCrossOp)
+			newBatch.Requests = append(newBatch.Requests, minCrossOp)
+			logger.Debug().Int("bucketId", minCrossOpBucket.id).Uint64("gsn", minCrossOp.Msg.GSN).Msg("Cut batch with single cross-op (global min GSN)")
+			return &newBatch
 		}
 	}
 
