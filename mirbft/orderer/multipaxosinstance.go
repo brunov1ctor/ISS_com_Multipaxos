@@ -408,12 +408,16 @@ func (i *mpxInstance) ProposeIfDue() {
 		} else {
 			if !i.validateBatchHomogeneity(rb) { return }
 			batchMsg := rb.Message()
-			// Cross-op validation
-			if len(batchMsg.Requests) > 0 && len(batchMsg.Requests[0].TouchedGroups) > 1 && len(batchMsg.Requests) != 1 {
-				rb.Resurrect(); return
-			}
+			// Cross-op validation: if batch contains any cross-op, it must be alone
+			hasCrossOp := false
 			for _, req := range rb.Requests {
-				if len(req.Msg.TouchedGroups) > 1 && req.Msg.GSN == 0 { rb.Resurrect(); return }
+				if len(req.Msg.TouchedGroups) > 1 {
+					if req.Msg.GSN == 0 { rb.Resurrect(); return }
+					hasCrossOp = true
+				}
+			}
+			if hasCrossOp && len(batchMsg.Requests) != 1 {
+				rb.Resurrect(); return
 			}
 			i.lastReqBatch = rb
 			reqs = len(batchMsg.Requests)

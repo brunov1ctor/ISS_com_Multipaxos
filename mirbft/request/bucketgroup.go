@@ -99,8 +99,9 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	}
 
 	// Grupo 0 prioriza mensagens sistêmicas (GSN_REQUEST, META_STREAM)
+	// Only applies in multicast mode (groupMembersGetter configured)
 	isGroup0 := false
-	if len(bg.buckets) > 0 {
+	if groupMembersGetter != nil && len(bg.buckets) > 0 {
 		numGroups := getNumGroups()
 		if numGroups > 0 && bg.buckets[0].id % numGroups == 0 {
 			isGroup0 = true
@@ -127,24 +128,36 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	// May release and re-acquire the bucket locks before returning.
 	bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
 
-	// Grupos de dados: prioriza cross-ops (encontra menor GSN global entre todos os buckets)
-	if !isGroup0 {
-		var minCrossOp *Request
-		var minCrossOpBucket *Bucket
+	// Grupos de dados: corta batch normalmente (FIFO)
+	// Se o primeiro request disponível é cross-op, retorna só ele.
+	// Se é single-group, pega batch normal (sem incluir cross-ops).
+	if !isGroup0 && groupMembersGetter != nil {
+		// Check if first available request across all buckets is a cross-op
+		var firstCrossOp *Request
+		var firstCrossOpBucket *Bucket
 		for _, b := range bg.buckets {
-			if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
-				if minCrossOp == nil || crossOp.Msg.GSN < minCrossOp.Msg.GSN {
-					minCrossOp = crossOp
-					minCrossOpBucket = b
+			if b.FirstRequest != nil && len(b.FirstRequest.Msg.TouchedGroups) > 1 && b.FirstRequest.Msg.GSN > 0 {
+				if firstCrossOp == nil || b.FirstRequest.Msg.GSN < firstCrossOp.Msg.GSN {
+					firstCrossOp = b.FirstRequest
+					firstCrossOpBucket = b
 				}
 			}
 		}
-		if minCrossOp != nil {
-			minCrossOpBucket.RemoveNoLock(minCrossOp)
-			newBatch.Requests = append(newBatch.Requests, minCrossOp)
-			logger.Debug().Int("bucketId", minCrossOpBucket.id).Uint64("gsn", minCrossOp.Msg.GSN).Msg("Cut batch with single cross-op (global min GSN)")
+		// Check if there are single-group requests available
+		hasSingleGroup := false
+		for _, b := range bg.buckets {
+			if b.FirstRequest != nil && (len(b.FirstRequest.Msg.TouchedGroups) <= 1 || b.FirstRequest.Msg.GSN == 0) {
+				hasSingleGroup = true
+				break
+			}
+		}
+		// If only cross-ops available (no single-group), propose the min GSN cross-op
+		if firstCrossOp != nil && !hasSingleGroup {
+			firstCrossOpBucket.RemoveNoLock(firstCrossOp)
+			newBatch.Requests = append(newBatch.Requests, firstCrossOp)
 			return &newBatch
 		}
+		// Otherwise fall through to single-group batch cutting below
 	}
 
 	// Se não há cross-ops, corta batch apenas com single-group requests
@@ -155,17 +168,29 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 		initCut = int(bg.totalRequests) / len(bg.buckets)
 	}
 
-	// Add initial single-group requests to the batch
-	for _, b := range bg.buckets {
-		newBatch.Requests = b.RemoveFirstSingleGroup(initCut, newBatch.Requests)
-	}
-
-	// Fill rest of the batch with single-group requests only
-	for _, b := range bg.buckets {
-		if len(newBatch.Requests) < size {
-			newBatch.Requests = b.RemoveFirstSingleGroup(size-len(newBatch.Requests), newBatch.Requests)
-		} else {
-			break
+	if groupMembersGetter != nil {
+		// Multicast mode: skip cross-ops (they go in separate batches)
+		for _, b := range bg.buckets {
+			newBatch.Requests = b.RemoveFirstSingleGroup(initCut, newBatch.Requests)
+		}
+		for _, b := range bg.buckets {
+			if len(newBatch.Requests) < size {
+				newBatch.Requests = b.RemoveFirstSingleGroup(size-len(newBatch.Requests), newBatch.Requests)
+			} else {
+				break
+			}
+		}
+	} else {
+		// Non-multicast (PBFT/Raft/HotStuff): normal FIFO
+		for _, b := range bg.buckets {
+			newBatch.Requests = b.RemoveFirst(initCut, newBatch.Requests)
+		}
+		for _, b := range bg.buckets {
+			if len(newBatch.Requests) < size {
+				newBatch.Requests = b.RemoveFirst(size-len(newBatch.Requests), newBatch.Requests)
+			} else {
+				break
+			}
 		}
 	}
 
