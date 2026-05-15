@@ -292,7 +292,11 @@ func AddDirectToBucket(reqMsg *pb.ClientRequest) {
 	bucket.reqIndex[reqID] = req
 	bucket.append(req)
 	if bucket.Group != nil {
-		bucket.Group.RequestAdded()
+		if len(reqMsg.TouchedGroups) > 1 {
+			bucket.Group.RequestAddedCrossOp()
+		} else {
+			bucket.Group.RequestAdded()
+		}
 	}
 	bucket.Unlock()
 	rid := reqMsg.GetRequestId()

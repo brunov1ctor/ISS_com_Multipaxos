@@ -76,7 +76,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	// Create group orderers for DATA groups only (not group 0)
 	for _, gid := range o.am.GetDefinedGroups() {
 		if gid == 0 { continue } // Group 0 handled by Sequencer
-		ord := &MultiPaxosOrderer{am: o.am, ownedGroupID: gid, skipHandlerRegistration: true}
+		ord := &MultiPaxosOrderer{am: o.am, ownedGroupID: gid, skipHandlerRegistration: true, commitNotifyCh: make(chan struct{}, 16)}
 		ord.segmentChan = make(chan manager.Segment, 64)
 		ord.Init(mngr)
 		o.groupOrderers[gid] = ord

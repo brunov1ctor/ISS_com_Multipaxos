@@ -61,6 +61,7 @@ type MultiPaxosOrderer struct {
 	segMu          sync.Mutex
 	currentFirstSN int32
 	firstSNMu      sync.RWMutex
+	commitNotifyCh chan struct{} // shared channel from parent multicast orderer
 }
 
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
@@ -218,9 +219,28 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		// In interleaved mode: group X starts at firstSN + X (if firstSN+X <= lastSN)
 		currentSN := seg.FirstSN() + int32(gid)
 		if currentSN > seg.LastSN() { return }
+
+		// commitCh: wakes up loop immediately after a commit (to advance SN and propose next)
+		var commitCh <-chan struct{}
+		if o.commitNotifyCh != nil {
+			commitCh = o.commitNotifyCh
+		}
+
 		for {
 			select {
 			case <-stopCh: return
+			case <-commitCh:
+				if currentSN > seg.LastSN() { continue }
+				if mirlog.GetEntry(currentSN) != nil { currentSN += numGroups; continue }
+				inst, ok := o.dispatcher.load(currentSN)
+				if !ok || inst == nil {
+					inst = o.ensureInstance(currentSN)
+					inst.setSegment(seg); inst.bucketId = gid; inst.SetMembers(members)
+					o.dispatcher.store(currentSN, inst)
+					inst.startWorkers(&o.stopWg)
+					o.backlog.drainTo(currentSN, inst.enqueue)
+				}
+				inst.ProposeIfDue()
 			case <-t.C:
 				if currentSN > seg.LastSN() { continue }
 				now := time.Now()
