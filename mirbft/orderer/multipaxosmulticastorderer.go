@@ -408,10 +408,8 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	// Single-group
 	if len(req.TouchedGroups) == 1 {
 		req.GroupId = req.TouchedGroups[0]
-		if o.am.IsMember(req.GroupId, membership.OwnID) {
-			o.sendToGroupExceptSelf(req, req.GroupId)
-			return false
-		}
+		// All paths use AddDirectToBucket (bypass Buffer/watermark)
+		// Watermark is managed by PROXY-RESPOND/COMMIT_NOTIFY, not by peer Buffer
 		o.sendToGroup(req, req.GroupId)
 		return true
 	}
