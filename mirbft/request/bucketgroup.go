@@ -124,27 +124,6 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 		fmt.Printf("[CutBatch] Group 0: No SYSTEM messages found in any bucket\n")
 	}
 
-	// Multicast mode: check for cross-op BEFORE waiting (no timeout delay for cross-ops)
-	if groupMembersGetter != nil {
-		var minCrossOp *Request
-		var minCrossOpBucket *Bucket
-		for _, b := range bg.buckets {
-			// Search entire bucket for min GSN cross-op (not just FirstRequest)
-			if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
-				if minCrossOp == nil || crossOp.Msg.GSN < minCrossOp.Msg.GSN {
-					minCrossOp = crossOp
-					minCrossOpBucket = b
-				}
-			}
-		}
-		if minCrossOp != nil {
-			// Cross-op available: propose immediately (no timeout wait)
-			minCrossOpBucket.RemoveNoLock(minCrossOp)
-			newBatch.Requests = append(newBatch.Requests, minCrossOp)
-			return &newBatch
-		}
-	}
-
 	// Wait for batch to fill or for the timeout to fire.
 	// May release and re-acquire the bucket locks before returning.
 	bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
