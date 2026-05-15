@@ -129,10 +129,10 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 		var minCrossOp *Request
 		var minCrossOpBucket *Bucket
 		for _, b := range bg.buckets {
-			r := b.FirstRequest
-			if r != nil && len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 {
-				if minCrossOp == nil || r.Msg.GSN < minCrossOp.Msg.GSN {
-					minCrossOp = r
+			// Search entire bucket for min GSN cross-op (not just FirstRequest)
+			if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
+				if minCrossOp == nil || crossOp.Msg.GSN < minCrossOp.Msg.GSN {
+					minCrossOp = crossOp
 					minCrossOpBucket = b
 				}
 			}
@@ -157,14 +157,13 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	}
 
 	if groupMembersGetter != nil {
-		// Re-check for cross-op after wait (may have arrived during wait)
+		// Re-check for cross-op after wait (search entire bucket for min GSN)
 		var minCrossOp *Request
 		var minCrossOpBucket *Bucket
 		for _, b := range bg.buckets {
-			r := b.FirstRequest
-			if r != nil && len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 {
-				if minCrossOp == nil || r.Msg.GSN < minCrossOp.Msg.GSN {
-					minCrossOp = r
+			if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
+				if minCrossOp == nil || crossOp.Msg.GSN < minCrossOp.Msg.GSN {
+					minCrossOp = crossOp
 					minCrossOpBucket = b
 				}
 			}
