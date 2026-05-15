@@ -279,7 +279,17 @@ func AddDirectToBucket(reqMsg *pb.ClientRequest) {
 		req.OpID = GenerateOpID(reqMsg)
 		req.GSN = reqMsg.GSN
 	}
+
+	clID := reqMsg.RequestId.ClientId
+	clSN := reqMsg.RequestId.ClientSn
+	reqID := int64(clID)<<32 + int64(clSN)
+
 	bucket.Lock()
+	if _, exists := bucket.reqIndex[reqID]; exists {
+		bucket.Unlock()
+		return
+	}
+	bucket.reqIndex[reqID] = req
 	bucket.append(req)
 	if bucket.Group != nil {
 		bucket.Group.RequestAdded()
@@ -521,6 +531,34 @@ func Add(req *Request) *Request {
 	// Return the request object that ended up being stored, eithher on the first, or on the second attempt.
 	// storedReq is nil if request is invalid (outside of the watermark window.)
 	return storedReq
+}
+
+// RemoveCommittedFromBuckets removes requests from local buckets based on a committed protobuf batch.
+// Used by followers that received the batch via ACCEPT (not CutBatch) to prevent re-proposal.
+// Looks up each request by clientId:clientSn in the appropriate bucket and removes it.
+func RemoveCommittedFromBuckets(batch *pb.Batch) {
+	if batch == nil || len(batch.Requests) == 0 {
+		return
+	}
+	for _, reqMsg := range batch.Requests {
+		if reqMsg == nil || reqMsg.RequestId == nil {
+			continue
+		}
+		bucketNr := GetBucketNr(reqMsg)
+		if bucketNr < 0 || bucketNr >= len(Buckets) {
+			continue
+		}
+		bucket := Buckets[bucketNr]
+		clID := reqMsg.RequestId.ClientId
+		clSN := reqMsg.RequestId.ClientSn
+		reqID := int64(clID)<<32 + int64(clSN)
+
+		bucket.Lock()
+		if req, exists := bucket.reqIndex[reqID]; exists {
+			bucket.removeNoLock(req)
+		}
+		bucket.Unlock()
+	}
 }
 
 // Removes all requests in batch from their respective Buckets.

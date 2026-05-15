@@ -331,7 +331,16 @@ func (i *mpxInstance) fetchCommittedValueFromGroup() {
 
 func (i *mpxInstance) deliverCommit() {
 	i.phase = phaseCommitted
-	if i.lastReqBatch != nil { request.RemoveBatch(i.lastReqBatch); i.lastReqBatch = nil }
+	if i.lastReqBatch != nil {
+		request.RemoveBatch(i.lastReqBatch); i.lastReqBatch = nil
+	} else {
+		// Follower path: we received the batch via ACCEPT (not CutBatch).
+		// Remove committed requests from local buckets to prevent re-proposal
+		// when this node becomes leader of a future instance.
+		if i.lastVal != nil && i.lastVal.GetBatch() != nil {
+			request.RemoveCommittedFromBuckets(i.lastVal.GetBatch())
+		}
+	}
 
 	b := i.lastVal.GetBatch()
 
