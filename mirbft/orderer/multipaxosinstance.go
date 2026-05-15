@@ -331,6 +331,15 @@ func (i *mpxInstance) fetchCommittedValueFromGroup() {
 
 func (i *mpxInstance) deliverCommit() {
 	i.phase = phaseCommitted
+	// Notify parent orderer to advance SN immediately after this function completes
+	defer func() {
+		if i.parent != nil && i.parent.commitNotifyCh != nil {
+			select {
+			case i.parent.commitNotifyCh <- struct{}{}:
+			default:
+			}
+		}
+	}()
 	if i.lastReqBatch != nil {
 		request.RemoveBatch(i.lastReqBatch); i.lastReqBatch = nil
 	} else {
