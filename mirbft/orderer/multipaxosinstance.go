@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/request"
@@ -422,11 +421,7 @@ func (i *mpxInstance) ProposeIfDue() {
 			return
 		}
 		rb := i.groupBucketGroup.CutBatchWithMode(i.parent.maxBatchSize, i.proposeEvery,
-			func() bool {
-				mod := config.GetCrossOpModulo()
-				if mod <= 0 { return false }
-				return (atomic.AddInt32(&i.parent.batchCounter, 1) % mod) == 0
-			}())
+			(atomic.AddInt32(&i.parent.batchCounter, 1)%2) == 0)
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			emptyBatch := &pb.Batch{Requests: nil}
 			val = &pb.MPxValue{Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)}, Batch: emptyBatch}

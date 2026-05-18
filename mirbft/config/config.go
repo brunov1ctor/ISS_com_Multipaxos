@@ -257,27 +257,3 @@ func SelectWorkloadOp(seqNr int32) *WorkloadOp {
 	}
 	return &Workload.Workload[0]
 }
-
-
-// GetCrossOpModulo returns N where 1-in-N proposals should be cross-op rounds.
-// Derived from workload weights: if TX weight=20 and total=100, returns 5 (1 in 5).
-// Returns 0 if no cross-ops in workload (disable cross-op rounds).
-func GetCrossOpModulo() int32 {
-	if workloadTotalWeight == 0 {
-		return 0
-	}
-	crossWeight := 0
-	for _, op := range Workload.Workload {
-		// Cross-op patterns contain comma (multiple keys)
-		for _, c := range op.Pattern {
-			if c == ',' {
-				crossWeight += op.Weight
-				break
-			}
-		}
-	}
-	if crossWeight == 0 {
-		return 0
-	}
-	return int32(workloadTotalWeight / crossWeight)
-}
