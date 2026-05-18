@@ -55,10 +55,6 @@ type BucketGroup struct {
 	// It is useful to limit the rate at which data is put on the wire, decreasing the likelihood of view changes
 	// when too much data is sent out concurrently.
 	nextBatchTimestamp int64
-
-	// Cross-op partitioning: this leader only proposes GSNs where GSN % numMembers == leaderIndex
-	leaderIndex int32
-	numMembers  int32
 }
 
 // Creates a new BucketGroup and returns a pointer to it.
@@ -83,16 +79,6 @@ func NewBucketGroup(bucketIDs []int) *BucketGroup {
 		timer:              nil,
 		batchTrigger:       make(chan struct{}),
 		nextBatchTimestamp: 0,
-		leaderIndex:        -1,
-		numMembers:         1,
-	}
-}
-
-// SetLeaderPartition configures cross-op partitioning for this BucketGroup.
-func (bg *BucketGroup) SetLeaderPartition(leaderIndex int32, numMembers int32) {
-	bg.leaderIndex = leaderIndex
-	if numMembers > 0 {
-		bg.numMembers = numMembers
 	}
 }
 
@@ -153,7 +139,7 @@ func (bg *BucketGroup) CutBatchWithMode(size int, timeout time.Duration, isCross
 			var minCrossOp *Request
 			var minCrossOpBucket *Bucket
 			for _, b := range bg.buckets {
-				if crossOp := b.FindMinCrossOpByGSNForLeader(bg.leaderIndex, bg.numMembers); crossOp != nil {
+				if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
 					if minCrossOp == nil || crossOp.Msg.GSN < minCrossOp.Msg.GSN {
 						minCrossOp = crossOp
 						minCrossOpBucket = b
