@@ -56,11 +56,6 @@ type PendingCommit struct {
 func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	globalMulticastOrderer = o
 	o.mgr = mngr
-	// Load workload config (needed for cross-op ratio in CutBatch)
-	if config.Config.WorkloadFile != "" {
-		config.LoadWorkload(config.Config.WorkloadFile)
-		fmt.Printf("[MULTICAST] CrossOpModulo=%d (from workload)\n", config.GetCrossOpModulo())
-	}
 	// Init components
 	o.am = NewAtomicMulticast()
 	fmt.Printf("[MULTICAST] NewAtomicMulticast: group0 members=%v\n", o.am.GetGroupMembers(0))
