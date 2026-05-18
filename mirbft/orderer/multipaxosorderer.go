@@ -62,7 +62,6 @@ type MultiPaxosOrderer struct {
 	currentFirstSN int32
 	firstSNMu      sync.RWMutex
 	commitNotifyCh chan struct{} // shared channel from parent multicast orderer
-	batchCounter   int32         // shared alternating counter for CutBatch (cross-op vs single-group)
 }
 
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
