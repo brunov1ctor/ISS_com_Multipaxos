@@ -5,6 +5,7 @@ package orderer
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
@@ -416,7 +417,8 @@ func (i *mpxInstance) ProposeIfDue() {
 			}
 			return
 		}
-		rb := i.groupBucketGroup.CutBatch(i.parent.maxBatchSize, i.proposeEvery)
+		rb := i.groupBucketGroup.CutBatchWithMode(i.parent.maxBatchSize, i.proposeEvery,
+			(atomic.AddInt32(&i.parent.batchCounter, 1)%2) == 0)
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			emptyBatch := &pb.Batch{Requests: nil}
 			val = &pb.MPxValue{Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)}, Batch: emptyBatch}
