@@ -55,9 +55,6 @@ type BucketGroup struct {
 	// It is useful to limit the rate at which data is put on the wire, decreasing the likelihood of view changes
 	// when too much data is sent out concurrently.
 	nextBatchTimestamp int64
-
-	// Alternating counter: even = cross-op round, odd = single-group round
-	wrrCounter int32
 }
 
 // Creates a new BucketGroup and returns a pointer to it.
@@ -89,6 +86,11 @@ func NewBucketGroup(bucketIDs []int) *BucketGroup {
 // Blocks until the Buckets contain at least size requests, but at most for the duration of timeout.
 // On timeout, returns a batch with all requests in the Buckets, even if all the Buckets are empty.
 func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
+	return bg.CutBatchWithMode(size, timeout, false)
+}
+
+// CutBatchWithMode cuts a batch. If forceCrossOp is true, prioritizes cross-ops.
+func (bg *BucketGroup) CutBatchWithMode(size int, timeout time.Duration, isCrossOpRound bool) *Batch {
 	alreadyWaited := bg.waitMinimum()
 	bg.lockBuckets()
 	defer bg.unlockBuckets()
@@ -133,9 +135,7 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	// Push notification (RequestAddedCrossOp) wakes up single-group wait
 	// when a cross-op arrives, so cross-ops are never delayed by timeout.
 	if groupMembersGetter != nil {
-		wrr := atomic.AddInt32(&bg.wrrCounter, 1)
-		isCrossOpRound := (wrr % 2) == 0
-		fmt.Printf("[CutBatch] wrr=%d isCrossOpRound=%v nBuckets=%d\n", wrr, isCrossOpRound, len(bg.buckets))
+		fmt.Printf("[CutBatch] isCrossOpRound=%v nBuckets=%d\n", isCrossOpRound, len(bg.buckets))
 
 		if isCrossOpRound {
 			// CROSS-OP ROUND: immediate, min GSN, batch of 1
