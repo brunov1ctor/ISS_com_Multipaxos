@@ -133,7 +133,9 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 	// Push notification (RequestAddedCrossOp) wakes up single-group wait
 	// when a cross-op arrives, so cross-ops are never delayed by timeout.
 	if groupMembersGetter != nil {
-		isCrossOpRound := (atomic.AddInt32(&bg.wrrCounter, 1) % 2) == 0
+		wrr := atomic.AddInt32(&bg.wrrCounter, 1)
+		isCrossOpRound := (wrr % 2) == 0
+		fmt.Printf("[CutBatch] wrr=%d isCrossOpRound=%v nBuckets=%d\n", wrr, isCrossOpRound, len(bg.buckets))
 
 		if isCrossOpRound {
 			// CROSS-OP ROUND: immediate, min GSN, batch of 1
@@ -155,27 +157,10 @@ func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
 			// No cross-op: fall through to single-group
 		}
 
-		// SINGLE-GROUP ROUND: wait for requests (push wakes us if cross-op arrives)
+		// SINGLE-GROUP ROUND: wait for requests, then cut single-group only
 		bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
 
-		// After wait: check if a cross-op arrived (push woke us)
-		var minCrossOp *Request
-		var minCrossOpBucket *Bucket
-		for _, b := range bg.buckets {
-			if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
-				if minCrossOp == nil || crossOp.Msg.GSN < minCrossOp.Msg.GSN {
-					minCrossOp = crossOp
-					minCrossOpBucket = b
-				}
-			}
-		}
-		if minCrossOp != nil {
-			minCrossOpBucket.RemoveNoLock(minCrossOp)
-			newBatch.Requests = append(newBatch.Requests, minCrossOp)
-			return &newBatch
-		}
-
-		// Cut single-group batch (skip cross-ops)
+		// Cut single-group batch (skip cross-ops — they get their turn next round)
 		var initCut = 0
 		if size <= int(bg.totalRequests) {
 			initCut = size / len(bg.buckets)
