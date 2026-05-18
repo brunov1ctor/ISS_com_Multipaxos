@@ -571,24 +571,14 @@ func (b *Bucket) FindMinByGSN() *Request {
 // Usado para ordenação por GSN (atomic global order)
 // ATTENTION: Bucket must be LOCKED when calling this method
 func (b *Bucket) FindMinCrossOpByGSN() *Request {
-	return b.FindMinCrossOpByGSNForLeader(-1, 1)
-}
-
-// FindMinCrossOpByGSNForLeader encontra cross-op com menor GSN que pertence a este líder.
-// Particionamento: GSN % numMembers == leaderIndex.
-// Se leaderIndex < 0, retorna qualquer cross-op (sem filtro).
-// ATTENTION: Bucket must be LOCKED when calling this method
-func (b *Bucket) FindMinCrossOpByGSNForLeader(leaderIndex int32, numMembers int32) *Request {
 	var minReq *Request
 	var minGSN uint64 = ^uint64(0) // Max uint64
 
 	r := b.FirstRequest
 	for r != nil {
 		if len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 && r.Msg.GSN < minGSN {
-			if leaderIndex < 0 || int32(r.Msg.GSN%uint64(numMembers)) == leaderIndex {
-				minGSN = r.Msg.GSN
-				minReq = r
-			}
+			minGSN = r.Msg.GSN
+			minReq = r
 		}
 		r = r.Next
 	}

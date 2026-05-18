@@ -96,9 +96,6 @@ func (i *mpxInstance) initGroupBuckets() {
 		i.groupBucketIDs = append(i.groupBucketIDs, b)
 	}
 	i.groupBucketGroup = request.NewBucketGroup(i.groupBucketIDs)
-	// Set cross-op partitioning: this leader only proposes its own GSNs
-	i.groupBucketGroup.SetLeaderPartition(i.leaderIndex(), int32(len(i.members)))
-	fmt.Printf("[MPX] sn=%d PARTITION leaderIndex=%d numMembers=%d\n", i.sn, i.leaderIndex(), len(i.members))
 }
 
 func (i *mpxInstance) startWorkers(_ *sync.WaitGroup) {
@@ -552,13 +549,6 @@ func (i *mpxInstance) SetMembers(members []int32) {
 func (i *mpxInstance) isInGroup(nodeID int32) bool {
 	for _, m := range i.members { if m == nodeID { return true } }
 	return false
-}
-
-func (i *mpxInstance) leaderIndex() int32 {
-	for idx, m := range i.members {
-		if m == membership.OwnID { return int32(idx) }
-	}
-	return 0
 }
 
 func traceCommit(sn int32, size int) {
