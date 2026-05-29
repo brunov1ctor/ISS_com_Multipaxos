@@ -153,11 +153,27 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			o.seq.HandleMETAStream(payload, req.GetTouchedGroups(), req.GetGSN())
 			return
 		}
-		// CSMR Output Processing: COMMIT_NOTIFY from group replica back to proxy
+		// CSMR Output Processing: COMMIT_NOTIFY_BATCH from group replica back to proxy
+		if strings.HasPrefix(payload, "SYSTEM:COMMIT_NOTIFY_BATCH:") {
+			// Format: "SYSTEM:COMMIT_NOTIFY_BATCH:orderSn:clientId,clientSn:clientId,clientSn:..."
+			parts := strings.SplitN(payload, ":", 4) // ["SYSTEM", "COMMIT_NOTIFY_BATCH", "orderSn", "id,sn:id,sn:..."]
+			if len(parts) >= 4 {
+				var orderSn int32
+				fmt.Sscanf(parts[2], "%d", &orderSn)
+				entries := strings.Split(parts[3], ":")
+				for _, entry := range entries {
+					var clientId, clientSn int32
+					if n, _ := fmt.Sscanf(entry, "%d,%d", &clientId, &clientSn); n == 2 {
+						o.handleCommitNotify(clientId, clientSn, orderSn)
+					}
+				}
+			}
+			return
+		}
+		// Legacy single COMMIT_NOTIFY (backward compat)
 		if strings.HasPrefix(payload, "SYSTEM:COMMIT_NOTIFY:") {
 			var clientId, clientSn, orderSn int32
 			if n, _ := fmt.Sscanf(payload, "SYSTEM:COMMIT_NOTIFY:%d:%d:%d", &clientId, &clientSn, &orderSn); n == 3 {
-				fmt.Printf("[CSMR][COMMIT_NOTIFY-RECV] from=%d client=%d clientSn=%d orderSn=%d\n", pm.SenderId, clientId, clientSn, orderSn)
 				o.handleCommitNotify(clientId, clientSn, orderSn)
 			}
 			return
@@ -268,48 +284,70 @@ func (o *MultiPaxosMulticastOrderer) CacheRequest(gsn uint64, req *pb.ClientRequ
 func (o *MultiPaxosMulticastOrderer) handleCommitNotify(clientId, clientSn, orderSn int32) {
 	key := fmt.Sprintf("%d:%d", clientId, clientSn)
 	if _, loaded := o.proxyPending.LoadAndDelete(key); loaded {
-		fmt.Printf("[CSMR][PROXY-RESPOND] client=%d clientSn=%d orderSn=%d\n", clientId, clientSn, orderSn)
 		messenger.RespondToClient(clientId, &pb.ClientResponse{
 			OrderSn:  orderSn,
 			ClientSn: clientSn,
 		})
 		tracing.MainTrace.Event(tracing.RESP_SEND, int64(clientId), int64(clientSn))
-	} else {
-		fmt.Printf("[CSMR][COMMIT_NOTIFY-IGNORE] key=%s not in proxyPending (already responded or not proxy)\n", key)
 	}
 }
 
-// CSMR Output Processing: called by group orderer after commit to notify proxy
+// CSMR Output Processing: called by group orderer after commit to notify proxy.
+// Sends ONE batched COMMIT_NOTIFY per commit (not per request).
+// Only sends to peers if the proxy is NOT a member of this group.
 func (o *MultiPaxosMulticastOrderer) NotifyProxy(batch *pb.Batch, sn int32) {
 	if batch == nil { return }
+
+	// Determine which group this batch belongs to
+	var groupID uint32
+	if len(batch.Requests) > 0 && batch.Requests[0] != nil {
+		groupID = batch.Requests[0].GroupId
+	}
+	groupMembers := o.am.GetGroupMembers(groupID)
+
+	// Collect requests that need remote notification
+	var localKeys []struct{ clientId, clientSn int32 }
+	var remoteReqs []*pb.RequestID
+
 	for _, req := range batch.Requests {
 		if req == nil || req.RequestId == nil { continue }
-		// Skip system messages
 		if strings.HasPrefix(string(req.Payload), "SYSTEM:") { continue }
 		clientId := req.RequestId.ClientId
 		clientSn := req.RequestId.ClientSn
-		// Check if WE are the proxy for this request
 		key := fmt.Sprintf("%d:%d", clientId, clientSn)
 		if _, isProxy := o.proxyPending.Load(key); isProxy {
-			// We are the proxy — respond directly
-			fmt.Printf("[CSMR][NOTIFY-LOCAL] sn=%d client=%d clientSn=%d (I am proxy)\n", sn, clientId, clientSn)
-			o.handleCommitNotify(clientId, clientSn, sn)
+			localKeys = append(localKeys, struct{ clientId, clientSn int32 }{clientId, clientSn})
 		} else {
-			// We are NOT the proxy — send COMMIT_NOTIFY to all peers
-			fmt.Printf("[CSMR][NOTIFY-REMOTE] sn=%d client=%d clientSn=%d (sending to peers)\n", sn, clientId, clientSn)
-			notifyPayload := fmt.Sprintf("SYSTEM:COMMIT_NOTIFY:%d:%d:%d", clientId, clientSn, sn)
-			for _, nodeID := range membership.AllNodeIDs() {
-				if nodeID == membership.OwnID { continue }
-				messenger.EnqueueMsg(&pb.ProtocolMessage{
-					SenderId: membership.OwnID, Sn: -1,
-					Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
-						Req: &pb.ClientRequest{
-							RequestId: &pb.RequestID{ClientId: clientId, ClientSn: clientSn},
-							Payload:   []byte(notifyPayload),
-						},
-					}},
-				}, nodeID)
+			if len(groupMembers) < len(membership.AllNodeIDs()) {
+				remoteReqs = append(remoteReqs, req.RequestId)
 			}
+		}
+	}
+
+	// Handle local proxy responses
+	for _, k := range localKeys {
+		o.handleCommitNotify(k.clientId, k.clientSn, sn)
+	}
+
+	// Send ONE batched COMMIT_NOTIFY to all peers (instead of N messages)
+	if len(remoteReqs) > 0 {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "SYSTEM:COMMIT_NOTIFY_BATCH:%d", sn)
+		for _, rid := range remoteReqs {
+			fmt.Fprintf(&sb, ":%d,%d", rid.ClientId, rid.ClientSn)
+		}
+		notifyPayload := sb.String()
+		for _, nodeID := range membership.AllNodeIDs() {
+			if nodeID == membership.OwnID { continue }
+			messenger.EnqueueMsg(&pb.ProtocolMessage{
+				SenderId: membership.OwnID, Sn: sn,
+				Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
+					Req: &pb.ClientRequest{
+						RequestId: &pb.RequestID{ClientId: membership.OwnID, ClientSn: sn},
+						Payload:   []byte(notifyPayload),
+					},
+				}},
+			}, nodeID)
 		}
 	}
 }
@@ -376,7 +414,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return request.AddSystemMessage(req)
 	}
 	// COMMIT_NOTIFY bypass
-	if strings.HasPrefix(string(req.Payload), "SYSTEM:COMMIT_NOTIFY:") { return true }
+	if strings.HasPrefix(string(req.Payload), "SYSTEM:COMMIT_NOTIFY") { return true }
 	if req.GetRequestId() == nil { return true }
 
 	// Already preprocessed
