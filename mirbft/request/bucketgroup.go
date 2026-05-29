@@ -152,9 +152,11 @@ func (bg *BucketGroup) CutBatchWithMode(size int, timeout time.Duration, isCross
 				sort.Slice(allCross, func(i, j int) bool {
 					return allCross[i].req.Msg.GSN < allCross[j].req.Msg.GSN
 				})
-				// Cap at batch size to avoid oversized proposals
-				max := size
-				if max > len(allCross) { max = len(allCross) }
+				// Cap at 50 cross-ops to avoid oversized proposals that
+				// exceed message buffers and cause missing entries
+				const maxCrossOpsPerBatch = 50
+				max := len(allCross)
+				if max > maxCrossOpsPerBatch { max = maxCrossOpsPerBatch }
 				for idx := 0; idx < max; idx++ {
 					allCross[idx].bucket.RemoveNoLock(allCross[idx].req)
 					newBatch.Requests = append(newBatch.Requests, allCross[idx].req)
