@@ -152,14 +152,19 @@ func (bg *BucketGroup) CutBatchWithMode(size int, timeout time.Duration, isCross
 				sort.Slice(allCross, func(i, j int) bool {
 					return allCross[i].req.Msg.GSN < allCross[j].req.Msg.GSN
 				})
-				// Cap at 50 cross-ops to avoid oversized proposals that
-				// exceed message buffers and cause missing entries
-				const maxCrossOpsPerBatch = 50
-				max := len(allCross)
-				if max > maxCrossOpsPerBatch { max = maxCrossOpsPerBatch }
-				for idx := 0; idx < max; idx++ {
-					allCross[idx].bucket.RemoveNoLock(allCross[idx].req)
-					newBatch.Requests = append(newBatch.Requests, allCross[idx].req)
+				// Adaptive cap: limit by total payload size to avoid
+				// oversized ACCEPT messages that exceed gRPC buffers.
+				// ~600 bytes per cross-op, cap at ~32KB total.
+				const maxBatchBytes = 32 * 1024
+				totalBytes := 0
+				for _, entry := range allCross {
+					reqBytes := len(entry.req.Msg.Payload) + 128 // payload + protobuf overhead
+					if totalBytes+reqBytes > maxBatchBytes && len(newBatch.Requests) > 0 {
+						break
+					}
+					entry.bucket.RemoveNoLock(entry.req)
+					newBatch.Requests = append(newBatch.Requests, entry.req)
+					totalBytes += reqBytes
 				}
 				return &newBatch
 			}

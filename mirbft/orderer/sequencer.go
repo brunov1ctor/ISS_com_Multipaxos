@@ -53,6 +53,11 @@ type Sequencer struct {
 	lastDeliveredGSN map[uint32]uint64
 	deliveryMu       sync.RWMutex
 
+	// Per-group queue of GSNs that touch that group (sorted, for O(1) next lookup)
+	// Populated as META arrives. Enables skipping irrelevant GSNs without linear scan.
+	groupGSNQueue map[uint32][]uint64
+	groupQueueMu  sync.RWMutex
+
 	// Pending commits waiting for META before delivery
 	pendingCommits map[uint32]map[uint64]*PendingCommit
 	bufferMu       sync.RWMutex
@@ -87,6 +92,7 @@ func NewSequencer(members []int32) *Sequencer {
 		requestsPending:  make(map[uint64]chan uint64),
 		metadata:         make(map[uint64][]uint32),
 		lastDeliveredGSN: make(map[uint32]uint64),
+		groupGSNQueue:    make(map[uint32][]uint64),
 		pendingCommits:   make(map[uint32]map[uint64]*PendingCommit),
 		publishedMeta:    make(map[uint64]bool),
 		members:          members,
@@ -332,6 +338,13 @@ func (s *Sequencer) RegisterMetadata(gsn uint64, touchedGroups []uint32) {
 	copy(s.metadata[gsn], touchedGroups)
 	s.metaMu.Unlock()
 
+	// Append to per-group GSN queue (already sorted since GSNs arrive in order)
+	s.groupQueueMu.Lock()
+	for _, gid := range touchedGroups {
+		s.groupGSNQueue[gid] = append(s.groupGSNQueue[gid], gsn)
+	}
+	s.groupQueueMu.Unlock()
+
 	// Tenta drenar buffers pendentes
 	for _, gid := range touchedGroups {
 		s.drainBuffer(gid)
@@ -359,38 +372,61 @@ func (s *Sequencer) aDeliverInternal(gsn uint64, groupID uint32) bool {
 		return true
 	}
 
-	// Verifica se todos os GSNs anteriores que tocam este grupo já foram entregues
-	nextCandidate := lastDelivered + 1
-	for nextCandidate < gsn {
-		s.metaMu.RLock()
-		_, metaExists := s.metadata[nextCandidate]
-		touches := metaExists && s.touchesGroup(nextCandidate, groupID)
-		s.metaMu.RUnlock()
-		if !metaExists {
-			fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: missing META for gsn=%d (lastDelivered=%d)\n", gsn, groupID, nextCandidate, lastDelivered)
-			return false
+	// Use per-group GSN queue for O(1) lookup of next required GSN
+	// instead of scanning all GSNs linearly.
+	s.groupQueueMu.RLock()
+	queue := s.groupGSNQueue[groupID]
+	s.groupQueueMu.RUnlock()
+
+	// Find the next GSN in this group's queue that hasn't been delivered yet
+	nextRequired := uint64(0)
+	for _, qgsn := range queue {
+		if qgsn > lastDelivered {
+			nextRequired = qgsn
+			break
 		}
-		if touches {
-			fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: prior gsn=%d touches this group (not yet delivered)\n", gsn, groupID, nextCandidate)
-			return false
-		}
-		nextCandidate++
 	}
 
-	s.metaMu.RLock()
-	_, metaExists := s.metadata[gsn]
-	touches := metaExists && s.touchesGroup(gsn, groupID)
-	s.metaMu.RUnlock()
-	if !metaExists {
-		fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: missing META for own gsn\n", gsn, groupID)
-		return false
-	}
-	if !touches {
-		fmt.Printf("[ADeliver] OK gsn=%d group=%d: does not touch this group, skip\n", gsn, groupID)
+	// If no next required GSN found in queue, check if META exists for our GSN
+	if nextRequired == 0 {
+		s.metaMu.RLock()
+		_, metaExists := s.metadata[gsn]
+		touches := metaExists && s.touchesGroup(gsn, groupID)
+		s.metaMu.RUnlock()
+		if !metaExists {
+			fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: missing META for own gsn\n", gsn, groupID)
+			return false
+		}
+		if !touches {
+			return true
+		}
+		s.lastDeliveredGSN[groupID] = gsn
+		fmt.Printf("[ADeliver] DELIVERED gsn=%d group=%d (lastDelivered updated)\n", gsn, groupID)
 		return true
 	}
-	s.lastDeliveredGSN[groupID] = gsn
-	fmt.Printf("[ADeliver] DELIVERED gsn=%d group=%d (lastDelivered updated)\n", gsn, groupID)
+
+	// The next required GSN for this group must be <= our GSN
+	if nextRequired < gsn {
+		// There's a prior GSN that touches this group and hasn't been delivered
+		fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: prior gsn=%d not yet delivered (lastDelivered=%d)\n", gsn, groupID, nextRequired, lastDelivered)
+		return false
+	}
+
+	// nextRequired == gsn: this is the next one to deliver
+	if nextRequired == gsn {
+		s.metaMu.RLock()
+		_, metaExists := s.metadata[gsn]
+		s.metaMu.RUnlock()
+		if !metaExists {
+			fmt.Printf("[ADeliver] BLOCKED gsn=%d group=%d: missing META for own gsn\n", gsn, groupID)
+			return false
+		}
+		s.lastDeliveredGSN[groupID] = gsn
+		fmt.Printf("[ADeliver] DELIVERED gsn=%d group=%d (lastDelivered updated)\n", gsn, groupID)
+		return true
+	}
+
+	// nextRequired > gsn: our GSN doesn't touch this group (already past it in queue)
 	return true
 }
 
@@ -419,19 +455,20 @@ func (s *Sequencer) drainBuffer(groupID uint32) {
 		lastDelivered := s.lastDeliveredGSN[groupID]
 		s.deliveryMu.RUnlock()
 
-		nextCandidate := lastDelivered + 1
-		for {
-			s.metaMu.RLock()
-			_, metaExists := s.metadata[nextCandidate]
-			touches := metaExists && s.touchesGroup(nextCandidate, groupID)
-			s.metaMu.RUnlock()
-			if !metaExists {
-				return
-			}
-			if touches {
+		// Use per-group queue to find next GSN that touches this group
+		s.groupQueueMu.RLock()
+		queue := s.groupGSNQueue[groupID]
+		s.groupQueueMu.RUnlock()
+
+		nextCandidate := uint64(0)
+		for _, qgsn := range queue {
+			if qgsn > lastDelivered {
+				nextCandidate = qgsn
 				break
 			}
-			nextCandidate++
+		}
+		if nextCandidate == 0 {
+			return
 		}
 
 		pending, exists := s.pendingCommits[groupID][nextCandidate]
@@ -450,11 +487,9 @@ func (s *Sequencer) drainBuffer(groupID uint32) {
 		if pending.batch != nil {
 			for _, req := range pending.batch.Requests {
 				if len(req.TouchedGroups) > 1 && req.GSN > nextCandidate {
-					// Try to deliver subsequent GSNs in this batch
 					if s.aDeliverUnlocked(req.GSN, groupID) {
 						continue
 					}
-					// Can't deliver yet — re-buffer at this GSN
 					s.pendingCommits[groupID][req.GSN] = pending
 					allDelivered = false
 					break
