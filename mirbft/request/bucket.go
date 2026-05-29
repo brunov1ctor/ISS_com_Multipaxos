@@ -585,6 +585,20 @@ func (b *Bucket) FindMinCrossOpByGSN() *Request {
 	return minReq
 }
 
+// FindAllCrossOps returns all cross-ops in the bucket (GSN > 0, TouchedGroups > 1).
+// ATTENTION: Bucket must be LOCKED when calling this method.
+func (b *Bucket) FindAllCrossOps() []*Request {
+	var result []*Request
+	r := b.FirstRequest
+	for r != nil {
+		if len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 {
+			result = append(result, r)
+		}
+		r = r.Next
+	}
+	return result
+}
+
 // FindSystemRequest procura primeira request sistêmica (SYSTEM:*) no bucket
 // Usado para priorizar GSN_REQUEST e META_STREAM no grupo 0
 // ATTENTION: Bucket must be LOCKED when calling this method

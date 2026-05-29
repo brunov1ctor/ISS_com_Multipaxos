@@ -135,20 +135,30 @@ func (bg *BucketGroup) CutBatchWithMode(size int, timeout time.Duration, isCross
 	// Counter is shared across instances via parent orderer's batchCounter.
 	if groupMembersGetter != nil {
 		if isCrossOpRound {
-			// CROSS-OP ROUND: immediate, min GSN owned by this leader, batch of 1
-			var minCrossOp *Request
-			var minCrossOpBucket *Bucket
+			// CROSS-OP ROUND: collect ALL available cross-ops, sorted by GSN.
+			// Batching multiple cross-ops per proposal reduces ADeliver serialization points.
+			type crossEntry struct {
+				req    *Request
+				bucket *Bucket
+			}
+			var allCross []crossEntry
 			for _, b := range bg.buckets {
-				if crossOp := b.FindMinCrossOpByGSN(); crossOp != nil {
-					if minCrossOp == nil || crossOp.Msg.GSN < minCrossOp.Msg.GSN {
-						minCrossOp = crossOp
-						minCrossOpBucket = b
-					}
+				for _, cop := range b.FindAllCrossOps() {
+					allCross = append(allCross, crossEntry{req: cop, bucket: b})
 				}
 			}
-			if minCrossOp != nil {
-				minCrossOpBucket.RemoveNoLock(minCrossOp)
-				newBatch.Requests = append(newBatch.Requests, minCrossOp)
+			if len(allCross) > 0 {
+				// Sort by GSN to maintain ordering
+				sort.Slice(allCross, func(i, j int) bool {
+					return allCross[i].req.Msg.GSN < allCross[j].req.Msg.GSN
+				})
+				// Cap at batch size to avoid oversized proposals
+				max := size
+				if max > len(allCross) { max = len(allCross) }
+				for idx := 0; idx < max; idx++ {
+					allCross[idx].bucket.RemoveNoLock(allCross[idx].req)
+					newBatch.Requests = append(newBatch.Requests, allCross[idx].req)
+				}
 				return &newBatch
 			}
 			// No cross-op available: fall through to single-group

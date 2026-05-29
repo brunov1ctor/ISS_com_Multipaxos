@@ -369,18 +369,24 @@ func (i *mpxInstance) deliverCommit() {
 		return
 	}
 
-	// Cross-group: verifica ordem GSN
-	var crossOpGSN uint64
+	// Cross-group: verifica ordem GSN para cada cross-op no batch
+	var crossOps []*pb.ClientRequest
 	for _, req := range b.Requests {
-		if len(req.TouchedGroups) > 1 && req.GSN > 0 { crossOpGSN = req.GSN; break }
+		if len(req.TouchedGroups) > 1 && req.GSN > 0 {
+			crossOps = append(crossOps, req)
+		}
 	}
-	if crossOpGSN > 0 && GetGlobalMulticastOrderer() != nil {
-		fmt.Printf("[MPX] sn=%d CROSS-OP gsn=%d group=%d\n", i.sn, crossOpGSN, i.bucketId)
-		if !GetGlobalMulticastOrderer().ADeliver(crossOpGSN, i.bucketId, b) {
-			// Cannot deliver yet — buffer until META arrives and ordering is satisfied
-			GetGlobalMulticastOrderer().BufferCommit(crossOpGSN, i.bucketId, b, i.announce, i.sn, i.lastDigest[:])
-			i.closed = true; traceCommit(i.sn, len(b.Requests))
-			return
+	if len(crossOps) > 0 && GetGlobalMulticastOrderer() != nil {
+		fmt.Printf("[MPX] sn=%d CROSS-OP-BATCH count=%d gsn_range=[%d..%d] group=%d\n",
+			i.sn, len(crossOps), crossOps[0].GSN, crossOps[len(crossOps)-1].GSN, i.bucketId)
+		// Try ADeliver for each cross-op GSN in order.
+		// If any GSN blocks, buffer the entire batch at that GSN.
+		for _, cop := range crossOps {
+			if !GetGlobalMulticastOrderer().ADeliver(cop.GSN, i.bucketId, b) {
+				GetGlobalMulticastOrderer().BufferCommit(cop.GSN, i.bucketId, b, i.announce, i.sn, i.lastDigest[:])
+				i.closed = true; traceCommit(i.sn, len(b.Requests))
+				return
+			}
 		}
 	}
 
@@ -428,15 +434,20 @@ func (i *mpxInstance) ProposeIfDue() {
 		} else {
 			if !i.validateBatchHomogeneity(rb) { return }
 			batchMsg := rb.Message()
-			// Cross-op validation: if batch contains any cross-op, it must be alone
+			// Cross-op validation: all cross-ops must have GSN assigned.
+			// A batch can contain multiple cross-ops (batched by GSN order)
+			// or only single-group requests, but not a mix.
 			hasCrossOp := false
+			hasSingleGroup := false
 			for _, req := range rb.Requests {
 				if len(req.Msg.TouchedGroups) > 1 {
 					if req.Msg.GSN == 0 { rb.Resurrect(); return }
 					hasCrossOp = true
+				} else {
+					hasSingleGroup = true
 				}
 			}
-			if hasCrossOp && len(batchMsg.Requests) != 1 {
+			if hasCrossOp && hasSingleGroup {
 				rb.Resurrect(); return
 			}
 			i.lastReqBatch = rb

@@ -342,7 +342,18 @@ func (s *Sequencer) RegisterMetadata(gsn uint64, touchedGroups []uint32) {
 func (s *Sequencer) ADeliver(gsn uint64, groupID uint32) bool {
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
+	return s.aDeliverInternal(gsn, groupID)
+}
 
+// aDeliverUnlocked is like ADeliver but assumes deliveryMu is NOT held.
+// Used by drainBuffer which holds bufferMu but not deliveryMu.
+func (s *Sequencer) aDeliverUnlocked(gsn uint64, groupID uint32) bool {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	return s.aDeliverInternal(gsn, groupID)
+}
+
+func (s *Sequencer) aDeliverInternal(gsn uint64, groupID uint32) bool {
 	lastDelivered := s.lastDeliveredGSN[groupID]
 	if gsn <= lastDelivered {
 		return true
@@ -427,11 +438,34 @@ func (s *Sequencer) drainBuffer(groupID uint32) {
 		if !exists {
 			return
 		}
-		pending.announce(pending.sn, pending.batch, pending.digest)
+
+		// Advance lastDeliveredGSN for this GSN
 		s.deliveryMu.Lock()
 		s.lastDeliveredGSN[groupID] = nextCandidate
 		s.deliveryMu.Unlock()
 		delete(s.pendingCommits[groupID], nextCandidate)
+
+		// Check if the batch has more cross-op GSNs that also need delivery
+		allDelivered := true
+		if pending.batch != nil {
+			for _, req := range pending.batch.Requests {
+				if len(req.TouchedGroups) > 1 && req.GSN > nextCandidate {
+					// Try to deliver subsequent GSNs in this batch
+					if s.aDeliverUnlocked(req.GSN, groupID) {
+						continue
+					}
+					// Can't deliver yet — re-buffer at this GSN
+					s.pendingCommits[groupID][req.GSN] = pending
+					allDelivered = false
+					break
+				}
+			}
+		}
+
+		if allDelivered {
+			fmt.Printf("[ADeliver] DRAIN-DELIVERED gsn=%d group=%d (batch)\n", nextCandidate, groupID)
+			pending.announce(pending.sn, pending.batch, pending.digest)
+		}
 	}
 }
 
