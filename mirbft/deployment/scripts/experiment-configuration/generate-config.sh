@@ -94,8 +94,8 @@ singleLeaderEpoch=$minEpochLength
 # Parameters to tune:
 batchsizes="4096"           # [requests] Optimized for 128-256 req/s
 batchrates="32"             # [batches/s]
-minBatchTimeout="500"       # [ms] Reduced for faster cycling in CSMR
-maxBatchTimeout="2000"     # [ms] Reduced for faster cycling in CSMR
+minBatchTimeout="1000"      # [ms] Balanced timeout
+maxBatchTimeout="4000"     # [ms] Balanced timeout
 segmentLengths="16"        # [entries] Short segments for faster checkpoint/watermark advance
 viewChangeTimeouts="60000"  # [ms]
 nodeToLeaderRatios="1"      # How many nodes are initally leaders, set to 1 to have initially all nodes in the leaderset
