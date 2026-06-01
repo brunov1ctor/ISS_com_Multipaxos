@@ -296,7 +296,7 @@ log_i "Todos os slaves disparados."
 # MINIMA CORREÇÃO: esperar o master finalizar (status == DONE) antes do fetch
 # -----------------------------------------------------------------------------
 log_i "Aguardando o master finalizar (status: ${remote_status_file})..."
-timeout_s="${WAIT_DONE_TIMEOUT_S:-1200}"   # 20min (override via env se quiser)
+timeout_s="${WAIT_DONE_TIMEOUT_S:-5400}"   # 90min para 72 experimentos (override via env se quiser)
 sleep_s="${WAIT_DONE_POLL_S:-3}"
 start_epoch="$(date +%s)"
 
