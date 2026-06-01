@@ -5,9 +5,14 @@ import json
 def loadDataFile(fileName, db):
     #print("   Reading file: {0}".format(fileName))
 
-    # Read JSON lines from file
+    # Read JSON lines from file (skip truncated last line if process was killed mid-write)
+    events_json = []
     with open(fileName) as f:
-        events_json = [json.loads(l) for l in f]
+        for l in f:
+            try:
+                events_json.append(json.loads(l))
+            except json.JSONDecodeError:
+                pass  # skip incomplete line (e.g. truncated by SIGINT)
 
     #print("Processing file: {0}".format(fileName))
 

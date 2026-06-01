@@ -282,22 +282,18 @@ def runClients(expID, clients):
     output("")
 
 def stopPeers(peers):
-    output("# stop peers (framework stop)")
-    for p in peers:
-        output("stop {0}".format(p))
-    output("wait for {0}".format(SIGNAL_DELAY))
-    output("")
-
-def stopPeers(peers):
     """Stop orderingpeer without terminating discoveryslave.
     
-    CRITICAL: Use exec-signal to send SIGINT to the running orderingpeer process.
-    This is the correct way to stop a process started with exec-start in the discovery framework.
+    Send SIGINT then exec-wait for the process to actually terminate.
+    Timeout = CLIENT_TIMEOUT // 4 (peer shutdown should be much faster than
+    the client run, but scales with experiment duration).
     """
-    output("# stop peers (send SIGINT to orderingpeer)")
+    shutdown_timeout = max(CLIENT_TIMEOUT // 4, 30000)  # at least 30s
+    output("# stop peers (send SIGINT, wait up to {}ms for graceful exit)".format(shutdown_timeout))
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
-    output("wait for {0}".format(SIGNAL_DELAY))
+    for p in peers:
+        output("exec-wait {0} {1}".format(p, shutdown_timeout))
     output("")
 
 def saveConfig(expID, slaves):
