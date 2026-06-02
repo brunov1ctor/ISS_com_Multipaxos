@@ -284,16 +284,14 @@ def runClients(expID, clients):
 def stopPeers(peers):
     """Stop orderingpeer without terminating discoveryslave.
     
-    Send SIGINT then exec-wait for the process to actually terminate.
-    Timeout = CLIENT_TIMEOUT // 4 (peer shutdown should be much faster than
-    the client run, but scales with experiment duration).
+    Send SIGINT and wait a fixed delay for graceful shutdown.
+    Using 'wait for' instead of 'exec-wait' to avoid WaitGroup panic
+    when slaves reconnect or respond multiple times.
     """
-    shutdown_timeout = max(CLIENT_TIMEOUT // 16, 15000)  # at least 15s
-    output("# stop peers (send SIGINT, wait up to {}ms for graceful exit)".format(shutdown_timeout))
+    output("# stop peers (send SIGINT to orderingpeer)")
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
-    for p in peers:
-        output("exec-wait {0} {1}".format(p, shutdown_timeout))
+    output("wait for {0}".format(SIGNAL_DELAY))
     output("")
 
 def saveConfig(expID, slaves):
