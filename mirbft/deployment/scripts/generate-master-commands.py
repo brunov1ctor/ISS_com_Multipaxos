@@ -288,7 +288,7 @@ def stopPeers(peers):
     Timeout = CLIENT_TIMEOUT // 4 (peer shutdown should be much faster than
     the client run, but scales with experiment duration).
     """
-    shutdown_timeout = max(CLIENT_TIMEOUT // 4, 30000)  # at least 30s
+    shutdown_timeout = max(CLIENT_TIMEOUT // 16, 15000)  # at least 15s
     output("# stop peers (send SIGINT, wait up to {}ms for graceful exit)".format(shutdown_timeout))
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
