@@ -70,7 +70,7 @@ checkpointers="Signing"
 durations="30"             # [s]   !!! Don't forget to change the timeout in generate-master-commands.py if increasing this value !!!
 drain_time_ms="30000"      # [ms]  Should be >= viewChangeTimeout to allow all responses to arrive
 bandwidths="unlimited"     # 1gbit unlimited         # any value accepted by the tc command or "unlimited" !!! ATTENTION: Adapt MaxProposeDataRate in config accordingly !!!
-payloadSizes="0 500"          # [Bytes] 0=comparação direta ISS, 500=realista
+payloadSizes="500"          # [Bytes] 0=comparação direta ISS, 500=realista
 fixedEpochLength=false
 auths="true"
 bucketsPerLeader="16"
