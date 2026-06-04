@@ -38,7 +38,7 @@ machineLocations="fra05"
 faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 dal10 fra05 mil01 mex01 tor01 tor04 seo01"
 
 # number of client instances per node for 1/16/32 client machines
-clients1="16"    # deploys 1 client machine which run the specified number of client instances
+clients1="4"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
 systemSizes="5" #"4 16 64 128"  Must be sorted in ascending order!
@@ -113,7 +113,7 @@ function skip() {
 
 throughputsAuthPbft=$()
 throughputsAuthPbft[4]="128 256 512 1024 2048 4096"
-throughputsAuthPbft[5]="512 1024 2048 4096"
+throughputsAuthPbft[5]="512 1024 2048 4096 8192 16384"
 throughputsAuthPbft[8]=""
 throughputsAuthPbft[16]="128 256 512 1024 2048 4096"
 throughputsAuthPbft[32]=""
@@ -122,7 +122,7 @@ throughputsAuthPbft[128]="128 256 512 1024 2048 4096"
 
 throughputsNoAuthPbft=$()
 throughputsNoAuthPbft[4]="128 256 512 1024 2048 4096"
-throughputsNoAuthPbft[5]="512 1024 2048 4096"
+throughputsNoAuthPbft[5]="512 1024 2048 4096 8192 16384"
 throughputsNoAuthPbft[8]=""
 throughputsNoAuthPbft[16]=""
 throughputsNoAuthPbft[32]=""
@@ -131,7 +131,7 @@ throughputsNoAuthPbft[128]=""
 
 throughputsAuthSinglePbft=$()
 throughputsAuthSinglePbft[4]="128 256 512 1024 2048 4096"
-throughputsAuthSinglePbft[5]="512 1024 2048 4096"
+throughputsAuthSinglePbft[5]="512 1024 2048 4096 8192 16384"
 throughputsAuthSinglePbft[8]=""
 throughputsAuthSinglePbft[16]="128 256 512 1024 2048 4096"
 throughputsAuthSinglePbft[32]=""
@@ -140,7 +140,7 @@ throughputsAuthSinglePbft[128]="128 256 512 1024 2048 4096"
 
 throughputsNoAuthSinglePbft=$()
 throughputsNoAuthSinglePbft[4]="128 256 512 1024 2048 4096"
-throughputsNoAuthSinglePbft[5]="512 1024 2048 4096"
+throughputsNoAuthSinglePbft[5]="512 1024 2048 4096 8192 16384"
 throughputsNoAuthSinglePbft[8]=""
 throughputsNoAuthSinglePbft[16]=""
 throughputsNoAuthSinglePbft[32]=""
@@ -149,7 +149,7 @@ throughputsNoAuthSinglePbft[128]=""
 
 throughputsAuthHotStuff=$()
 throughputsAuthHotStuff[4]="128 256 512 1024 2048 4096"
-throughputsAuthHotStuff[5]="512 1024 2048 4096"
+throughputsAuthHotStuff[5]="512 1024 2048 4096 8192 16384"
 throughputsAuthHotStuff[8]=""
 throughputsAuthHotStuff[16]="128 256 512 1024 2048 4096"
 throughputsAuthHotStuff[32]=""
@@ -158,7 +158,7 @@ throughputsAuthHotStuff[128]="128 256 512 1024 2048 4096"
 
 throughputsNoAuthHotStuff=$()
 throughputsNoAuthHotStuff[4]="128 256 512 1024 2048 4096"
-throughputsNoAuthHotStuff[5]="512 1024 2048 4096"
+throughputsNoAuthHotStuff[5]="512 1024 2048 4096 8192 16384"
 throughputsNoAuthHotStuff[8]=""
 throughputsNoAuthHotStuff[16]=""
 throughputsNoAuthHotStuff[32]=""
@@ -167,7 +167,7 @@ throughputsNoAuthHotStuff[128]=""
 
 throughputsAuthSingleHotStuff=$()
 throughputsAuthSingleHotStuff[4]="128 256 512 1024 2048 4096"
-throughputsAuthSingleHotStuff[5]="512 1024 2048 4096"
+throughputsAuthSingleHotStuff[5]="512 1024 2048 4096 8192 16384"
 throughputsAuthSingleHotStuff[8]=""
 throughputsAuthSingleHotStuff[16]="128 256 512 1024 2048 4096"
 throughputsAuthSingleHotStuff[32]=""
@@ -176,7 +176,7 @@ throughputsAuthSingleHotStuff[128]="128 256 512 1024 2048 4096"
 
 throughputsNoAuthSingleHotStuff=$()
 throughputsNoAuthSingleHotStuff[4]="128 256 512 1024 2048 4096"
-throughputsNoAuthSingleHotStuff[5]="512 1024 2048 4096"
+throughputsNoAuthSingleHotStuff[5]="512 1024 2048 4096 8192 16384"
 throughputsNoAuthSingleHotStuff[8]=""
 throughputsNoAuthSingleHotStuff[16]=""
 throughputsNoAuthSingleHotStuff[32]=""
@@ -185,7 +185,7 @@ throughputsNoAuthSingleHotStuff[128]=""
 
 throughputsAuthRaft=$()
 throughputsAuthRaft[4]="128 256 512 1024 2048 4096"
-throughputsAuthRaft[5]="512 1024 2048 4096"
+throughputsAuthRaft[5]="512 1024 2048 4096 8192 16384"
 throughputsAuthRaft[8]=""
 throughputsAuthRaft[16]="128 256 512 1024 2048 4096"
 throughputsAuthRaft[32]=""
@@ -194,7 +194,7 @@ throughputsAuthRaft[128]="128 256 512 1024 2048 4096"
 
 throughputsNoAuthRaft=$()
 throughputsNoAuthRaft[4]="128 256 512 1024 2048 4096"
-throughputsNoAuthRaft[5]="512 1024 2048 4096"
+throughputsNoAuthRaft[5]="512 1024 2048 4096 8192 16384"
 throughputsNoAuthRaft[8]=""
 throughputsNoAuthRaft[16]=""
 throughputsNoAuthRaft[32]=""
@@ -203,7 +203,7 @@ throughputsNoAuthRaft[128]=""
 
 throughputsAuthSingleRaft=$()
 throughputsAuthSingleRaft[4]="128 256 512 1024 2048 4096"
-throughputsAuthSingleRaft[5]="512 1024 2048 4096"
+throughputsAuthSingleRaft[5]="512 1024 2048 4096 8192 16384"
 throughputsAuthSingleRaft[8]=""
 throughputsAuthSingleRaft[16]="128 256 512 1024 2048 4096"
 throughputsAuthSingleRaft[32]=""
@@ -212,7 +212,7 @@ throughputsAuthSingleRaft[128]="128 256 512 1024 2048 4096"
 
 throughputsNoAuthSingleRaft=$()
 throughputsNoAuthSingleRaft[4]="128 256 512 1024 2048 4096"
-throughputsNoAuthSingleRaft[5]="512 1024 2048 4096"
+throughputsNoAuthSingleRaft[5]="512 1024 2048 4096 8192 16384"
 throughputsNoAuthSingleRaft[8]=""
 throughputsNoAuthSingleRaft[16]=""
 throughputsNoAuthSingleRaft[32]=""
@@ -222,7 +222,7 @@ throughputsNoAuthSingleRaft[128]=""
 # ===== MultiPaxos throughput profiles =====
 throughputsAuthMultiPaxos=$()
 throughputsAuthMultiPaxos[4]="128 256 512 1024 2048 4096"
-throughputsAuthMultiPaxos[5]="512 1024 2048 4096"
+throughputsAuthMultiPaxos[5]="512 1024 2048 4096 8192 16384"
 throughputsAuthMultiPaxos[8]=""
 throughputsAuthMultiPaxos[16]="128 256 512 1024 2048 4096"
 throughputsAuthMultiPaxos[32]=""
@@ -231,7 +231,7 @@ throughputsAuthMultiPaxos[128]="128 256 512 1024 2048 4096"
 
 throughputsNoAuthMultiPaxos=$()
 throughputsNoAuthMultiPaxos[4]="128 256 512 1024 2048 4096"
-throughputsNoAuthMultiPaxos[5]="512 1024 2048 4096"
+throughputsNoAuthMultiPaxos[5]="512 1024 2048 4096 8192 16384"
 throughputsNoAuthMultiPaxos[8]=""
 throughputsNoAuthMultiPaxos[16]=""
 throughputsNoAuthMultiPaxos[32]=""
@@ -240,7 +240,7 @@ throughputsNoAuthMultiPaxos[128]=""
 
 throughputsAuthSingleMultiPaxos=$()
 throughputsAuthSingleMultiPaxos[4]="128 256 512 1024 2048 4096"
-throughputsAuthSingleMultiPaxos[5]="512 1024 2048 4096"
+throughputsAuthSingleMultiPaxos[5]="512 1024 2048 4096 8192 16384"
 throughputsAuthSingleMultiPaxos[8]=""
 throughputsAuthSingleMultiPaxos[16]="128 256 512 1024 2048 4096"
 throughputsAuthSingleMultiPaxos[32]=""
@@ -249,7 +249,7 @@ throughputsAuthSingleMultiPaxos[128]="128 256 512 1024 2048 4096"
 
 throughputsNoAuthSingleMultiPaxos=$()
 throughputsNoAuthSingleMultiPaxos[4]="128 256 512 1024 2048 4096"
-throughputsNoAuthSingleMultiPaxos[5]="512 1024 2048 4096"
+throughputsNoAuthSingleMultiPaxos[5]="512 1024 2048 4096 8192 16384"
 throughputsNoAuthSingleMultiPaxos[8]=""
 throughputsNoAuthSingleMultiPaxos[16]=""
 throughputsNoAuthSingleMultiPaxos[32]=""
