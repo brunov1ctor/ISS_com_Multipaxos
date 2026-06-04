@@ -15,9 +15,9 @@
 
 workload:
   # Single-group operations
-  - weight: 90
+  - weight: 95
     pattern: "GET K{seqNr:08d}"
 
   # Multi-group operations (cross-partition, requires sequencer)
-  - weight: 10
+  - weight: 5
     pattern: "TX K{seqNr:08d},K{seqNr+1000:08d}"
