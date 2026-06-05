@@ -222,7 +222,7 @@ throughputsNoAuthSingleRaft[128]=""
 # ===== MultiPaxos throughput profiles =====
 throughputsAuthMultiPaxos=$()
 throughputsAuthMultiPaxos[4]="128 256 512 1024 2048 4096"
-throughputsAuthMultiPaxos[5]="512 1024 2048 4096 8192 16384"
+throughputsAuthMultiPaxos[5]="2048 8192"
 throughputsAuthMultiPaxos[8]=""
 throughputsAuthMultiPaxos[16]="128 256 512 1024 2048 4096"
 throughputsAuthMultiPaxos[32]=""
@@ -240,7 +240,7 @@ throughputsNoAuthMultiPaxos[128]=""
 
 throughputsAuthSingleMultiPaxos=$()
 throughputsAuthSingleMultiPaxos[4]="128 256 512 1024 2048 4096"
-throughputsAuthSingleMultiPaxos[5]="512 1024 2048 4096 8192 16384"
+throughputsAuthSingleMultiPaxos[5]="2048 8192"
 throughputsAuthSingleMultiPaxos[8]=""
 throughputsAuthSingleMultiPaxos[16]="128 256 512 1024 2048 4096"
 throughputsAuthSingleMultiPaxos[32]=""
