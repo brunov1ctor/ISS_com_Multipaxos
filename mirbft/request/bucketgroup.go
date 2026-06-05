@@ -155,7 +155,7 @@ func (bg *BucketGroup) CutBatchWithMode(size int, timeout time.Duration, isCross
 				// Adaptive cap: limit by total payload size to avoid
 				// oversized ACCEPT messages that exceed gRPC buffers.
 				// ~600 bytes per cross-op, cap at ~32KB total.
-				const maxBatchBytes = 1 // TESTE: batch=1 para medir impacto no ADeliver
+				const maxBatchBytes = 32 * 1024
 				totalBytes := 0
 				for _, entry := range allCross {
 					reqBytes := len(entry.req.Msg.Payload) + 128 // payload + protobuf overhead
