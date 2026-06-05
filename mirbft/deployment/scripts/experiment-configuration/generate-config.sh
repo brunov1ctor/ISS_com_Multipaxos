@@ -38,7 +38,7 @@ machineLocations="fra05"
 faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 dal10 fra05 mil01 mex01 tor01 tor04 seo01"
 
 # number of client instances per node for 1/16/32 client machines
-clients1="4"    # deploys 1 client machine which run the specified number of client instances
+clients1="16"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
 systemSizes="5" #"4 16 64 128"  Must be sorted in ascending order!
@@ -222,7 +222,7 @@ throughputsNoAuthSingleRaft[128]=""
 # ===== MultiPaxos throughput profiles =====
 throughputsAuthMultiPaxos=$()
 throughputsAuthMultiPaxos[4]="128 256 512 1024 2048 4096"
-throughputsAuthMultiPaxos[5]="2048 8192"
+throughputsAuthMultiPaxos[5]="512 1024 2048"
 throughputsAuthMultiPaxos[8]=""
 throughputsAuthMultiPaxos[16]="128 256 512 1024 2048 4096"
 throughputsAuthMultiPaxos[32]=""
@@ -240,7 +240,7 @@ throughputsNoAuthMultiPaxos[128]=""
 
 throughputsAuthSingleMultiPaxos=$()
 throughputsAuthSingleMultiPaxos[4]="128 256 512 1024 2048 4096"
-throughputsAuthSingleMultiPaxos[5]="2048 8192"
+throughputsAuthSingleMultiPaxos[5]="512 1024 2048"
 throughputsAuthSingleMultiPaxos[8]=""
 throughputsAuthSingleMultiPaxos[16]="128 256 512 1024 2048 4096"
 throughputsAuthSingleMultiPaxos[32]=""
