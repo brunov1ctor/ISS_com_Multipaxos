@@ -1,0 +1,529 @@
+_draw_progress_bar(p)
+        self._draw_inspect_popup(p)
+        p.end()
+
+    def _draw_groups(self, p: QPainter):
+        for group in self.sim.groups:
+            if not group.members:
+                continue
+            points = [self._node_pos[nid] for nid in group.members if nid in self._node_pos]
+            if len(points) < 2:
+                continue
+            cx = sum(pt.x() for pt in points) / len(points)
+            cy = sum(pt.y() for pt in points) / len(points)
+            max_dist = max(math.hypot(pt.x() - cx, pt.y() - cy) for pt in points)
+            r = max_dist + 60
+            color = QColor(GROUP_COLORS[group.id % len(GROUP_COLORS)])
+            color.setAlpha(15)
+            p.setPen(Qt.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(QPointF(cx, cy), r, r * 0.7)
+            # Border
+            border_c = QColor(GROUP_COLORS[group.id % len(GROUP_COLORS)])
+            border_c.setAlpha(45)
+            p.setPen(QPen(border_c, 1.2, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QPointF(cx, cy), r, r * 0.7)
+            # Label
+            p.setPen(QColor(GROUP_COLORS[group.id % len(GROUP_COLORS)]))
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.drawText(QRectF(cx - 60, cy - r * 0.7 - 18, 120, 16), Qt.AlignCenter, group.name)
+
+    def _draw_connections(self, p: QPainter):
+        """Linhas de conexão entre nós do mesmo grupo."""
+        for group in self.sim.groups:
+            if group.id == 0:
+                continue  # Skip sequencer group (too many lines)
+            color = QColor(GROUP_COLORS[group.id % len(GROUP_COLORS)])
+            color.setAlpha(20)
+            p.setPen(QPen(color, 0.8))
+            members = [self._node_pos[nid] for nid in group.members if nid in self._node_pos]
+            for i in range(len(members)):
+                for j in range(i + 1, len(members)):
+                    p.drawLine(members[i], members[j])
+
+    def _draw_messages(self, p: QPainter):
+        for msg in self.sim.messages:
+            if msg.from_is_client:
+                src = self._client_pos.get(msg.from_id)
+            else:
+                src = self._node_pos.get(msg.from_id)
+            if msg.to_is_client:
+                dst = self._client_pos.get(msg.to_id)
+            else:
+                dst = self._node_pos.get(msg.to_id)
+            if src is None or dst is None:
+                continue
+
+            t = msg.progress
+            x = src.x() + (dst.x() - src.x()) * t
+            y = src.y() + (dst.y() - src.y()) * t
+            color = QColor(MSG_COLORS.get(msg.msg_type, C["text2"]))
+
+            # Trail line
+            trail_c = QColor(color)
+            trail_c.setAlpha(50)
+            p.setPen(QPen(trail_c, 2.0))
+            p.drawLine(src, QPointF(x, y))
+
+            # Particle glow
+            glow = QRadialGradient(QPointF(x, y), 16)
+            gc = QColor(color)
+            gc.setAlpha(100)
+            glow.setColorAt(0.0, gc)
+            glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(glow))
+            p.drawEllipse(QPointF(x, y), 16, 16)
+
+            # Core particle
+            p.setBrush(color)
+            p.drawEllipse(QPointF(x, y), 5, 5)
+
+            # Label above particle
+            if msg.label:
+                p.setPen(QColor(255, 255, 255, 220))
+                p.setFont(QFont("Segoe UI", 7, QFont.Bold))
+                p.drawText(QRectF(x - 60, y - 20, 120, 14), Qt.AlignCenter, msg.label)
+
+    def _get_active_msg_color(self) -> str:
+        """Retorna a cor da mensagem atualmente em transito (dominante visual)."""
+        for msg in self.sim.messages:
+            if msg.progress < 1.0:
+                return MSG_COLORS.get(msg.msg_type, C["text2"])
+        # Sem mensagem em transito, usa a ultima mensagem
+        if self.sim.messages:
+            return MSG_COLORS.get(self.sim.messages[-1].msg_type, C["text2"])
+        return C["node_idle"]
+
+    def _draw_nodes(self, p: QPainter):
+        req = self.sim.current_request
+        msg_color = self._get_active_msg_color()
+        for node in self.sim.nodes:
+            pos = self._node_pos.get(node.id)
+            if pos is None:
+                continue
+            is_leader = req and req.leader == node.id
+            is_in_group = req and req.group_id in [g.id for g in self.sim.groups if node.id in g.members]
+            self._draw_single_node(p, node, pos, is_leader, is_in_group, msg_color)
+
+    def _draw_single_node(self, p: QPainter, node, pos: QPointF, is_leader: bool, is_in_group: bool, msg_color: str = ""):
+        """Desenha um no individual com glow, glass, border e labels.
+        Cor do border baseada na mensagem ativa, nao na fase."""
+        r = 34
+        if is_leader:
+            border_color = QColor(msg_color) if msg_color else QColor(C["accent"])
+        elif is_in_group and self.sim.phase not in (Phase.IDLE, Phase.DONE):
+            bc = QColor(msg_color) if msg_color else QColor(C["accent"])
+            bc.setAlpha(160)
+            border_color = bc
+        else:
+            border_color = QColor(C["node_idle"])
+
+
+
+
+        # Glow for leader
+        if is_leader and self.sim.phase not in (Phase.IDLE, Phase.DONE):
+            glow = QRadialGradient(pos, r + 16)
+            gc = QColor(border_color)
+            gc.setAlpha(50)
+            glow.setColorAt(0.0, gc)
+            glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(glow))
+            p.drawEllipse(pos, r + 16, r + 16)
+
+        # Glass circle
+        path = QPainterPath()
+        path.addEllipse(pos, r, r)
+        grad = QLinearGradient(pos.x(), pos.y() - r, pos.x(), pos.y() + r)
+        grad.setColorAt(0.0, QColor(40, 60, 90, 210))
+        grad.setColorAt(1.0, QColor(20, 36, 60, 230))
+        p.fillPath(path, QBrush(grad))
+
+        # Specular
+        spec = QPainterPath()
+        spec.addEllipse(QPointF(pos.x(), pos.y() - r * 0.3), r * 0.65, r * 0.35)
+        sg = QLinearGradient(pos.x(), pos.y() - r, pos.x(), pos.y())
+        sg.setColorAt(0.0, QColor(255, 255, 255, 40))
+        sg.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.setPen(Qt.NoPen)
+        p.fillPath(spec, QBrush(sg))
+
+        # Border
+        bc = QColor(border_color)
+        bc.setAlpha(200 if is_leader else 100)
+        p.setPen(QPen(bc, 2.5 if is_leader else 1.5))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(pos, r, r)
+
+        # Name
+        p.setPen(QColor(C["text"]))
+        p.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        p.drawText(QRectF(pos.x() - r, pos.y() - 8, r * 2, 16), Qt.AlignCenter, node.name)
+
+        # Groups below
+        groups_str = ",".join(f"G{g}" for g in node.groups)
+        p.setPen(QColor(C["text3"]))
+        p.setFont(QFont("Segoe UI", 7))
+        p.drawText(QRectF(pos.x() - r, pos.y() + 10, r * 2, 12), Qt.AlignCenter, groups_str)
+
+        # Leader badge
+        if is_leader and self.sim.phase not in (Phase.IDLE, Phase.DONE):
+            p.setPen(QColor(C["phase_prepare"]))
+            p.setFont(QFont("Segoe UI", 7, QFont.Bold))
+            p.drawText(QRectF(pos.x() - r, pos.y() - r - 16, r * 2, 12), Qt.AlignCenter, "★ LÍDER")
+
+    def _draw_clients(self, p: QPainter):
+        for client in self.sim.clients:
+            pos = self._client_pos.get(client.id)
+            if pos is None:
+                continue
+            r = 22
+            # Rounded rect
+            rect = QRectF(pos.x() - r, pos.y() - r, r * 2, r * 2)
+            path = QPainterPath()
+            path.addRoundedRect(rect, 10, 10)
+            p.fillPath(path, QColor(60, 40, 100, 190))
+            p.setPen(QPen(QColor(C["orange"]), 1.5))
+            p.drawPath(path)
+            # Label
+            p.setPen(QColor(C["text"]))
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.drawText(rect, Qt.AlignCenter, client.name)
+
+    def _draw_thought_bubbles(self, p: QPainter):
+        """Desenha baloes de pensamento acima dos nos quando mensagens chegam."""
+        for nid, bubble in self._thought_bubbles.items():
+            pos = self._node_pos.get(nid)
+            if pos is None:
+                continue
+            text = bubble["text"]
+            color = bubble["color"]
+            is_error = bubble.get("is_error", False)
+            ttl = bubble["ttl"]
+
+            # Fade out
+            alpha = min(255, ttl * 6)
+            if alpha <= 0:
+                continue
+
+            lines = text.split("\n")
+            p.setFont(QFont("Consolas", 7))
+            fm = p.fontMetrics()
+            line_h = fm.height() + 1
+            text_w = max(fm.horizontalAdvance(l) for l in lines) + 16
+            bubble_w = max(80, min(160, text_w))
+            bubble_h = line_h * len(lines) + 10
+
+            # Position: above-right of node
+            bx = pos.x() + 20
+            by = pos.y() - 50 - bubble_h
+
+            # Thought bubble shape
+            bg_path = QPainterPath()
+            bg_path.addRoundedRect(QRectF(bx, by, bubble_w, bubble_h), 8, 8)
+
+            # Background
+            bg_color = QColor(40, 10, 10, alpha) if is_error else QColor(12, 20, 38, alpha)
+            p.fillPath(bg_path, bg_color)
+
+            # Border
+            border_c = QColor(color)
+            border_c.setAlpha(alpha)
+            p.setPen(QPen(border_c, 1.5 if is_error else 1.0))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(bg_path)
+
+            # Connector dots (thought bubble style)
+            dot_alpha = alpha
+            p.setPen(Qt.NoPen)
+            dot_c = QColor(color)
+            dot_c.setAlpha(dot_alpha)
+            p.setBrush(dot_c)
+            # 3 dots from node to bubble
+            dx = bx - pos.x()
+            dy = by + bubble_h - pos.y()
+            for i, (frac, r) in enumerate([(0.3, 2.5), (0.55, 3.5), (0.8, 2.0)]):
+                cx = pos.x() + 24 + dx * frac * 0.3
+                cy = pos.y() - 14 + dy * frac
+                p.drawEllipse(QPointF(cx, cy), r, r)
+
+            # Text
+            ty = by + 5
+            for i, line in enumerate(lines):
+                if i == 0:
+                    p.setPen(QColor(color))
+                    p.setFont(QFont("Consolas", 7, QFont.Bold))
+                else:
+                    tc = QColor(C["text"] if not is_error else C["red"])
+                    tc.setAlpha(alpha)
+                    p.setPen(tc)
+                    p.setFont(QFont("Consolas", 7))
+                p.drawText(QRectF(bx + 6, ty, bubble_w - 12, line_h),
+                           Qt.AlignLeft | Qt.AlignVCenter, line)
+                ty += line_h
+
+    # Steps for the progress bar (order matters)
+    _PROGRESS_STEPS = [
+        (Phase.CLIENT_SEND,      "Envio",       C["orange"]),
+        (Phase.BUCKET_ASSIGN,    "Fila",        C["gold"]),
+        (Phase.BATCH_CUT,        "Pacote",      C["gold"]),
+        (Phase.PREPARE,          "Permissao",   C["phase_prepare"]),
+        (Phase.PROMISE,          "Promessa",    C["phase_promise"]),
+        (Phase.ACCEPT,           "Proposta",    C["phase_accept"]),
+        (Phase.ACCEPTED,         "Aceite",      C["phase_accepted"]),
+        (Phase.COMMIT,           "Decisao",     C["phase_commit"]),
+        (Phase.COMMIT_NOTIFY,    "Resposta",    C["green"]),
+    ]
+
+    def _get_sequencer_node_id(self) -> int:
+        """Retorna o ID do no sequenciador (menor ID do G0)."""
+        if self.sim.groups and self.sim.groups[0].members:
+            return min(self.sim.groups[0].members)
+        return 0
+
+    def _draw_sequencer_glow(self, p: QPainter):
+        """Glow especial no no sequenciador quando GSN esta ativo."""
+        meta = self.sim.meta_stream
+        if not meta:
+            return
+        seq_id = self._get_sequencer_node_id()
+        pos = self._node_pos.get(seq_id)
+        if pos is None:
+            return
+        gsn_val = self.sim.gsn
+        if gsn_val <= 0:
+            return
+        # Outer ring glow (roxo, nao vermelho)
+        glow = QRadialGradient(pos, 55)
+        gc = QColor("#A855F7")
+        gc.setAlpha(35)
+        glow.setColorAt(0.0, gc)
+        gc2 = QColor("#D500F9")
+        gc2.setAlpha(15)
+        glow.setColorAt(0.6, gc2)
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(glow))
+        p.drawEllipse(pos, 55, 55)
+        # "SEQ" badge below node
+        p.setPen(QColor("#A855F7"))
+        p.setFont(QFont("Segoe UI", 7, QFont.Bold))
+        p.drawText(QRectF(pos.x() - 30, pos.y() + 38, 60, 12),
+                   Qt.AlignCenter, f"SEQ GSN={gsn_val}")
+
+    def _draw_meta_broadcast_lines(self, p: QPainter):
+        """Linhas de broadcast META do sequenciador para os outros nos (quando ativo)."""
+        if self.sim.phase != Phase.GSN_ASSIGN:
+            return
+        seq_id = self._get_sequencer_node_id()
+        seq_pos = self._node_pos.get(seq_id)
+        if seq_pos is None:
+            return
+        # Linhas tracejadas roxas do sequenciador para todos os nos do G0
+        pen = QPen(QColor("#A855F7"), 1.5, Qt.DashLine)
+        p.setPen(pen)
+        for nid in self.sim.groups[0].members:
+            if nid == seq_id:
+                continue
+            npos = self._node_pos.get(nid)
+            if npos:
+                p.drawLine(seq_pos, npos)
+
+
+
+    def _draw_gsn_meta_panel(self, p: QPainter):
+        """Painel HUD do GSN/META — canto superior esquerdo."""
+        meta = self.sim.meta_stream
+        gsn_val = self.sim.gsn
+
+        box_w = 200
+        box_x = 10
+        box_y = 10
+        line_h = 14
+        visible_meta = meta[-4:] if meta else []
+        box_h = line_h * (len(visible_meta) + 3) + 10
+
+        bg = QPainterPath()
+        bg.addRoundedRect(QRectF(box_x, box_y, box_w, box_h), 8, 8)
+        p.fillPath(bg, QColor(10, 18, 32, 220))
+        border_c = QColor("#A855F7")
+        border_c.setAlpha(120)
+        p.setPen(QPen(border_c, 1.2))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(bg)
+
+        cy = box_y + 6
+
+        p.setPen(QColor("#A855F7"))
+        p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        p.drawText(QRectF(box_x + 8, cy, box_w - 16, line_h),
+                   Qt.AlignLeft | Qt.AlignVCenter, "GSN Sequencer")
+        cy += line_h
+
+        seq_id = self._get_sequencer_node_id()
+        p.setPen(QColor(C["text"]))
+        p.setFont(QFont("Consolas", 8))
+        p.drawText(QRectF(box_x + 8, cy, box_w - 16, line_h),
+                   Qt.AlignLeft | Qt.AlignVCenter,
+                   f"GSN atual: {gsn_val}  (Node {seq_id})")
+        cy += line_h
+
+        p.setPen(QColor("#D500F9"))
+        p.setFont(QFont("Segoe UI", 7, QFont.Bold))
+        p.drawText(QRectF(box_x + 8, cy, box_w - 16, line_h),
+                   Qt.AlignLeft | Qt.AlignVCenter, "META Stream:")
+        cy += line_h
+
+        if visible_meta:
+            for entry in reversed(visible_meta):
+                grps = ",".join(str(g) for g in entry["groups"])
+                is_latest = (entry == visible_meta[-1])
+                p.setPen(QColor(C["text"]) if not is_latest else QColor("#D500F9"))
+                p.setFont(QFont("Consolas", 7, QFont.Bold if is_latest else QFont.Normal))
+                txt = f"GSN={entry['gsn']} -> G[{grps}] N{entry['published_by']}"
+                p.drawText(QRectF(box_x + 12, cy, box_w - 20, line_h),
+                           Qt.AlignLeft | Qt.AlignVCenter, txt)
+                cy += line_h
+        else:
+            p.setPen(QColor(C["text3"]))
+            p.setFont(QFont("Consolas", 7))
+            p.drawText(QRectF(box_x + 12, cy, box_w - 20, line_h),
+                       Qt.AlignLeft | Qt.AlignVCenter, "(nenhuma publicacao)")
+
+    def _draw_adeliver_panel(self, p: QPainter):
+        """Painel HUD do ADeliver — abaixo do GSN panel, canto superior esquerdo."""
+        dlv = self.sim.delivery
+        if not dlv:
+            return
+        groups_with_data = sorted(dlv._last_delivered_gsn.keys())
+        if not groups_with_data:
+            return
+
+        meta = self.sim.meta_stream
+        visible_meta = meta[-4:] if meta else []
+        gsn_box_h = 14 * (len(visible_meta) + 3) + 10
+        box_w = 200
+        box_x = 10
+        box_y = 10 + gsn_box_h + 6
+        line_h = 14
+        box_h = line_h * (len(groups_with_data) + 1) + 10
+
+        bg = QPainterPath()
+        bg.addRoundedRect(QRectF(box_x, box_y, box_w, box_h), 8, 8)
+        p.fillPath(bg, QColor(10, 18, 32, 220))
+        border_c = QColor(C["green"])
+        border_c.setAlpha(120)
+        p.setPen(QPen(border_c, 1.2))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(bg)
+
+        cy = box_y + 6
+
+        p.setPen(QColor(C["green"]))
+        p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        p.drawText(QRectF(box_x + 8, cy, box_w - 16, line_h),
+                   Qt.AlignLeft | Qt.AlignVCenter, "ADeliver (por grupo)")
+        cy += line_h
+
+        for gid in groups_with_data:
+            next_gsn = dlv.get_next_expected_gsn(gid)
+            blocked = dlv.get_blocked_entries(gid)
+            last = dlv._last_delivered_gsn.get(gid, 0)
+
+            dot_x = box_x + 14
+            dot_y = cy + line_h / 2
+            dot_color = QColor(C["red"]) if blocked else QColor(C["green"])
+            p.setPen(Qt.NoPen)
+            p.setBrush(dot_color)
+            p.drawEllipse(QPointF(dot_x, dot_y), 4, 4)
+
+            p.setPen(QColor(C["text"]))
+            p.setFont(QFont("Consolas", 7))
+            txt = f"G{gid}: last={last} next={next_gsn}"
+            if blocked:
+                txt += f" BLOQ:{len(blocked)}"
+                p.setPen(QColor(C["red"]))
+            p.drawText(QRectF(box_x + 24, cy, box_w - 32, line_h),
+                       Qt.AlignLeft | Qt.AlignVCenter, txt)
+            cy += line_h
+
+    def _draw_progress_bar(self, p: QPainter):
+        """Barra de progresso na parte inferior — mostra etapas do fluxo."""
+        phase = self.sim.phase
+        if phase == Phase.IDLE:
+            return
+
+        w, h = self.width(), self.height()
+        steps = self._PROGRESS_STEPS
+        n = len(steps)
+
+        # Dimensions
+        bar_h = 36
+        margin_x = 20
+        bar_y = h - bar_h - 8
+        available_w = w - margin_x * 2
+        step_w = available_w / n
+
+        # Background
+        bg_rect = QRectF(margin_x - 6, bar_y - 4, available_w + 12, bar_h + 8)
+        bg_path = QPainterPath()
+        bg_path.addRoundedRect(bg_rect, 12, 12)
+        p.fillPath(bg_path, QColor(10, 18, 32, 210))
+        p.setPen(QPen(QColor(255, 255, 255, 30), 1))
+        p.drawPath(bg_path)
+
+        # Find current step index
+        current_idx = -1
+        for i, (step_phase, _, _) in enumerate(steps):
+            if step_phase == phase:
+                current_idx = i
+                break
+        if current_idx == -1 and phase == Phase.DONE:
+            current_idx = n
+
+        for i, (step_phase, label, color) in enumerate(steps):
+            cx = margin_x + step_w * i + step_w / 2
+            cy = bar_y + bar_h / 2
+
+            is_done = i < current_idx
+            is_current = i == current_idx
+
+            # Connector line to next step
+            if i < n - 1:
+                next_cx = margin_x + step_w * (i + 1) + step_w / 2
+                line_color = QColor(color) if is_done else QColor(C["text3"])
+                line_color.setAlpha(120 if is_done else 40)
+                p.setPen(QPen(line_color, 2))
+                p.drawLine(QPointF(cx + 8, cy), QPointF(next_cx - 8, cy))
+
+            # Circle
+            radius = 7 if is_current else 5
+            if is_current:
+                glow = QRadialGradient(QPointF(cx, cy), 14)
+                gc = QColor(color)
+                gc.setAlpha(80)
+                glow.setColorAt(0.0, gc)
+                glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+                p.setPen(Qt.NoPen)
+                p.setBrush(QBrush(glow))
+                p.drawEllipse(QPointF(cx, cy), 14, 14)
+
+            p.setPen(Qt.NoPen)
+            if is_done or is_current:
+                p.setBrush(QColor(color))
+            else:
+                p.setBrush(QColor(C["text3"]))
+            p.drawEllipse(QPointF(cx, cy), radius, radius)
+
+            # Label below
+            lbl_color = QColor(color) if (is_done or is_current) else QColor(C["text3"])
+            p.setPen(lbl_color)
+            p.setFont(QFont("Segoe UI", 6, QFont.Bold if is_current else QFont.Normal))
+            p.drawText(QRectF(cx - step_w / 2, cy + 10, step_w, 12), Qt.AlignCenter, label)
+
+
+
+    
