@@ -78,6 +78,8 @@ class SimState:
         # Pipeline: multiplas requests em paralelo
         self.active_requests: list[RequestInfo] = []
         self.pipeline_size: int = 3
+        # Steady-state: após primeiro PREPARE/PROMISE, pula direto para ACCEPT
+        self.prepared: bool = False
         # Batch visual: quantas requests acumular antes de cortar
         self.batch_visual_size: int = 3
         # Batch fill level per bucket (for visual progress bar)
@@ -117,6 +119,8 @@ class SimState:
         self.rebuild_managers()
 
     def log_event(self, phase: Phase, title: str, detail: str, color_key: str = "text"):
+        if getattr(self, '_suppress_log', False):
+            return
         self.event_log.append(EventLog(phase, title, detail, color_key))
         if len(self.event_log) > 50:
             self.event_log = self.event_log[-50:]

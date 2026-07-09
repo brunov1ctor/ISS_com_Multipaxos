@@ -84,6 +84,7 @@ class Message:
     sn: int = -1                    # NOVO: SN associado
     ballot: int = -1                # NOVO: ballot associado
     batch_digest: str = ""          # NOVO: digest do batch
+    color: str = ""                 # Cor fixa atribuída na criação
 
 
 # ─── Segment (SNs intercalados) ──────────────────────────────────────────────
@@ -144,6 +145,7 @@ class RequestInfo:
     proxy_node: int = -1        # NOVO: nó que recebeu do cliente (proxy)
     batch_requests: int = 1     # NOVO: quantas requests no batch
     phase: "Phase" = None       # fase individual desta request (pipeline)
+    color: str = ""              # cor unica desta request (para barra de progresso)
     _retransmit_done: bool = False  # controle de retransmissão (pipeline)
     _failure_done: bool = False     # controle de falha simulada (pipeline)
 
