@@ -1,3 +1,0 @@
-',\n        label="PROMISE ok",\n        detail=f"ballot={req.ballot}",\n        sn='
-'\n        label=f"ACCEPT d={req.batch_digest[:6]}",\n        detail=f"sn={req.sn}"'
-'        label="RESPONSE ok",\n        detail=f"sn={req.sn} committed",\n        sn'
