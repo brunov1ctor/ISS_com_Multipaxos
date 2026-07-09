@@ -29,20 +29,23 @@ def phase_client_send(st: SimState):
         touched = [random.choice([g.id for g in st.groups if g.id != 0])]
         gsn = 0
 
-    # Bucket assignment: request→bucket (fixo, não muda com epoch)
-    bucket_id = st.epoch_mgr.get_request_bucket(client.id, st.client_sn)
-
-    # Quem é o líder deste bucket nesta epoch?
-    leader = st.epoch_mgr.get_leader_for_bucket(bucket_id)
-
-    # Segmento do líder
-    seg = st.epoch_mgr.get_segment_for_leader(leader)
+    # Grupo primario (onde a request sera proposta via Paxos)
     group_id = touched[0]
     group = st.groups[group_id] if group_id < len(st.groups) else st.groups[1]
     quorum = len(group.members) // 2 + 1
 
-    # Proxy = nó que recebe do cliente (pode ser qualquer nó, aqui usamos o líder)
-    proxy_node = leader
+    # Lider do grupo (conforme GetGroupLeaderForSegment no codigo real)
+    # No ISS: lider = members[firstSN % len(members)] por segmento
+    leader = group.members[st.committed % len(group.members)]
+
+    # Segmento do lider
+    seg = st.epoch_mgr.get_segment_for_leader(leader)
+
+    # Bucket assignment (interno, para visualizacao do painel de buckets)
+    bucket_id = st.epoch_mgr.get_request_bucket(client.id, st.client_sn)
+
+    # Proxy = qualquer no que recebe do cliente (no real, e o no gRPC)
+    proxy_node = random.choice(group.members)
 
     st.current_request = RequestInfo(
         client_id=client.id,
@@ -69,8 +72,8 @@ def phase_client_send(st: SimState):
     st.log_event(Phase.CLIENT_SEND, "Cliente envia request",
                  f"{client.name} -> Node {proxy_node} (proxy)\n"
                  f"Payload: \"{payload}\" | Hash: {payload_hash[:8]}\n"
-                 f"Bucket: {bucket_id} (formula: (clID+clSN) % {st.num_buckets})\n"
-                 f"Lider do bucket: Node {leader} (epoch {st.epoch_mgr.epoch})\n"
+                 f"Grupo: G{group_id} membros={group.members}\n"
+                 f"Lider do grupo: Node {leader}\n"
                  f"Cross-group: {'Sim -> GSN=' + str(gsn) if is_cross else 'Nao'}",
                  "orange")
 
@@ -83,7 +86,7 @@ def phase_client_send(st: SimState):
         f"{'⚡ Este pedido envolve MÚLTIPLOS grupos — precisa de coordenação extra.' if is_cross else '→ Pedido simples, envolve apenas 1 grupo.'}\n\n"
         f"─── Detalhes técnicos ───\n"
         f"Payload: \"{payload}\" | Hash: {payload_hash[:8]}\n"
-        f"Bucket: {bucket_id} | Líder: Node {leader} | Seg: {seg.seg_id if seg else '?'}"
+        f"Grupo G{group_id} membros={group.members} | Líder: Node {leader}"
     )
 
     st.messages = [Message(
@@ -146,9 +149,10 @@ def phase_bucket_assign(st: SimState):
         f"🪣 Classificando o pedido numa 'caixa de entrada'\n\n"
         f"O sistema tem {st.num_buckets} caixas (buckets).\n"
         f"Cada caixa tem um responsável (líder).\n\n"
-        f"📡 O pedido é enviado para TODOS os membros\n"
+        f"📡 O proxy envia a request para TODOS os membros\n"
         f"do grupo G{req.group_id}: {group.members}\n"
-        f"(não só o líder — garante tolerância a falhas)\n\n"
+        f"(via sendToGroup/GsnReqForward — garante que todos\n"
+        f"tenham a request no bucket local antes do ACCEPT)\n\n"
         f"─── Como a fila é escolhida? ───\n"
         f"Fórmula: (cliente + nº do pedido) mod {st.num_buckets}\n"
         f"= ({req.client_id} + {req.client_sn}) mod {st.num_buckets} = fila {bucket_id}\n\n"
@@ -157,7 +161,8 @@ def phase_bucket_assign(st: SimState):
     )
 
     # Mensagem visual: proxy encaminha para TODOS os membros do grupo
-    # (conforme sendToGroup no código real do MirBFT)
+    # (conforme sendToGroup em multipaxosmulticastorderer.go)
+    # Cada membro faz AddDirectToBucket localmente.
     st.messages = []
     src = req.proxy_node
     for nid in group.members:
@@ -165,14 +170,14 @@ def phase_bucket_assign(st: SimState):
             continue
         st.messages.append(Message(
             MsgType.CLIENT_REQUEST, src, nid,
-            label=f"FWD B{bucket_id}" if nid != leader else f"FWD→Líder B{bucket_id}",
-            detail=f"bucket={bucket_id} group=G{req.group_id}",
+            label=f"FWD req h={req.payload_hash[:6]}",
+            detail=f"GsnReqForward group=G{req.group_id}",
         ))
     if not st.messages:
         st.messages = [Message(
             MsgType.CLIENT_REQUEST, leader, leader,
-            label=f"Bucket {bucket_id} enfileirado",
-            detail=f"Aguardando CutBatch",
+            label=f"AddDirectToBucket B{bucket_id}",
+            detail=f"local insert",
         )]
 
 
@@ -298,25 +303,28 @@ def phase_prepare(st: SimState):
                  "phase_prepare")
 
     st.info_text = (
-        f"📋 PREPARE — O líder pede permissão\n\n"
-        f"Node {req.leader} pergunta ao grupo:\n"
-        f"\"Posso coordenar a decisão nº {req.sn}?\"\n\n"
+        f"📋 PREPARE (Fase 1a) — O líder pede permissão\n\n"
+        f"Node {req.leader} envia MPxPrepare ao grupo:\n"
+        f"\"Aceitem-me como coordenador para SN={req.sn}\n"
+        f"com ballot={req.ballot}\"\n\n"
         f"Precisa que a MAIORIA concorde ({req.quorum} de\n"
         f"{len(group.members)} membros) — isso é o 'quorum'.\n\n"
-        f"Se a maioria disser sim, ele tem autoridade\n"
-        f"para propor um valor.\n\n"
-        f"─── Detalhes ───\n"
-        f"Ballot={req.ballot} | Grupo G{req.group_id} | Membros: {group.members}"
+        f"⚡ No MultiPaxos steady-state, esta fase só\n"
+        f"acontece UMA VEZ (em SetMembers). Depois, o líder\n"
+        f"pula direto para ACCEPT (ProposeIfDue).\n"
+        f"Só repete PREPARE se houver timeout (novo ballot).\n\n"
+        f"─── Detalhes (MPxPrepare) ───\n"
+        f"Ballot={req.ballot} | GroupId={req.group_id} | Membros: {group.members}"
     )
 
     st.messages = [Message(
         MsgType.PREPARE, req.leader, nid,
-        label=f"PREPARE sn={req.sn}",
-        detail=f"ballot={req.ballot}",
+        label=f"PREPARE b={req.ballot} g={req.group_id}",
+        detail=f"sn={req.sn} ballot={req.ballot} groupId={req.group_id}",
         sn=req.sn,
         ballot=req.ballot,
         batch_digest=req.batch_digest,
-    ) for nid in group.members]
+    ) for nid in group.members if nid != req.leader]
 
 
 def phase_promise(st: SimState):
@@ -332,19 +340,21 @@ def phase_promise(st: SimState):
                  "phase_promise")
 
     st.info_text = (
-        f"🤝 PROMISE — O grupo concorda\n\n"
-        f"Os membros responderam: \"Sim, você pode\n"
-        f"coordenar! Prometemos não aceitar outro\n"
-        f"coordenador com prioridade menor.\"\n\n"
+        f"🤝 PROMISE (Fase 1b) — O grupo concorda\n\n"
+        f"Os membros responderam com MPxPromise:\n"
+        f"\"Prometemos não aceitar ballot < {req.ballot}.\"\n\n"
         f"Respostas: {req.promises_received} de {req.quorum} necessárias ✓\n\n"
-        f"Analogia: é como uma eleição — a maioria\n"
-        f"votou neste líder, então ele tem mandato."
+        f"Quando quorum atingido, líder marca prepared=true\n"
+        f"e chama ProposeIfDue() → envia ACCEPT.\n\n"
+        f"─── Detalhes (MPxPromise) ───\n"
+        f"Ballot={req.ballot} | Ok=true | GroupId={req.group_id}\n"
+        f"Members={group.members}"
     )
 
     st.messages = [Message(
         MsgType.PROMISE, nid, req.leader,
-        label=f"PROMISE sn={req.sn} b={req.ballot}",
-        detail=f"ballot={req.ballot}",
+        label=f"PROMISE b={req.ballot} ok",
+        detail=f"ballot={req.ballot} groupId={req.group_id}",
         sn=req.sn,
         ballot=req.ballot,
     ) for nid in group.members if nid != req.leader]
@@ -362,20 +372,22 @@ def phase_accept(st: SimState):
                  "phase_accept")
 
     st.info_text = (
-        f"📦 ACCEPT — O líder propõe o valor\n\n"
-        f"Agora que tem permissão, Node {req.leader} diz:\n"
-        f"\"Proponho que o pacote '{req.batch_digest[:6]}...'\n"
-        f"seja registrado na posição {req.sn}.\"\n\n"
-        f"Todos os membros do grupo recebem a proposta\n"
-        f"e vão decidir se aceitam ou não.\n\n"
-        f"─── Detalhes ───\n"
-        f"Ballot={req.ballot} | Digest={req.batch_digest}"
+        f"📦 ACCEPT (Fase 2a) — O líder propõe o batch\n\n"
+        f"Node {req.leader} envia MPxAccept com o batch:\n"
+        f"\"Registrem o pacote '{req.batch_digest[:6]}...'\n"
+        f"na posição SN={req.sn} com ballot={req.ballot}.\"\n\n"
+        f"No código real (ProposeIfDue), o líder faz\n"
+        f"CutBatch do BucketGroup e envia ACCEPT direto\n"
+        f"(sem PREPARE repetido — steady state).\n\n"
+        f"─── Detalhes (MPxAccept) ───\n"
+        f"Ballot={req.ballot} | Batch.digest={req.batch_digest}\n"
+        f"GroupId={req.group_id} | SN={req.sn}"
     )
 
     st.messages = [Message(
         MsgType.ACCEPT, req.leader, nid,
         label=f"ACCEPT sn={req.sn} b={req.ballot}",
-        detail=f"sn={req.sn}",
+        detail=f"batch={req.batch_digest[:8]} groupId={req.group_id}",
         sn=req.sn,
         ballot=req.ballot,
         batch_digest=req.batch_digest,
@@ -395,19 +407,22 @@ def phase_accepted(st: SimState):
                  "phase_accepted")
 
     st.info_text = (
-        f"✅ ACCEPTED — Todos concordam!\n\n"
-        f"A maioria aceitou a proposta:\n"
+        f"✅ ACCEPTED (Fase 2b) — Quorum aceita!\n\n"
+        f"Membros responderam com MPxAccepted:\n"
         f"{req.accepted_received} de {req.quorum} necessários ✓\n\n"
-        f"Cada membro gravou o pacote no seu registro.\n"
-        f"Agora é IMPOSSÍVEL que outro valor seja\n"
-        f"registrado nesta posição — consenso quase pronto!\n\n"
-        f"Próximo: o líder confirma para todos (COMMIT)."
+        f"Cada membro gravou: acceptedBallot={req.ballot},\n"
+        f"lastDigest={req.batch_digest[:8]}\n\n"
+        f"No código real (onAccepted), quando acceptCount\n"
+        f">= quorum, o líder emite COMMIT e chama\n"
+        f"onCommit → deliverCommit.\n\n"
+        f"─── Detalhes (MPxAccepted) ───\n"
+        f"Ballot={req.ballot} | Ok=true | GroupId={req.group_id}"
     )
 
     st.messages = [Message(
         MsgType.ACCEPTED, nid, req.leader,
-        label="ACCEPTED ✓",
-        detail=f"sn={req.sn}",
+        label=f"ACCEPTED b={req.ballot} ok",
+        detail=f"sn={req.sn} groupId={req.group_id}",
         sn=req.sn,
         ballot=req.ballot,
         batch_digest=req.batch_digest,
@@ -445,18 +460,21 @@ def phase_commit(st: SimState):
 
     st.info_text = (
         f"🎉 COMMIT — Decisão final!\n\n"
-        f"O grupo DECIDIU: o pacote foi aceito\n"
-        f"permanentemente na posição {req.sn}.\n\n"
-        f"Nenhum participante pode voltar atrás.\n"
-        f"Total de decisões até agora: {st.committed}\n\n"
-        f"Agora falta avisar o cliente que seu\n"
-        f"pedido foi processado com sucesso."
+        f"Líder emite MPxCommit com digest do batch.\n"
+        f"Cada membro chama onCommit → deliverCommit:\n"
+        f"• Remove batch do bucket (RemoveBatch)\n"
+        f"• Anuncia ao announcer (log.Entry)\n"
+        f"• Se cross-op: verifica ADeliver (GSN order)\n\n"
+        f"Total de decisões: {st.committed}\n\n"
+        f"─── Detalhes (MPxCommit) ───\n"
+        f"Digest={req.batch_digest[:8]} | GroupId={req.group_id}\n"
+        f"SN={req.sn}"
     )
 
     st.messages = [Message(
         MsgType.COMMIT, req.leader, nid,
-        label="COMMIT ✓",
-        detail=f"sn={req.sn}",
+        label=f"COMMIT d={req.batch_digest[:6]}",
+        detail=f"sn={req.sn} groupId={req.group_id}",
         sn=req.sn,
         ballot=req.ballot,
         batch_digest=req.batch_digest,
@@ -480,13 +498,15 @@ def phase_commit_notify(st: SimState):
                  "green")
 
     st.info_text = (
-        f"📬 Avisando o cliente: \"Seu pedido foi aprovado!\"\n\n"
-        f"O 'carteiro' (Node {proxy}) segurou a resposta\n"
-        f"até ter CERTEZA de que o grupo aprovou.\n\n"
-        f"Agora envia a confirmação ao {client.name}.\n\n"
-        f"─── Fluxo completo ───\n"
-        f"Cliente → Carteiro → Líder → Votação →\n"
-        f"Aprovação → Carteiro → Cliente ✓"
+        f"📬 COMMIT_NOTIFY — Proxy responde ao cliente\n\n"
+        f"No código real (NotifyProxy), o líder envia\n"
+        f"SYSTEM:COMMIT_NOTIFY_BATCH ao proxy original.\n"
+        f"O proxy então chama RespondToClient.\n\n"
+        f"Node {proxy} → {client.name}: \"Confirmado!\"\n\n"
+        f"─── Fluxo CSMR completo ───\n"
+        f"Cliente → Proxy → sendToGroup → Bucket →\n"
+        f"CutBatch → ACCEPT → ACCEPTED → COMMIT →\n"
+        f"NotifyProxy → RespondToClient ✓"
     )
 
     st.messages = [Message(

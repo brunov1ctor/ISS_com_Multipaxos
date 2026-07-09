@@ -106,6 +106,10 @@ class Simulation:
     @property
     def active_requests(self): return self._st.active_requests
 
+    # Steady-state flag
+    @property
+    def prepared(self): return self._st.prepared
+
     # Batch fill (visual)
     @property
     def batch_fill(self): return self._st.batch_fill
@@ -122,9 +126,8 @@ class Simulation:
         self._st.paused = False
         self._st.step_mode = False
         if self._st.phase in (Phase.IDLE, Phase.DONE):
-            # Pipeline: spawn initial requests
-            from mirbftview.engine.tick import _spawn_requests
-            _spawn_requests(self._st)
+            from mirbftview.engine.tick import _spawn_batch
+            _spawn_batch(self._st)
 
     def pause(self):
         self._st.paused = True
