@@ -36,7 +36,7 @@ def _bubble_for_msg(sim, msg):
     if dest_node and not dest_node.is_alive:
         return "FALHA! No offline", C["red"], True
 
-    color = msg.color if msg.color else MSG_COLORS.get(msg.msg_type, C["text2"])
+    color = msg.color if msg.color else C["text2"]
     phase_name = sim.phase.name if sim.phase else ""
 
     dispatch = {

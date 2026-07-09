@@ -202,8 +202,13 @@ def phase_batch_cut(st: SimState):
     # Reset batch fill (batch cortado)
     st.batch_fill[req.bucket_id] = 0
 
-    # Emite evento visual: batch cortado
+    # Emite evento visual: batch cortado + thought bubble
     st.visual_events.append({"type": "batch_cut", "bucket": req.bucket_id, "ttl": 20})
+    cut_reason_label = "cross_op" if req.is_cross_group else "size/timeout"
+    st.bucket_bubbles[req.bucket_id] = {
+        "text": f"CutBatch()\nreason={cut_reason_label}\nreqs={fill} digest={batch_digest[:6]}",
+        "color": "green", "ttl": 30,
+    }
 
     # Remove do cutter
     if cutter:
@@ -433,24 +438,9 @@ def phase_commit(st: SimState):
     """COMMIT — consenso atingido."""
     req = st.current_request
     group = st.groups[req.group_id] if req.group_id < len(st.groups) else st.groups[1]
-    st.committed += 1
 
     # Emite evento visual: commit
     st.visual_events.append({"type": "commit", "sn": req.sn, "leader": req.leader, "ttl": 22})
-
-    # Registra no histórico visual
-    st.commit_history.append({
-        "sn": req.sn,
-        "leader": req.leader,
-        "epoch": st.epoch_mgr.epoch,
-        "hash": req.payload_hash[:6],
-        "is_cross": req.is_cross_group,
-        "gsn": req.gsn,
-        "segment": req.segment_id,
-        "group": req.group_id,
-    })
-    if len(st.commit_history) > 60:
-        st.commit_history = st.commit_history[-60:]
 
     st.phase = Phase.COMMIT
     st.log_event(Phase.COMMIT, "COMMIT",
@@ -484,12 +474,28 @@ def phase_commit(st: SimState):
 def phase_commit_notify(st: SimState):
     """COMMIT_NOTIFY — proxy recebe notificação e responde ao cliente."""
     req = st.current_request
+    st.committed += 1
     proxy = req.proxy_node
     client_idx = req.client_id if req.client_id < len(st.clients) else 0
     client = st.clients[client_idx]
 
     # Proxy notifica cliente
     st.proxy.notify_commit(req.client_id, req.client_sn)
+
+    # Registra no histórico visual (mensagens COMMIT já chegaram ao destino)
+    st.commit_history.append({
+        "sn": req.sn,
+        "leader": req.leader,
+        "epoch": st.epoch_mgr.epoch,
+        "hash": req.payload_hash[:6],
+        "is_cross": req.is_cross_group,
+        "gsn": req.gsn,
+        "segment": req.segment_id,
+        "group": req.group_id,
+        "color": req.color,
+    })
+    if len(st.commit_history) > 60:
+        st.commit_history = st.commit_history[-60:]
 
     st.phase = Phase.COMMIT_NOTIFY
     st.log_event(Phase.COMMIT_NOTIFY, "COMMIT_NOTIFY -> Cliente",

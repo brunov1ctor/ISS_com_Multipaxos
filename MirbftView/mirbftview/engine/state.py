@@ -84,6 +84,14 @@ class SimState:
         self.batch_visual_size: int = 3
         # Batch fill level per bucket (for visual progress bar)
         self.batch_fill: dict[int, int] = {}
+        # Batch timeout ticks per bucket (simula waitForRequests com timer)
+        self.batch_timeout_counter: dict[int, int] = {}
+        # Batch timeout limit in ticks (simula minBatchTimeout)
+        self.batch_timeout_limit: int = 8  # ~128ms at 16ms/tick
+        # Buckets waiting to cut (accumulated enough or timed out)
+        self.batch_ready: dict[int, bool] = {}
+        # Thought bubbles for buckets: {bucket_id: {"text": str, "color": str, "ttl": int}}
+        self.bucket_bubbles: dict[int, dict] = {}
         # Visual flash events: paineis consomem para gerar efeitos
         # [{"type": "bucket_in"|"batch_cut"|"commit", "bucket": int, "sn": int, "ttl": int}]
         self.visual_events: list[dict] = []
@@ -115,12 +123,16 @@ class SimState:
         self.commit_history = []
         self.meta_stream = []
         self.batch_fill = {}
+        self.batch_timeout_counter = {}
+        self.batch_ready = {}
+        self.bucket_bubbles = {}
         self.visual_events = []
         self.rebuild_managers()
 
     def log_event(self, phase: Phase, title: str, detail: str, color_key: str = "text"):
         if getattr(self, '_suppress_log', False):
             return
-        self.event_log.append(EventLog(phase, title, detail, color_key))
-        if len(self.event_log) > 50:
-            self.event_log = self.event_log[-50:]
+        req_color = ""
+        if self.current_request and self.current_request.color:
+            req_color = self.current_request.color
+        self.event_log.append(EventLog(phase, title, detail, color_key, req_color))

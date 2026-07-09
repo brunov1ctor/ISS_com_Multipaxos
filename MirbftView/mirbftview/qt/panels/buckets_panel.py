@@ -140,26 +140,7 @@ class BucketsPanel(QWidget):
 
             self._draw_bucket_labels(p, bx, by, bucket_w, bucket_h, top_y, i, group_id, gc, is_selected, contents)
 
-            fill_count = self.sim.batch_fill.get(i, 0) if hasattr(self.sim, 'batch_fill') else 0
-            batch_size = self.sim.batch_visual_size if hasattr(self.sim, 'batch_visual_size') else 3
-            if fill_count > 0:
-                fill_pct = min(1.0, fill_count / max(batch_size, 1))
-                bar_w = 3
-                bar_x_pos = bx + bucket_w + 1
-                bar_full_h = bucket_h
-                bar_fill_h = bar_full_h * fill_pct
-                p.setPen(Qt.NoPen)
-                p.setBrush(QColor(255, 255, 255, 15))
-                p.drawRoundedRect(QRectF(bar_x_pos, by, bar_w, bar_full_h), 1, 1)
-                fill_color = QColor(C["green"]) if fill_pct >= 1.0 else QColor(gc)
-                fill_color.setAlpha(200 if fill_pct >= 1.0 else 140)
-                p.setBrush(fill_color)
-                p.drawRoundedRect(QRectF(bar_x_pos, by + bar_full_h - bar_fill_h, bar_w, bar_fill_h), 1, 1)
-                if fill_pct >= 1.0:
-                    p.setPen(QColor(C["green"]))
-                    p.setFont(QFont("Segoe UI", 5, QFont.Bold))
-                    p.drawText(QRectF(bx, by - 10, bucket_w, 9), Qt.AlignCenter, "CORTE")
-
+            # Glow on bucket_in event
             for ev in (self.sim.visual_events if hasattr(self.sim, 'visual_events') else []):
                 if ev.get("bucket") != i:
                     continue
@@ -172,17 +153,86 @@ class BucketsPanel(QWidget):
                     p.setPen(QPen(glow_c, 2))
                     p.setBrush(Qt.NoBrush)
                     p.drawPath(glow_path)
-                elif ev["type"] == "batch_cut":
-                    flash_c = QColor(C["green"])
-                    flash_c.setAlpha(alpha)
-                    p.setPen(Qt.NoPen)
-                    p.setBrush(flash_c)
-                    p.drawRoundedRect(QRectF(bx, by, bucket_w, bucket_h), 4, 4)
+
+            # Thought bubble para este bucket (waitForRequests / CutBatch)
+            bubble = self.sim.bucket_bubbles.get(i) if hasattr(self.sim, 'bucket_bubbles') else None
+            if bubble and bubble["ttl"] > 0:
+                self._draw_bucket_bubble(p, bx, by, bucket_w, bucket_h, bubble)
 
         if 0 <= self._selected_bucket < num:
             self._draw_bucket_detail(p, w, h)
 
         p.end()
+
+    def _draw_bucket_bubble(self, p, bx, by, bucket_w, bucket_h, bubble):
+        """Desenha thought bubble estilo balão de pensamento acima do bucket."""
+        text = bubble["text"]
+        color_key = bubble["color"]
+        ttl = bubble["ttl"]
+        alpha = min(240, ttl * 8)
+        if alpha <= 0:
+            return
+
+        color = C.get(color_key, color_key)
+        lines = text.split("\n")
+        p.setFont(QFont("Consolas", 6))
+        fm = p.fontMetrics()
+        line_h = fm.height() + 1
+        text_w = max(fm.horizontalAdvance(l) for l in lines) + 12
+        bubble_w = max(70, min(140, text_w))
+        bubble_h = line_h * len(lines) + 8
+
+        # Posiciona acima do bucket
+        bbx = bx + bucket_w / 2 - bubble_w / 2
+        bby = by - bubble_h - 16
+
+        # Clamp dentro do widget
+        if bbx < 2:
+            bbx = 2
+        if bbx + bubble_w > self.width() - 2:
+            bbx = self.width() - bubble_w - 2
+
+        # Fundo do balão
+        bg_path = QPainterPath()
+        bg_path.addRoundedRect(QRectF(bbx, bby, bubble_w, bubble_h), 6, 6)
+        bg_color = QColor(12, 20, 38, alpha)
+        p.fillPath(bg_path, bg_color)
+
+        # Borda
+        border_c = QColor(color)
+        border_c.setAlpha(alpha)
+        p.setPen(QPen(border_c, 1.2))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(bg_path)
+
+        # Bolinhas de pensamento (conectam balão ao bucket)
+        p.setPen(Qt.NoPen)
+        dot_c = QColor(color)
+        dot_c.setAlpha(alpha)
+        p.setBrush(dot_c)
+        anchor_x = bx + bucket_w / 2
+        anchor_y = by
+        for frac, r in [(0.25, 2.0), (0.55, 3.0), (0.82, 2.0)]:
+            cx = anchor_x + (bbx + bubble_w / 2 - anchor_x) * frac * 0.4
+            cy = anchor_y + (bby + bubble_h - anchor_y) * frac
+            p.drawEllipse(QPointF(cx, cy), r, r)
+
+        # Texto
+        ty = bby + 4
+        for idx, line in enumerate(lines):
+            if idx == 0:
+                tc = QColor(color)
+                tc.setAlpha(alpha)
+                p.setPen(tc)
+                p.setFont(QFont("Consolas", 6, QFont.Bold))
+            else:
+                tc = QColor(C["text"])
+                tc.setAlpha(alpha)
+                p.setPen(tc)
+                p.setFont(QFont("Consolas", 6))
+            p.drawText(QRectF(bbx + 5, ty, bubble_w - 10, line_h),
+                       Qt.AlignLeft | Qt.AlignVCenter, line)
+            ty += line_h
 
     def _draw_bucket_labels(self, p, bx, by, bucket_w, bucket_h, top_y, i, group_id, gc, is_selected, contents):
         p.setPen(QColor(C["text"] if is_selected else C["text2"]))
@@ -191,7 +241,7 @@ class BucketsPanel(QWidget):
 
         p.setPen(gc)
         p.setFont(QFont("Segoe UI", 6))
-        p.drawText(QRectF(bx, top_y, bucket_w, 12), Qt.AlignCenter, f"\u2192G{group_id}")
+        p.drawText(QRectF(bx, top_y, bucket_w, 12), Qt.AlignCenter, f"G{group_id}")
 
         if contents:
             badge_r = 8
