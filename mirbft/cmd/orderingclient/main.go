@@ -37,11 +37,6 @@ func main() {
 	configFileName := os.Args[1]
 	config.LoadFile(configFileName)
 
-	// Load workload if configured
-	if config.Config.WorkloadFile != "" {
-		config.LoadWorkload(config.Config.WorkloadFile)
-	}
-
 	// Configure logger.
 	zerolog.SetGlobalLevel(config.Config.LoggingLevel)
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMicro
@@ -83,7 +78,7 @@ func main() {
 	logger.Info().
 		Int("numClients", numClients).
 		Int("numRequests", numRequests).
-		Int("workloadOps", len(config.Workload.Workload)).
+		Int("crossOpRatio", config.Config.CrossOpRatio).
 		Msg("Starting clients.")
 
 	// Create wait group for initializing and running clients

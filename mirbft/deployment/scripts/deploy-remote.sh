@@ -212,21 +212,6 @@ else
   log_w "groups.yml não encontrado em ${groups_yml_src}, rodando sem grupos (broadcast mode)."
 fi
 
-# === WORKLOAD: DEPLOY DE workload.yml ===
-log_i "Copiando workload.yml para ${remote_work_dir}/config em todos os nós..."
-workload_yml_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../config" && pwd)/workload.yml"
-if [[ -f "${workload_yml_src}" ]]; then
-  for ip in $(awk '{print $2}' "$instance_info_file"); do
-    (
-      scp $scp_options "${workload_yml_src}" "${remote_user}@${ip}:${remote_work_dir}/config/workload.yml"
-    ) &
-  done
-  wait
-  log_i "workload.yml copiado para todos os nós."
-else
-  log_w "workload.yml não encontrado em ${workload_yml_src}, usando fallback GET hardcoded."
-fi
-
 # === TLS-DATA: DEPLOY DE CERTIFICADOS ===
 log_i "Copiando tls-data para ${remote_base_dir}/tls-data em todos os nós..."
 if [[ -d "${tls_dir}" ]]; then
