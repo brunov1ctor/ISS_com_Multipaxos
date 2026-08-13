@@ -16,7 +16,7 @@ from mirbftview.qt.canvas.draw_messages import (
     assign_msg_colors, get_active_msg_color, draw_messages,
 )
 from mirbftview.qt.canvas.draw_hud import (
-    draw_gsn_meta_panel, draw_adeliver_panel, draw_progress_bar,
+    draw_gsn_meta_panel, draw_adeliver_panel,
 )
 from mirbftview.qt.canvas.thought_bubbles import (
     update_thought_bubbles, draw_thought_bubbles,
@@ -299,7 +299,7 @@ class NetworkCanvas(QWidget):
             f"Fase atual: {phase_name}",
         ]
         lines.extend(self._msg_detail_lines(msg))
-        color = msg.color if msg.color else MSG_COLORS.get(msg.msg_type, C["text2"])
+        color = msg.color if msg.color else C["text2"]
         self._inspect_popup = {"type": "msg", "lines": lines, "pos": pos, "color": color}
         self.update()
 
@@ -348,7 +348,6 @@ class NetworkCanvas(QWidget):
         draw_gsn_meta_panel(p, self.sim)
         draw_adeliver_panel(p, self.sim)
         self._draw_phase_banner(p)
-        draw_progress_bar(p, self.sim, self.width(), self.height())
         self._draw_inspect_popup(p)
         p.end()
 

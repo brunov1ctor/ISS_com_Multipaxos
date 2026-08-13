@@ -120,6 +120,10 @@ class Simulation:
     @property
     def visual_events(self): return self._st.visual_events
 
+    # Bucket thought bubbles
+    @property
+    def bucket_bubbles(self): return self._st.bucket_bubbles
+
     # ─── Controles ────────────────────────────────────────────────────────
 
     def start(self):

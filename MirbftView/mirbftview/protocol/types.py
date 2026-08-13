@@ -159,3 +159,4 @@ class EventLog:
     title: str
     detail: str
     color_key: str = "text"
+    req_color: str = ""

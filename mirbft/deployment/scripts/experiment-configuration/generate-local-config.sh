@@ -37,10 +37,10 @@ machineLocations="fra05"
 faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 dal10 fra05 mil01 mex01 tor01 tor04 seo01"
 
 # number of client instances per node for 1/16/32 client machines
-clients1="1"    # deploys 1 client machine which run the specified number of client instances
+clients1="4"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
-systemSizes="4" #"4 16 64 128"  Must be sorted in ascending order!
+systemSizes="5" #"4 16 64 128"  Must be sorted in ascending order!
 failureCounts=(0 0 0 0) # For each system size, the corresponding failure count (on top of the correct nodes)
 reuseFaulty=true  # If true, both correct and faulty peers will have the same tag and will be launched together, with the same config file.
                   # The failure count is only expressed as a parameter in (every peer's) config file, and even the faulty peers will see
@@ -62,7 +62,7 @@ throughputCap=131072000     # The system will always be proposing requests at a 
                             # Used to prevent view changes when too many batches accumulate in a bucket.
 
 # System composition
-orderers="MultiPaxosMulticast"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
+orderers="MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
 checkpointers="Signing"
 
 # Parameters chosen for experiments
@@ -94,9 +94,19 @@ batchsizes="4096"           # [requests]
 batchrates="32"             # [batches/s]
 minBatchTimeout="1000"      # [ms]
 maxBatchTimeout="4000"      # [ms]
-segmentLengths="16"         # [entries]
+segmentLengths="51"         # [entries] (Single policy overrides this to singleLeaderEpoch=256 automatically below)
 viewChangeTimeouts="60000"  # [ms]
 nodeToLeaderRatios="1"      # How many nodes are initally leaders, set to 1 to have initially all nodes in the leaderset
+crossOpBatchBytesList="32768"  # [bytes] Max size of a cross-op consensus batch (CrossOpBatchMaxBytes). Space-separated list to sweep.
+crossOpRatios="5 10 20 50"     # [%] Percentage of client requests that are cross-group (TX), written directly into
+                                # each generated config-$exp.yml's CrossOpRatio field. Space-separated list to sweep.
+                                # "20" is the baseline used for orderers the sweep doesn't apply to -- see
+                                # crossOpRatioOrderers/skip() below.
+                                # The actual payload pattern is hardcoded in createPayload() (client.go), not
+                                # configurable here: single-group -> "GET K{seqNr:08d}", cross-group ->
+                                # "TX K{seqNr:08d},K{seqNr+1000:08d}".
+                                # Example, request number 5: "GET K00000005" (single-group) or
+                                # "TX K00000005,K00001005" (cross-group, touches key 1000 requests ahead).
 
 # batctimeout = minBatchTimeout, if maxLeaders/batchrate < minBatchTimeout
 #               maxBatchTimeout, if maxLeaders/batchrate > maxBatchTimeout
@@ -105,12 +115,36 @@ nodeToLeaderRatios="1"      # How many nodes are initally leaders, set to 1 to h
 #             = numPeers, otherwise
 
 # Used to skip certain parameter combinations.
+#
+# crossOpRatioOrderers is NOT a sweep parameter (it doesn't add combinations) --
+# it's a filter for the crossOpRatios sweep above: only these orderers get
+# tested across the full crossOpRatios list; every other orderer only runs at
+# the "20" baseline (the same ratio used for the main Table 1 / Figures 2-3
+# comparison). This is what lets a single deploy.sh cover both the protocol
+# comparison and the cross-op-ratio ablation without wasting runs on
+# protocols that don't have that test in the paper (PBFT/HotStuff/Raft don't
+# read GroupId/TouchedGroups at all, so the ratio has no effect on them).
+crossOpRatioOrderers="MultiPaxosMulticast MultiPaxos"
+
 function skip() {
-  return 1
+  if [ "$crossOpRatio" != "20" ]; then
+    local relevant=false
+    for o in $crossOpRatioOrderers; do
+      if [ "$orderer" = "$o" ]; then
+        relevant=true
+        break
+      fi
+    done
+    if ! $relevant; then
+      return 0 # skip
+    fi
+  fi
+  return 1 # don't skip
 }
 
 throughputsAuthPbft=$()
 throughputsAuthPbft[4]="128 256"
+throughputsAuthPbft[5]="2048 4096 8192 16384 32768 65536"
 throughputsAuthPbft[8]=""
 throughputsAuthPbft[16]="128 256"
 throughputsAuthPbft[32]=""
@@ -127,6 +161,7 @@ throughputsNoAuthPbft[128]=""
 
 throughputsAuthSinglePbft=$()
 throughputsAuthSinglePbft[4]="128 256"
+throughputsAuthSinglePbft[5]="2048 4096 8192 16384 32768 65536"
 throughputsAuthSinglePbft[8]=""
 throughputsAuthSinglePbft[16]="128 256"
 throughputsAuthSinglePbft[32]=""
@@ -143,6 +178,7 @@ throughputsNoAuthSinglePbft[128]=""
 
 throughputsAuthHotStuff=$()
 throughputsAuthHotStuff[4]="128 256"
+throughputsAuthHotStuff[5]="2048 4096 8192 16384 32768 65536"
 throughputsAuthHotStuff[8]=""
 throughputsAuthHotStuff[16]="128 256"
 throughputsAuthHotStuff[32]=""
@@ -159,6 +195,7 @@ throughputsNoAuthHotStuff[128]=""
 
 throughputsAuthSingleHotStuff=$()
 throughputsAuthSingleHotStuff[4]="128 256"
+throughputsAuthSingleHotStuff[5]="2048 4096 8192 16384 32768 65536"
 throughputsAuthSingleHotStuff[8]=""
 throughputsAuthSingleHotStuff[16]="128 256"
 throughputsAuthSingleHotStuff[32]=""
@@ -175,6 +212,7 @@ throughputsNoAuthSingleHotStuff[128]=""
 
 throughputsAuthRaft=$()
 throughputsAuthRaft[4]="128 256"
+throughputsAuthRaft[5]="2048 4096 8192 16384 32768 65536"
 throughputsAuthRaft[8]=""
 throughputsAuthRaft[16]="128 256"
 throughputsAuthRaft[32]=""
@@ -191,6 +229,7 @@ throughputsNoAuthRaft[128]=""
 
 throughputsAuthSingleRaft=$()
 throughputsAuthSingleRaft[4]="128 256"
+throughputsAuthSingleRaft[5]="2048 4096 8192 16384 32768 65536"
 throughputsAuthSingleRaft[8]=""
 throughputsAuthSingleRaft[16]="128 256"
 throughputsAuthSingleRaft[32]=""
@@ -208,6 +247,7 @@ throughputsNoAuthSingleRaft[128]=""
 # ===== MultiPaxos throughput profiles =====
 throughputsAuthMultiPaxos=$()
 throughputsAuthMultiPaxos[4]="128 256"
+throughputsAuthMultiPaxos[5]="2048 4096 8192 16384 32768 65536"
 throughputsAuthMultiPaxos[8]=""
 throughputsAuthMultiPaxos[16]="128 256"
 throughputsAuthMultiPaxos[32]=""
@@ -224,6 +264,7 @@ throughputsNoAuthMultiPaxos[128]=""
 
 throughputsAuthSingleMultiPaxos=$()
 throughputsAuthSingleMultiPaxos[4]="128 256"
+throughputsAuthSingleMultiPaxos[5]="2048 4096 8192 16384 32768 65536"
 throughputsAuthSingleMultiPaxos[8]=""
 throughputsAuthSingleMultiPaxos[16]="128 256"
 throughputsAuthSingleMultiPaxos[32]=""
@@ -320,6 +361,12 @@ dplLines() {
 config() {
   cat config-file-templates/mir-modular.yml | sed "s/LOGGINGLEVEL/$loggingLevel/ ; s/ORDERER/$orderer/ ; s/CHECKPOINTER/$cpt/ ; s/FAILURES/$numFailures/ ; s/PRIORITYCONNECTIONS/$numConnections/ ; s/VIEWCHANGETIMEOUT/$viewChangeTimeout/ ; s/CRASHTIMING/$crashTiming/ ; s/LEADERPOLICY/$leaderPolicy/ ; s/EPOCH/$epoch/ ; s/SEGMENTLENGTH/$segmentLength/ ; s/WATERMARK/$watermark/ ; s/BUCKETS/$numBuckets/ ; s/BATCHSIZE/$batchsize/ ; s/PAYLOAD/$payloadSize/ ; s/BATCHTIMEOUT/$batchtimeout/ ; s/THROUGHPUTCAP/$throughputCap/ ; s/MSGBATCHPERIOD/$msgBatchPeriod/ ; s/CLIENTS/$instances/ ; s/REQUESTS/$requests/ ; s/DURATION/$((duration * 1000))/ ; s/REQUESTRATE/$rate/ ; s/HARDRATELIMIT/$hardRateLimit/ ; s/BATCHVERIFIER/$batchVerifier/ ; s/REQUESTHANDLERTHREADS/$requestHandlers/ ; s/REQUESTINPUTBUFFER/$requestBufferSize/ ; s/AUTH/$auth/ ; s/VERIFYEARLY/$verifyEarly/ ; s/RANDOMSEED/$randomNumber/ ; s/FAULTY/false/ ; s/NLR/$nlr/" > $exp_data_dir/config/config-$exp.yml
   cat config-file-templates/mir-modular.yml | sed "s/LOGGINGLEVEL/$loggingLevel/ ; s/ORDERER/$orderer/ ; s/CHECKPOINTER/$cpt/ ; s/FAILURES/$numFailures/ ; s/PRIORITYCONNECTIONS/$numConnections/ ; s/VIEWCHANGETIMEOUT/$viewChangeTimeout/ ; s/CRASHTIMING/$crashTiming/ ; s/LEADERPOLICY/$leaderPolicy/ ; s/EPOCH/$epoch/ ; s/SEGMENTLENGTH/$segmentLength/ ; s/WATERMARK/$watermark/ ; s/BUCKETS/$numBuckets/ ; s/BATCHSIZE/$batchsize/ ; s/PAYLOAD/$payloadSize/ ; s/BATCHTIMEOUT/$batchtimeout/ ; s/THROUGHPUTCAP/$throughputCap/ ; s/MSGBATCHPERIOD/$msgBatchPeriod/ ; s/CLIENTS/$instances/ ; s/REQUESTS/$requests/ ; s/DURATION/$((duration * 1000))/ ; s/REQUESTRATE/$rate/ ; s/HARDRATELIMIT/$hardRateLimit/ ; s/BATCHVERIFIER/$batchVerifier/ ; s/REQUESTHANDLERTHREADS/$requestHandlers/ ; s/REQUESTINPUTBUFFER/$requestBufferSize/ ; s/AUTH/$auth/ ; s/VERIFYEARLY/$verifyEarly/ ; s/RANDOMSEED/$randomNumber/ ; s/FAULTY/true/ ; s/NLR/$nlr/" > $exp_data_dir/config/config-$exp-faulty.yml
+
+  # Overrides pontuais, só nos arquivos gerados por este script (o template
+  # mir-modular.yml continua com valores literais/default, intocado para os
+  # outros geradores que não fazem esse sweep).
+  sed -i "s#CrossOpBatchMaxBytes: 32768#CrossOpBatchMaxBytes: $crossOpBatchBytes#" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
+  sed -i "s#CrossOpRatio: CROSSOPRATIO#CrossOpRatio: $crossOpRatio#" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
 }
 
 csvLine() {
@@ -433,6 +480,8 @@ function generateCombinations() {
                                   for batchVerifier in $batchVerifiers; do
                                     for requestHandlers in $requestHandlerThreadNums; do
                                       for requestBufferSize in $requestBufferSizes; do
+                                        for crossOpBatchBytes in $crossOpBatchBytesList; do
+                                        for crossOpRatio in $crossOpRatios; do
                                         for orderer in $orderers; do
                                           for cpt in $checkpointers; do
                                             for auth in $auths; do
@@ -552,6 +601,8 @@ function generateCombinations() {
                                         done
                                       done
                                     done
+                                  done
+                                  done
                                   done
                                 done
                               done
