@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -238,23 +236,17 @@ func (c *client) discoverPeers(dServAddr string) {
 	})
 }
 
-// createPayload generates only the payload bytes (no signature)
+// createPayload generates only the payload bytes (no signature).
+// Deterministically picks a cross-group (TX) or single-group (GET) operation based on
+// seqNr and the configured CrossOpRatio (percentage of requests that are cross-group).
 func (c *client) createPayload(seqNr int32) []byte {
-	// Select operation from workload
-	op := config.SelectWorkloadOp(seqNr)
 	var basePayload string
-	
-	if op != nil {
-		// Use workload pattern
-		basePayload = expandPattern(op.Pattern, seqNr)
-		c.log.Debug().Int32("seqNr", seqNr).Str("payload", basePayload).Msg("Using workload operation")
+	if int(seqNr)%100 < config.Config.CrossOpRatio {
+		basePayload = fmt.Sprintf("TX K%08d,K%08d", seqNr, seqNr+1000)
 	} else {
-		// Fallback: simple GET
-		key := fmt.Sprintf("K%08d", seqNr)
-		basePayload = "GET " + key
-		c.log.Warn().Int32("seqNr", seqNr).Msg("Workload not loaded, using fallback GET")
+		basePayload = fmt.Sprintf("GET K%08d", seqNr)
 	}
-	
+
 	// Add padding to reach configured payload size
 	paddingSize := config.Config.RequestPayloadSize - len(basePayload)
 	if paddingSize < 0 {
@@ -298,23 +290,6 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	}
 
 	return req
-}
-
-// expandPattern expands workload pattern with seqNr
-// Example: "TX K{seqNr:08d},K{seqNr+5000:08d}" -> "TX K00000001,K00005001"
-func expandPattern(pattern string, seqNr int32) string {
-	result := pattern
-	// Replace {seqNr:08d}
-	result = strings.ReplaceAll(result, "{seqNr:08d}", fmt.Sprintf("%08d", seqNr))
-	// Replace {seqNr+N:08d} using regex
-	re := regexp.MustCompile(`\{seqNr\+(\d+):08d\}`)
-	result = re.ReplaceAllStringFunc(result, func(match string) string {
-		// Extract offset from match
-		offsetStr := re.FindStringSubmatch(match)[1]
-		offset, _ := strconv.Atoi(offsetStr)
-		return fmt.Sprintf("%08d", seqNr+int32(offset))
-	})
-	return result
 }
 
 // Runs the main client logic that

@@ -1,32 +1,11 @@
-"""HUD panels — GSN/META, ADeliver, progress bar."""
+"""HUD panels — GSN/META, ADeliver."""
 
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import (
-    QPainter, QPainterPath, QColor, QRadialGradient, QPen, QBrush, QFont
+    QPainter, QPainterPath, QColor, QPen, QFont
 )
 from mirbftview.qt.theme import C
 from mirbftview.qt.simulation import Phase
-
-
-_PROGRESS_STEPS_SETUP = [
-    (Phase.PREPARE,       "Prepare",   C["phase_prepare"]),
-    (Phase.PROMISE,       "Promise",   C["phase_promise"]),
-    (Phase.CLIENT_SEND,   "Request",   C["orange"]),
-    (Phase.BUCKET_ASSIGN, "Bucket",    C["gold"]),
-    (Phase.ACCEPT,        "Accept",    C["phase_accept"]),
-    (Phase.ACCEPTED,      "Accepted",  C["phase_accepted"]),
-    (Phase.COMMIT,        "Commit",    C["phase_commit"]),
-    (Phase.COMMIT_NOTIFY, "Notify",    C["green"]),
-]
-
-_PROGRESS_STEPS_STEADY = [
-    (Phase.CLIENT_SEND,   "Request",   C["orange"]),
-    (Phase.BUCKET_ASSIGN, "Bucket",    C["gold"]),
-    (Phase.ACCEPT,        "Accept",    C["phase_accept"]),
-    (Phase.ACCEPTED,      "Accepted",  C["phase_accepted"]),
-    (Phase.COMMIT,        "Commit",    C["phase_commit"]),
-    (Phase.COMMIT_NOTIFY, "Notify",    C["green"]),
-]
 
 
 def draw_gsn_meta_panel(p, sim):
@@ -229,123 +208,3 @@ def draw_adeliver_panel(p, sim):
 
         cy += row_h + 4
 
-
-def draw_progress_bar(p, sim, canvas_w, canvas_h):
-    """Desenha uma barra de progresso por request ativa.
-
-    Cada barra tem a cor da request e mostra em qual fase ela esta.
-    Usa steps de setup (com PREPARE/PROMISE) ou steady-state (sem).
-    """
-    active = sim.active_requests
-    if not active:
-        return
-
-    # Escolhe steps baseado no estado prepared
-    is_steady = getattr(sim, 'prepared', False)
-    steps = _PROGRESS_STEPS_STEADY if is_steady else _PROGRESS_STEPS_SETUP
-    n = len(steps)
-    margin_x = 20
-    available_w = canvas_w - margin_x * 2
-    step_w = available_w / n
-
-    bar_h_each = 18
-    spacing = 4
-    total_bars = len(active)
-    total_h = total_bars * bar_h_each + (total_bars - 1) * spacing + 16
-    bar_y_start = canvas_h - total_h - 8
-
-    # Background
-    bg_rect = QRectF(margin_x - 6, bar_y_start - 4, available_w + 12, total_h + 8)
-    bg_path = QPainterPath()
-    bg_path.addRoundedRect(bg_rect, 12, 12)
-    p.fillPath(bg_path, QColor(10, 18, 32, 210))
-    p.setPen(QPen(QColor(255, 255, 255, 30), 1))
-    p.setBrush(Qt.NoBrush)
-    p.drawPath(bg_path)
-
-    # Desenha cada barra
-    for bar_idx, req in enumerate(active):
-        bar_y = bar_y_start + bar_idx * (bar_h_each + spacing)
-        req_color = req.color if hasattr(req, 'color') and req.color else _get_req_color(bar_idx)
-
-        # Determina indice da fase atual desta request
-        current_idx = -1
-        for i, (step_phase, _, _) in enumerate(steps):
-            if step_phase == req.phase:
-                current_idx = i
-                break
-        if current_idx == -1 and req.phase == Phase.DONE:
-            current_idx = n
-
-        # Linha de fundo (track)
-        track_y = bar_y + bar_h_each / 2
-        p.setPen(QPen(QColor(255, 255, 255, 25), 2))
-        p.drawLine(QPointF(margin_x, track_y), QPointF(margin_x + available_w, track_y))
-
-        # Linha de progresso preenchida
-        if current_idx > 0:
-            fill_w = step_w * current_idx
-            p.setPen(QPen(QColor(req_color), 3))
-            p.drawLine(QPointF(margin_x, track_y), QPointF(margin_x + fill_w, track_y))
-
-        # Bolinhas das fases
-        for i, (step_phase, label, _) in enumerate(steps):
-            cx = margin_x + step_w * i + step_w / 2
-            cy = track_y
-            is_done = i < current_idx
-            is_current = i == current_idx
-
-            radius = 5 if is_current else 3
-            if is_current:
-                # Glow
-                glow = QRadialGradient(QPointF(cx, cy), 10)
-                gc = QColor(req_color)
-                gc.setAlpha(100)
-                glow.setColorAt(0.0, gc)
-                glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-                p.setPen(Qt.NoPen)
-                p.setBrush(QBrush(glow))
-                p.drawEllipse(QPointF(cx, cy), 10, 10)
-
-            p.setPen(Qt.NoPen)
-            if is_done or is_current:
-                p.setBrush(QColor(req_color))
-            else:
-                p.setBrush(QColor(C["text3"]))
-            p.drawEllipse(QPointF(cx, cy), radius, radius)
-
-        # Label da fase atual (a direita da barra)
-        if 0 <= current_idx < n:
-            phase_label = steps[current_idx][1]
-        elif current_idx >= n:
-            phase_label = "Pronto"
-        else:
-            phase_label = "?"
-        p.setPen(QColor(req_color))
-        p.setFont(QFont("Segoe UI", 7, QFont.Bold))
-        p.drawText(
-            QRectF(margin_x + available_w + 4, bar_y, 60, bar_h_each),
-            Qt.AlignLeft | Qt.AlignVCenter, phase_label
-        )
-
-        # Indicador de grupo (a esquerda)
-        p.setPen(QColor(req_color))
-        p.setFont(QFont("Segoe UI", 7))
-        p.drawText(
-            QRectF(margin_x - 40, bar_y, 34, bar_h_each),
-            Qt.AlignRight | Qt.AlignVCenter, f"G{req.group_id}"
-        )
-
-    # Labels das fases (so uma vez, embaixo)
-    label_y = bar_y_start + total_bars * (bar_h_each + spacing)
-    p.setPen(QColor(C["text3"]))
-    p.setFont(QFont("Segoe UI", 6))
-    for i, (_, label, _) in enumerate(steps):
-        cx = margin_x + step_w * i + step_w / 2
-        p.drawText(QRectF(cx - step_w / 2, label_y, step_w, 12), Qt.AlignCenter, label)
-
-
-def _get_req_color(idx: int) -> str:
-    """Cor fallback para request sem cor atribuida."""
-    from mirbftview.qt.canvas._constants import MSG_COLOR_POOL
-    return MSG_COLOR_POOL[idx % len(MSG_COLOR_POOL)]

@@ -23,6 +23,11 @@ import (
 const (
 	SYSTEM_META_STREAM = "SYSTEM:META_STREAM:"
 	SYSTEM_GSN_REQUEST = "SYSTEM:GSN_REQUEST:"
+
+	// GSN sequencer leader election (failover)
+	SYSTEM_SEQ_VOTE_REQUEST  = "SYSTEM:SEQ_VOTE_REQUEST:"
+	SYSTEM_SEQ_VOTE_RESPONSE = "SYSTEM:SEQ_VOTE_RESPONSE:"
+	SYSTEM_SEQ_HEARTBEAT     = "SYSTEM:SEQ_HEARTBEAT:"
 )
 
 var globalMulticastOrderer *MultiPaxosMulticastOrderer
@@ -151,6 +156,19 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		if strings.HasPrefix(payload, SYSTEM_META_STREAM) {
 			req := gsnForward.Req
 			o.seq.HandleMETAStream(payload, req.GetTouchedGroups(), req.GetGSN())
+			return
+		}
+		// Sequencer leader election (failover)
+		if strings.HasPrefix(payload, SYSTEM_SEQ_VOTE_REQUEST) {
+			o.seq.HandleVoteRequest(payload, pm.SenderId)
+			return
+		}
+		if strings.HasPrefix(payload, SYSTEM_SEQ_VOTE_RESPONSE) {
+			o.seq.HandleVoteResponse(payload, pm.SenderId)
+			return
+		}
+		if strings.HasPrefix(payload, SYSTEM_SEQ_HEARTBEAT) {
+			o.seq.HandleHeartbeat(payload, pm.SenderId)
 			return
 		}
 		// CSMR Output Processing: COMMIT_NOTIFY_BATCH from group replica back to proxy

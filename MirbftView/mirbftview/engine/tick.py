@@ -260,12 +260,50 @@ def _advance_request(st: SimState, req: RequestInfo):
     next_phase = seq[next_idx]
 
     # Quando transiciona de BUCKET_ASSIGN para ACCEPT (ou GSN_ASSIGN),
-    # executa internamente batch_cut (CutBatch remove do bucket)
+    # verifica se o batch está pronto (acumulou requests ou timeout).
+    # Simula waitForRequestsLocked do BucketGroup.CutBatch real.
     if current == Phase.BUCKET_ASSIGN and next_phase in (Phase.ACCEPT, Phase.GSN_ASSIGN):
+        bucket_id = req.bucket_id
+        fill = st.batch_fill.get(bucket_id, 0)
+        is_cross = req.is_cross_group
+
+        # Cross-ops cortam imediatamente (RequestAddedCrossOp no Go)
+        if is_cross:
+            st.batch_ready[bucket_id] = True
+
+        # Single-group: espera acumular batch_visual_size ou timeout
+        if not is_cross and not st.batch_ready.get(bucket_id, False):
+            # Incrementa timeout counter
+            st.batch_timeout_counter[bucket_id] = st.batch_timeout_counter.get(bucket_id, 0) + 1
+            timeout_hit = st.batch_timeout_counter[bucket_id] >= st.batch_timeout_limit
+            size_hit = fill >= st.batch_visual_size
+
+            if size_hit or timeout_hit:
+                st.batch_ready[bucket_id] = True
+                reason = "size" if size_hit else "timeout"
+                st.bucket_bubbles[bucket_id] = {
+                    "text": f"CutBatch()\ntrigger={reason}\nreqs={fill}/{st.batch_visual_size}",
+                    "color": "green", "ttl": 30,
+                }
+            else:
+                # Não está pronto: bubble de espera e bloqueia avanço
+                st.bucket_bubbles[bucket_id] = {
+                    "text": f"waitForRequests()\n{fill}/{st.batch_visual_size} | timeout={st.batch_timeout_counter[bucket_id]}/{st.batch_timeout_limit}",
+                    "color": "gold", "ttl": 10,
+                }
+                # Mantém na fase BUCKET_ASSIGN (não avança)
+                req.phase = Phase.BUCKET_ASSIGN
+                st.messages = []
+                return
+
+        # Batch pronto: executa o corte
         st._suppress_log = True
         phases.phase_batch_cut(st)
         st.messages.clear()
         st._suppress_log = False
+        # Reset counters para este bucket
+        st.batch_timeout_counter[bucket_id] = 0
+        st.batch_ready[bucket_id] = False
 
     # Cenário: batch_resurrect
     if next_phase == Phase.ACCEPT and st.scenarios.get('batch_resurrect', False):
@@ -476,9 +514,16 @@ def _needs_checkpoint(st: SimState) -> bool:
 
 
 def _decay_visual_events(st: SimState):
-    """Decrementa TTL dos visual events e remove expirados."""
+    """Decrementa TTL dos visual events e bucket bubbles, remove expirados."""
     for ev in st.visual_events:
         ev["ttl"] -= 1
     st.visual_events = [ev for ev in st.visual_events if ev["ttl"] > 0]
     if len(st.visual_events) > 12:
         st.visual_events = st.visual_events[-12:]
+
+    # Decay bucket thought bubbles
+    expired = [bid for bid, b in st.bucket_bubbles.items() if b["ttl"] <= 0]
+    for bid in expired:
+        del st.bucket_bubbles[bid]
+    for bid in st.bucket_bubbles:
+        st.bucket_bubbles[bid]["ttl"] -= 1

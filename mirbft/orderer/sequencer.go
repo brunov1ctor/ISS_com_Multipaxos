@@ -70,6 +70,16 @@ type Sequencer struct {
 	members []int32
 	leader  int32
 
+	// Leader election state (Raft-inspired, log-free: liveness only).
+	// Guards term, votedFor, status, votes, leader, electionTimer, lastHeartbeatAt.
+	electMu         sync.RWMutex
+	term            int32
+	votedFor        int32
+	status          string
+	votes           map[int32]bool
+	electionTimer   *time.Timer
+	lastHeartbeatAt time.Time
+
 	// Running state
 	started bool
 	stopCh  chan struct{}
@@ -87,6 +97,18 @@ func NewSequencer(members []int32) *Sequencer {
 		}
 	}
 
+	// Termo 0 é o bootstrap determinístico: todo nó calcula o mesmo `leader`
+	// (menor ID) a partir da mesma lista estática `members`, sem precisar de
+	// eleição real. Cada nó "pré-vota" nesse líder no termo 0 para não
+	// disparar uma eleição espúria antes do primeiro heartbeat chegar.
+	// Nota: a variável local `leader` (int32, ID do líder) sombreia a
+	// constante de pacote `leader` (string, definida em raftinstance.go),
+	// então usamos o literal "leader" aqui em vez do identificador.
+	initialStatus := follower
+	if membership.OwnID == leader {
+		initialStatus = "leader"
+	}
+
 	s := &Sequencer{
 		nextGSN:          1,
 		requestsPending:  make(map[uint64]chan uint64),
@@ -97,6 +119,10 @@ func NewSequencer(members []int32) *Sequencer {
 		publishedMeta:    make(map[uint64]bool),
 		members:          members,
 		leader:           leader,
+		term:             0,
+		votedFor:         leader,
+		status:           initialStatus,
+		votes:            make(map[int32]bool),
 		stopCh:           make(chan struct{}),
 	}
 
@@ -111,23 +137,36 @@ func NewSequencer(members []int32) *Sequencer {
 }
 
 // Start inicia o sequenciador. Não depende do manager/ISS.
+// Chamado após messenger.Connect()/discovery.SyncPeer() (mesmo ponto em que
+// MultiPaxosMulticastOrderer.Start() já roda), para não armar o timer de
+// eleição antes das conexões entre nós existirem (evitaria eleições
+// espúrias de cold-start).
 func (s *Sequencer) Start() {
 	if s.started {
 		return
 	}
 	s.started = true
 	fmt.Printf("[SEQUENCER] Started (leader=%d, ownID=%d, isLeader=%v, nextGSN=%d)\n",
-		s.leader, membership.OwnID, s.IsLeader(), s.nextGSN)
+		s.currentLeader(), membership.OwnID, s.IsLeader(), s.nextGSN)
+
+	if s.IsLeader() {
+		// Termo 0: líder de bootstrap já começa emitindo heartbeats.
+		go s.leaderHeartbeatLoop(0)
+	}
+	s.startElectionTimer()
 }
 
 // IsLeader retorna true se este nó é o líder do sequenciador.
 func (s *Sequencer) IsLeader() bool {
-	return s.leader == membership.OwnID
+	return s.currentLeader() == membership.OwnID
 }
 
 // GetNextGSN solicita um novo GSN ao líder do sequenciador.
 // Se este nó é o líder, atribui localmente.
-// Se não, envia GSN_REQUEST ao líder e aguarda resposta.
+// Se não, envia GSN_REQUEST ao líder e aguarda resposta, tentando de novo
+// (até maxGSNRequestAttempts vezes) se o líder trocar ou não responder --
+// isso é o que permite ao sistema se recuperar de um failover do líder em
+// vez de desistir para sempre depois de um único timeout.
 func (s *Sequencer) GetNextGSN() uint64 {
 	if s.IsLeader() {
 		gsn := s.allocateGSN()
@@ -135,7 +174,14 @@ func (s *Sequencer) GetNextGSN() uint64 {
 		return gsn
 	}
 
-	// Não é líder: envia request ao líder
+	const maxGSNRequestAttempts = 3
+	const perAttemptTimeout = 2 * time.Second
+
+	// Mesmo reqID reusado entre tentativas contra o líder-alvo atual: se uma
+	// resposta replicada atrasada do líder antigo chegar (HandleGSNRequest
+	// replica GSN_RESPONSE para todo s.members "para tolerância a falhas"),
+	// o dedup por reqID em HandleGSNResponse ainda consegue entregá-la aqui,
+	// em vez de gerar um segundo GSN para a mesma operação lógica.
 	counter := atomic.AddUint32(&s.reqCounter, 1)
 	reqID := makeGlobalRequestID(membership.OwnID, counter)
 	respChan := make(chan uint64, 1)
@@ -144,32 +190,53 @@ func (s *Sequencer) GetNextGSN() uint64 {
 	s.requestsPending[reqID] = respChan
 	s.reqMu.Unlock()
 
-	// Envia GSN_REQUEST ao líder
-	payload := fmt.Sprintf("%s%d:%d", SYSTEM_GSN_REQUEST, reqID, membership.OwnID)
-	messenger.EnqueueMsg(&pb.ProtocolMessage{
-		SenderId: membership.OwnID, Sn: -1,
-		Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
-			Req: &pb.ClientRequest{
-				RequestId: &pb.RequestID{ClientId: membership.OwnID, ClientSn: int32(counter)},
-				Payload:   []byte(payload),
-				GroupId:   0,
-			},
-		}},
-	}, s.leader)
+	target := s.currentLeader()
 
-	select {
-	case gsn := <-respChan:
-		s.reqMu.Lock()
-		delete(s.requestsPending, reqID)
-		s.reqMu.Unlock()
-		return gsn
-	case <-time.After(5 * time.Second):
-		s.reqMu.Lock()
-		delete(s.requestsPending, reqID)
-		s.reqMu.Unlock()
-		fmt.Printf("[SEQUENCER] GSN request timeout (reqID=%d)\n", reqID)
-		return 0
+	for attempt := 0; attempt < maxGSNRequestAttempts; attempt++ {
+		if s.IsLeader() {
+			// Este nó virou líder enquanto esperávamos -- atende localmente.
+			s.reqMu.Lock()
+			delete(s.requestsPending, reqID)
+			s.reqMu.Unlock()
+			gsn := s.allocateGSN()
+			fmt.Printf("[SEQUENCER][GetNextGSN] allocated gsn=%d (became local leader mid-request)\n", gsn)
+			return gsn
+		}
+
+		payload := fmt.Sprintf("%s%d:%d", SYSTEM_GSN_REQUEST, reqID, membership.OwnID)
+		messenger.EnqueueMsg(&pb.ProtocolMessage{
+			SenderId: membership.OwnID, Sn: -1,
+			Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
+				Req: &pb.ClientRequest{
+					RequestId: &pb.RequestID{ClientId: membership.OwnID, ClientSn: int32(counter)},
+					Payload:   []byte(payload),
+					GroupId:   0,
+				},
+			}},
+		}, target)
+
+		select {
+		case gsn := <-respChan:
+			s.reqMu.Lock()
+			delete(s.requestsPending, reqID)
+			s.reqMu.Unlock()
+			return gsn
+		case <-time.After(perAttemptTimeout):
+			newTarget := s.currentLeader()
+			if newTarget != target {
+				fmt.Printf("[SEQUENCER] GSN request timeout (reqID=%d), retrying against new leader=%d\n", reqID, newTarget)
+				target = newTarget
+			} else {
+				fmt.Printf("[SEQUENCER] GSN request timeout (reqID=%d), leader still believed to be %d, retrying (attempt %d/%d)\n", reqID, target, attempt+1, maxGSNRequestAttempts)
+			}
+		}
 	}
+
+	s.reqMu.Lock()
+	delete(s.requestsPending, reqID)
+	s.reqMu.Unlock()
+	fmt.Printf("[SEQUENCER] GSN request exhausted retries (reqID=%d)\n", reqID)
+	return 0
 }
 
 // allocateGSN atribui um GSN localmente (só o líder chama).
@@ -192,8 +259,9 @@ func (s *Sequencer) HandleGSNRequest(payload string, senderID int32) {
 	}
 
 	if !s.IsLeader() {
-		// Forward ao líder (não deveria acontecer, mas por segurança)
-		fmt.Printf("[SEQUENCER] Not leader, forwarding GSN_REQUEST to %d\n", s.leader)
+		// Forward ao líder atual (não deveria acontecer, mas por segurança)
+		leaderID := s.currentLeader()
+		fmt.Printf("[SEQUENCER] Not leader, forwarding GSN_REQUEST to %d\n", leaderID)
 		messenger.EnqueueMsg(&pb.ProtocolMessage{
 			SenderId: membership.OwnID, Sn: -1,
 			Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
@@ -203,7 +271,7 @@ func (s *Sequencer) HandleGSNRequest(payload string, senderID int32) {
 					GroupId:   0,
 				},
 			}},
-		}, s.leader)
+		}, leaderID)
 		return
 	}
 
