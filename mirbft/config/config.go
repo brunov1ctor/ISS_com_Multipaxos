@@ -107,6 +107,7 @@ type configuration struct {
 	ClientPubKeyFile     string `yaml:"ClientPubKeyFile"`    // Key for client request verification.
 	ClientPrivKeyFile    string `yaml:"ClientPrivKeyFile"`   // Key for client request verification.
 	PrecomputeRequests   bool   `yaml:"PrecomputeRequests"`  // Pre-compute (and sign, if applicable) all requests at a client before starting to submit.
+	CrossOpRatio         int    `yaml:"CrossOpRatio"`        // Percentage (0-100) of client requests that are cross-group (TX K1,K2) instead of single-group (GET K).
 
 	// System parameters
 	RequestHandlerThreads     int    `yaml:"RequestHandlerThreads"` // Number of threads that write incoming requests to request Buffers.
@@ -116,22 +117,15 @@ type configuration struct {
 	// Proxy configuration for cross-op GSN assignment
 	CrossOpProxyNodeID int32 `yaml:"CrossOpProxyNodeID"` // Node ID that acts as proxy for cross-op GSN assignment. Set to -1 to disable (all nodes assign GSN).
 
-	// Workload configuration
-	WorkloadFile string `yaml:"WorkloadFile"` // Path to workload.yml file
-}
+	// Maximum size (bytes) of a cross-op batch proposed by CutBatchWithMode. 0 (or unset) falls back to 32KB.
+	CrossOpBatchMaxBytes int `yaml:"CrossOpBatchMaxBytes"`
 
-type WorkloadOp struct {
-	Weight  int    `yaml:"weight"`
-	Pattern string `yaml:"pattern"`
+	// Sequencer leader election (GSN sequencer failover)
+	SequencerHeartbeatMs       int           `yaml:"SequencerHeartbeatMs"`       // Leader heartbeat period. 0 (or unset) falls back to 100ms.
+	SequencerHeartbeat         time.Duration // Derived from SequencerHeartbeatMs.
+	SequencerElectionTimeoutMs int           `yaml:"SequencerElectionTimeoutMs"` // Min follower election timeout (randomized [min,2*min]). 0 (or unset) falls back to 500ms.
+	SequencerElectionTimeout   time.Duration // Derived from SequencerElectionTimeoutMs.
 }
-
-type WorkloadConfig struct {
-	Workload []WorkloadOp `yaml:"workload"`
-}
-
-var Workload WorkloadConfig
-var workloadWeights []int
-var workloadTotalWeight int
 
 func LoadFile(configFileName string) {
 	f, err := ioutil.ReadFile(configFileName)
@@ -197,12 +191,29 @@ func LoadFile(configFileName string) {
 	logger.Debug().Int("RequestInputChannelBuffer", Config.RequestInputChannelBuffer).Msg("Config")
 	logger.Debug().Str("BatchVerifier", Config.BatchVerifier).Msg("Config")
 	logger.Debug().Int32("CrossOpProxyNodeID", Config.CrossOpProxyNodeID).Msg("Config")
-	logger.Debug().Str("WorkloadFile", Config.WorkloadFile).Msg("Config")
+	logger.Debug().Int("CrossOpBatchMaxBytes", Config.CrossOpBatchMaxBytes).Msg("Config")
+	logger.Debug().Int("SequencerHeartbeatMs", Config.SequencerHeartbeatMs).Msg("Config")
+	logger.Debug().Int("SequencerElectionTimeoutMs", Config.SequencerElectionTimeoutMs).Msg("Config")
+	logger.Debug().Int("CrossOpRatio", Config.CrossOpRatio).Msg("Config")
 
 	Config.LoggingLevel = setLoggingLevel(Config.LoggingLevelStr)
 
 	Config.BatchTimeout = time.Duration(Config.BatchTimeoutMs) * time.Millisecond
 	Config.ViewChangeTimeout = time.Duration(Config.ViewChangeTimeoutMs) * time.Millisecond
+
+	if Config.CrossOpBatchMaxBytes <= 0 {
+		Config.CrossOpBatchMaxBytes = 32 * 1024
+	}
+
+	if Config.SequencerHeartbeatMs <= 0 {
+		Config.SequencerHeartbeatMs = 100
+	}
+	Config.SequencerHeartbeat = time.Duration(Config.SequencerHeartbeatMs) * time.Millisecond
+
+	if Config.SequencerElectionTimeoutMs <= 0 {
+		Config.SequencerElectionTimeoutMs = 500
+	}
+	Config.SequencerElectionTimeout = time.Duration(Config.SequencerElectionTimeoutMs) * time.Millisecond
 }
 
 func setLoggingLevel(level string) zerolog.Level {
@@ -221,39 +232,4 @@ func setLoggingLevel(level string) zerolog.Level {
 		logger.Fatal().Msg("Unsupported logging level")
 	}
 	return zerolog.NoLevel
-}
-
-func LoadWorkload(workloadFile string) {
-	f, err := ioutil.ReadFile(workloadFile)
-	if err != nil {
-		logger.Fatal().Err(err).Str("workloadFile", workloadFile).Msg("Could not read workload file.")
-	}
-
-	err = yaml.Unmarshal(f, &Workload)
-	if err != nil {
-		logger.Fatal().Err(err).Str("workloadFile", workloadFile).Msg("Could not unmarshal workload file.")
-	}
-
-	// Build cumulative weights for selection
-	workloadWeights = make([]int, len(Workload.Workload))
-	workloadTotalWeight = 0
-	for i, op := range Workload.Workload {
-		workloadTotalWeight += op.Weight
-		workloadWeights[i] = workloadTotalWeight
-		logger.Info().Int("weight", op.Weight).Str("pattern", op.Pattern).Msg("Loaded workload operation")
-	}
-}
-
-func SelectWorkloadOp(seqNr int32) *WorkloadOp {
-	if len(Workload.Workload) == 0 {
-		return nil
-	}
-	// Deterministic selection based on seqNr modulo total weight
-	selection := int(seqNr) % workloadTotalWeight
-	for i, cumWeight := range workloadWeights {
-		if selection < cumWeight {
-			return &Workload.Workload[i]
-		}
-	}
-	return &Workload.Workload[0]
 }

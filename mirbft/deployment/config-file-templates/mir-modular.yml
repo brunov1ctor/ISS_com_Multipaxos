@@ -121,8 +121,13 @@ BatchVerifier: BATCHVERIFIER # Determines how the requests in a batch are verifi
                              #                  external:
                              #                  A separate set of verifier threads (RequestHandlerThreads of them)
                              #                  verifies the requests. Communication is through buffered channels.
+CrossOpBatchMaxBytes: 32768 # Maximum size (bytes) of a cross-op batch proposed by CutBatchWithMode. Default 32KB.
+
+# GSN sequencer leader election (failover)
+SequencerHeartbeatMs: 100       # Leader heartbeat period. Default 100ms.
+SequencerElectionTimeoutMs: 500 # Min follower election timeout (randomized [min,2*min]). Default 500ms.
 
 # Workload configuration
-WorkloadFile: "config/workload.yml" # Path to workload configuration file defining operation types and patterns
+CrossOpRatio: CROSSOPRATIO # Percentage (0-100) of client requests that are cross-group (TX) instead of single-group (GET).
 CrossOpProxyNodeID: -1 # Node ID to use as proxy for cross-group operations. Set to -1 for no fixed proxy.
 

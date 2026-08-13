@@ -118,6 +118,7 @@ ClientPrivKeyFile: "tls-data/client-ecdsa-256.key" # Key for client request Sign
 ClientPubKeyFile: "tls-data/client-ecdsa-256.pem" # Key for client request verification.
 PrecomputeRequests: true    # Pre-compute (and sign, if applicable) all requests at a client before starting to submit.
                             # RequestsPerClient must not be zero if PrecomputeRequests is true.
+CrossOpRatio: 20            # Percentage (0-100) of client requests that are cross-group (TX) instead of single-group (GET).
 
 
 # System parameters
@@ -126,6 +127,14 @@ RequestHandlerThreads: 16       # Number of threads that write incoming requests
                                 # the number of physical cores of the machine running the peer.
 RequestInputChannelBuffer: 1024 # Buffer size of the channels to which gPRC threads are writing requests and from which
                                 # request handler threads are reading.
+
+CrossOpBatchMaxBytes: 32768     # Maximum size (bytes) of a cross-op batch proposed by CutBatchWithMode.
+                                # 0 or unset falls back to 32768 (32KB).
+
+SequencerHeartbeatMs: 100       # Leader heartbeat period for the GSN sequencer's failover election.
+                                # 0 or unset falls back to 100ms.
+SequencerElectionTimeoutMs: 500 # Min follower election timeout for the GSN sequencer (randomized [min,2*min]).
+                                # 0 or unset falls back to 500ms.
 
 BatchVerifier: sequential       # Determines how the requests in a batch are verified.
                                 # Possible values: sequential:
