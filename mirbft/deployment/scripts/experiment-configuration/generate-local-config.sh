@@ -102,6 +102,11 @@ crossOpRatios="5 10 20 50"     # [%] Percentage of client requests that are cros
                                 # each generated config-$exp.yml's CrossOpRatio field. Space-separated list to sweep.
                                 # "20" is the baseline used for orderers the sweep doesn't apply to -- see
                                 # crossOpRatioOrderers/skip() below.
+                                # The actual payload pattern is hardcoded in createPayload() (client.go), not
+                                # configurable here: single-group -> "GET K{seqNr:08d}", cross-group ->
+                                # "TX K{seqNr:08d},K{seqNr+1000:08d}".
+                                # Example, request number 5: "GET K00000005" (single-group) or
+                                # "TX K00000005,K00001005" (cross-group, touches key 1000 requests ahead).
 
 # batctimeout = minBatchTimeout, if maxLeaders/batchrate < minBatchTimeout
 #               maxBatchTimeout, if maxLeaders/batchrate > maxBatchTimeout
