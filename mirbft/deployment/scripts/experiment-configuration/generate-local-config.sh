@@ -98,7 +98,7 @@ segmentLengths="51"         # [entries] (Single policy overrides this to singleL
 viewChangeTimeouts="60000"  # [ms]
 nodeToLeaderRatios="1"      # How many nodes are initally leaders, set to 1 to have initially all nodes in the leaderset
 crossOpBatchBytesList="32768"  # [bytes] Max size of a cross-op consensus batch (CrossOpBatchMaxBytes). Space-separated list to sweep.
-crossOpRatios="5 10 20 50"     # [%] Percentage of client requests that are cross-group (TX), written directly into
+crossOpRatios="5 10 20 50 75"  # [%] Percentage of client requests that are cross-group (TX), written directly into
                                 # each generated config-$exp.yml's CrossOpRatio field. Space-separated list to sweep.
                                 # "20" is the baseline used for orderers the sweep doesn't apply to -- see
                                 # crossOpRatioOrderers/skip() below.
