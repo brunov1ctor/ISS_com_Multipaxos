@@ -129,44 +129,25 @@ detect_master_ip() {
   return 0
 }
 
-# Copia arquivo (ou diretório, com -r) via SCP com retry automático
+# Copia arquivo via SCP com retry automático
 # Útil para lidar com falhas temporárias de rede
 scp_with_retry() {
   local retries="$1"
-  shift
-
-  local recursive=false
-  if [[ "$1" == "-r" ]]; then
-    recursive=true
-    shift
-  fi
-
-  local src="$1"
-  local dst="$2"
+  local src="$2"
+  local dst="$3"
 
   local attempt=1
 
   while (( attempt <= retries )); do
     set +e
-    if $recursive; then
-      scp -q -r \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -o BatchMode=yes \
-        -o ConnectTimeout=8 \
-        -o ConnectionAttempts=1 \
-        -o LogLevel=ERROR \
-        "${src}" "${dst}" </dev/null
-    else
-      scp -q \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -o BatchMode=yes \
-        -o ConnectTimeout=8 \
-        -o ConnectionAttempts=1 \
-        -o LogLevel=ERROR \
-        "${src}" "${dst}" </dev/null
-    fi
+    scp -q \
+      -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null \
+      -o BatchMode=yes \
+      -o ConnectTimeout=8 \
+      -o ConnectionAttempts=1 \
+      -o LogLevel=ERROR \
+      "${src}" "${dst}" </dev/null
     local status=$?
     set -e
 
@@ -180,6 +161,38 @@ scp_with_retry() {
   done
 
   err "[scp] FALHA: não foi possível copiar '${src}' -> '${dst}' após ${retries} tentativas."
+  return 1
+}
+
+# Copia o CONTEÚDO de um diretório local para um diretório remoto via tar + ssh (uma única
+# conexão), com retry automático. Evita depender da sintaxe "origem/." do scp, que quebra em
+# versões modernas do OpenSSH (scp baseado em SFTP): "scp: error: unexpected filename: .".
+copy_dir_with_retry() {
+  local retries="$1"
+  local local_dir="$2"
+  local ip="$3"
+  local remote_dir="$4"
+
+  local attempt=1
+
+  while (( attempt <= retries )); do
+    set +e
+    ssh ${ssh_options} "${remote_user}@${ip}" "mkdir -p '${remote_dir}'" </dev/null \
+      && tar -C "${local_dir}" -cf - . \
+         | ssh ${ssh_options} "${remote_user}@${ip}" "tar -C '${remote_dir}' -xf -"
+    local status=$?
+    set -e
+
+    if (( status == 0 )); then
+      return 0
+    fi
+
+    warn "[copy-dir] Retry ${attempt}/${retries} (status ${status}): ${local_dir} -> ${ip}:${remote_dir}"
+    attempt=$((attempt + 1))
+    sleep 0.3
+  done
+
+  err "[copy-dir] FALHA: não foi possível copiar '${local_dir}' -> '${ip}:${remote_dir}' após ${retries} tentativas."
   return 1
 }
 
@@ -242,13 +255,10 @@ copy_tls_assets() {
     return 0
   fi
 
-  ssh ${ssh_options} "${remote_user}@${ip}" "\
-    mkdir -p '${remote_base_dir}/tls-data' 2>/dev/null || true
-  " </dev/null || true
-
-  scp_with_retry "${scp_retries}" -r \
-    "${local_tls_dir}/." \
-    "${remote_user}@${ip}:${remote_base_dir}/tls-data/"
+  copy_dir_with_retry "${scp_retries}" \
+    "${local_tls_dir}" \
+    "${ip}" \
+    "${remote_base_dir}/tls-data"
 
   local count
   count="$(find "${local_tls_dir}" -maxdepth 1 -type f | wc -l)"
@@ -264,13 +274,10 @@ copy_experiment_configs() {
     return 0
   fi
 
-  ssh ${ssh_options} "${remote_user}@${ip}" "\
-    mkdir -p '${remote_exp_config_dir}' 2>/dev/null || true
-  " </dev/null || true
-
-  scp_with_retry "${scp_retries}" -r \
-    "${local_exp_config_dir}/." \
-    "${remote_user}@${ip}:${remote_exp_config_dir}/"
+  copy_dir_with_retry "${scp_retries}" \
+    "${local_exp_config_dir}" \
+    "${ip}" \
+    "${remote_exp_config_dir}"
 
   local count
   count="$(find "${local_exp_config_dir}" -maxdepth 1 -type f | wc -l)"
@@ -405,7 +412,7 @@ pid_logs=()
 
 # Garante que jobs locais órfãos e tempfiles sejam limpos se o script for interrompido.
 # Não afeta o start-slave.sh remoto, que já roda desacoplado via nohup no lado do slave.
-trap 'kill "${pids[@]}" 2>/dev/null; rm -f "${pid_logs[@]}"' EXIT
+trap 'kill "${pids[@]}" 2>/dev/null || true; rm -f "${pid_logs[@]}" 2>/dev/null || true' EXIT
 
 # Loop principal: lê instance-info e dispara os slaves em paralelo
 while read -r instance_id ctrl_ip data_ip role tag rest || [[ -n "${instance_id}" ]]; do
