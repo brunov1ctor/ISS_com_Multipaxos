@@ -18,14 +18,15 @@
 #
 # Fluxo:
 #   1. Lê instance-info e filtra por tag e role=slave
-#   2. Para cada slave:
+#   2. Para cada slave, dispara em PARALELO (background) uma sequência de:
 #      a. Cria diretórios remotos
 #      b. Copia scripts de inicialização
 #      c. Mata processos antigos
-#      d. Copia certificados TLS
-#      e. Copia configs do experimento
+#      d. Copia certificados TLS (transferência em bloco via scp -r)
+#      e. Copia configs do experimento (transferência em bloco via scp -r)
 #      f. Verifica integridade dos assets
 #      g. Dispara start-slave.sh via nohup
+#   3. Espera todos os jobs (wait por PID) e reporta sucesso/falha por nó
 #
 # Variáveis de ambiente importantes:
 #   REMOTE_USER         - Usuário SSH remoto (default: $USER)
@@ -128,25 +129,44 @@ detect_master_ip() {
   return 0
 }
 
-# Copia arquivo via SCP com retry automático
+# Copia arquivo (ou diretório, com -r) via SCP com retry automático
 # Útil para lidar com falhas temporárias de rede
 scp_with_retry() {
   local retries="$1"
-  local src="$2"
-  local dst="$3"
+  shift
+
+  local recursive=false
+  if [[ "$1" == "-r" ]]; then
+    recursive=true
+    shift
+  fi
+
+  local src="$1"
+  local dst="$2"
 
   local attempt=1
 
   while (( attempt <= retries )); do
     set +e
-    scp -q \
-      -o StrictHostKeyChecking=no \
-      -o UserKnownHostsFile=/dev/null \
-      -o BatchMode=yes \
-      -o ConnectTimeout=8 \
-      -o ConnectionAttempts=1 \
-      -o LogLevel=ERROR \
-      "${src}" "${dst}" </dev/null
+    if $recursive; then
+      scp -q -r \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o BatchMode=yes \
+        -o ConnectTimeout=8 \
+        -o ConnectionAttempts=1 \
+        -o LogLevel=ERROR \
+        "${src}" "${dst}" </dev/null
+    else
+      scp -q \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o BatchMode=yes \
+        -o ConnectTimeout=8 \
+        -o ConnectionAttempts=1 \
+        -o LogLevel=ERROR \
+        "${src}" "${dst}" </dev/null
+    fi
     local status=$?
     set -e
 
@@ -226,20 +246,13 @@ copy_tls_assets() {
     mkdir -p '${remote_base_dir}/tls-data' 2>/dev/null || true
   " </dev/null || true
 
-  local count=0
-  for f in "${local_tls_dir}"/*; do
-    [[ -f "${f}" ]] || continue
-    local base
-    base="$(basename "${f}")"
+  scp_with_retry "${scp_retries}" -r \
+    "${local_tls_dir}/." \
+    "${remote_user}@${ip}:${remote_base_dir}/tls-data/"
 
-    scp_with_retry "${scp_retries}" \
-      "${f}" \
-      "${remote_user}@${ip}:${remote_base_dir}/tls-data/${base}"
-
-    ((count++)) || true
-  done
-
-  info "[tls] ${ip}: ${count} arquivos copiados"
+  local count
+  count="$(find "${local_tls_dir}" -maxdepth 1 -type f | wc -l)"
+  info "[tls] ${ip}: ${count} arquivos copiados (transferência em bloco)"
 }
 
 # Copia configs do experimento (membership, 1client, etc) para o slave remoto
@@ -255,20 +268,13 @@ copy_experiment_configs() {
     mkdir -p '${remote_exp_config_dir}' 2>/dev/null || true
   " </dev/null || true
 
-  local count=0
-  for f in "${local_exp_config_dir}"/*; do
-    [[ -f "${f}" ]] || continue
-    local base
-    base="$(basename "${f}")"
+  scp_with_retry "${scp_retries}" -r \
+    "${local_exp_config_dir}/." \
+    "${remote_user}@${ip}:${remote_exp_config_dir}/"
 
-    scp_with_retry "${scp_retries}" \
-      "${f}" \
-      "${remote_user}@${ip}:${remote_exp_config_dir}/${base}"
-
-    ((count++)) || true
-  done
-
-  info "[config] ${ip}: ${count} arquivos copiados"
+  local count
+  count="$(find "${local_exp_config_dir}" -maxdepth 1 -type f | wc -l)"
+  info "[config] ${ip}: ${count} arquivos copiados (transferência em bloco)"
 }
 
 # Verifica se todos os assets necessários estão presentes no slave remoto
@@ -382,15 +388,26 @@ start_remote_slave() {
 
   err "[slave] ${instance_id}: FALHA"
   echo "${out}" >&2
-  return 0
+  return 1
 }
 
 # Contadores para estatísticas finais
 total=0      # Total de linhas lidas do instance-info
 matched=0    # Linhas com tag correspondente
-started=0    # Slaves efetivamente iniciados
+launched=0   # Slaves disparados (em background, aguardando resultado)
+succeeded=0  # Slaves confirmados com sucesso após wait
+failed=0     # Slaves que falharam após wait
 
-# Loop principal: lê instance-info e inicia slaves
+# Jobs em background: arrays paralelos (pid / instance_id / arquivo de log)
+pids=()
+pid_ids=()
+pid_logs=()
+
+# Garante que jobs locais órfãos e tempfiles sejam limpos se o script for interrompido.
+# Não afeta o start-slave.sh remoto, que já roda desacoplado via nohup no lado do slave.
+trap 'kill "${pids[@]}" 2>/dev/null; rm -f "${pid_logs[@]}"' EXIT
+
+# Loop principal: lê instance-info e dispara os slaves em paralelo
 while read -r instance_id ctrl_ip data_ip role tag rest || [[ -n "${instance_id}" ]]; do
   # Pula linhas vazias e comentários
   [[ -z "${instance_id:-}" ]] && continue
@@ -405,8 +422,8 @@ while read -r instance_id ctrl_ip data_ip role tag rest || [[ -n "${instance_id}
 
   ((matched++)) || true
 
-  # Limita número de slaves iniciados (0 = ilimitado)
-  if [[ "${max_slaves}" -ne 0 && "${started}" -ge "${max_slaves}" ]]; then
+  # Limita número de slaves disparados (0 = ilimitado)
+  if [[ "${max_slaves}" -ne 0 && "${launched}" -ge "${max_slaves}" ]]; then
     continue
   fi
 
@@ -415,18 +432,46 @@ while read -r instance_id ctrl_ip data_ip role tag rest || [[ -n "${instance_id}
     continue
   fi
 
-  start_remote_slave "${instance_id}" "${ctrl_ip}" "${data_ip}" "${role}" "${tag}" || {
-    err "[main] Falha ao iniciar ${instance_id}, abortando."
-    exit 1
-  }
-  ((started++)) || true
+  logfile="$(mktemp "${TMPDIR:-/tmp}/start-remote-slave.${instance_id}.XXXXXX.log")"
+  ( start_remote_slave "${instance_id}" "${ctrl_ip}" "${data_ip}" "${role}" "${tag}" ) > "${logfile}" 2>&1 &
+
+  pids+=("$!")
+  pid_ids+=("${instance_id}")
+  pid_logs+=("${logfile}")
+
+  ((launched++)) || true
 done < "${instance_info_file}"
+
+# Espera cada job terminar e coleta o resultado real (exit code por PID)
+for i in "${!pids[@]}"; do
+  pid="${pids[$i]}"
+  id="${pid_ids[$i]}"
+  logfile="${pid_logs[$i]}"
+
+  if wait "${pid}"; then
+    info "[slave] ${id}: job concluído com SUCESSO"
+    ((succeeded++)) || true
+  else
+    err "[slave] ${id}: job FALHOU"
+    ((failed++)) || true
+  fi
+
+  sed "s/^/[${id}] /" "${logfile}" || true
+  rm -f "${logfile}"
+done
 
 # Exibe estatísticas finais
 info "==========================================="
 info "[resumo] Total de linhas lidas: ${total}"
 info "[resumo] Com tag=${wanted_tag}: ${matched}"
-info "[resumo] Slaves iniciados: ${started}"
+info "[resumo] Slaves disparados: ${launched}"
+info "[resumo] Slaves iniciados com sucesso: ${succeeded}"
+info "[resumo] Falhas: ${failed}"
 info "==========================================="
+
+if (( failed > 0 )); then
+  err "[main] ${failed} slave(s) falharam ao iniciar."
+  exit 1
+fi
 
 exit 0
