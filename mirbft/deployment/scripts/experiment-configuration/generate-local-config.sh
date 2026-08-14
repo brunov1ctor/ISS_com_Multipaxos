@@ -623,7 +623,7 @@ function generateCombinations() {
 }
 
 # Obtain target directory and output file names
-if [ -n "$1" ]; then
+if [ -n "${1:-}" ]; then
   exp_data_dir=$1
   shift
 else
@@ -636,7 +636,7 @@ csv_file="$exp_data_dir/$csv_filename"
 
 # Obtain the ID of the first experiment to generate, if any was given.
 # Otherwise, start at zero.
-if [ -n "$1" ]; then
+if [ -n "${1:-}" ]; then
   exp_id_offset=$1
   exp_id=$1
   shift
