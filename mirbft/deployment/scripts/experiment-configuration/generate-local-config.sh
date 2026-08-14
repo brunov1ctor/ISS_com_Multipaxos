@@ -423,7 +423,7 @@ function deployMachines() {
   # Generate machine template files
   for location in $locations; do
     templateFile="$machineType-$location.cmt"
-    cat $machineType | jq --arg dc "$location" '. + {datacenter: {name: $dc}}' > $templateFile
+    sed "s/OVERWRITE THIS WITH DATACENTER CODE (e.g. fra02, dal01, etc.)/$location/" $machineType > $templateFile
     machineTemplates="$machineTemplates $templateFile"
     numLocations=$((numLocations + 1))
   done
