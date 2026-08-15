@@ -31,7 +31,9 @@ func makeGlobalRequestID(nodeID int32, localCounter uint32) uint64 {
 }
 
 // Sequencer gerencia alocação de GSN de forma independente do ISS.
-// Single-leader: o nó com menor ID no grupo 0 é o líder.
+// Single-leader: no bootstrap (termo 0), o nó com menor ID no grupo 0 assume a liderança;
+// depois disso, o líder pode mudar por eleição real (ver sequencer_election.go) se o timer de
+// algum nó expirar sem receber heartbeat do líder atual.
 // Processa GSN_REQUESTs diretamente sem passar por buckets/batches.
 type Sequencer struct {
 	// GSN counter (monotonicamente crescente)
@@ -71,14 +73,13 @@ type Sequencer struct {
 	leader  int32
 
 	// Leader election state (Raft-inspired, log-free: liveness only).
-	// Guards term, votedFor, status, votes, leader, electionTimer, lastHeartbeatAt.
+	// Guards term, votedFor, status, votes, leader, electionTimer.
 	electMu         sync.RWMutex
 	term            int32
 	votedFor        int32
 	status          string
 	votes           map[int32]bool
 	electionTimer   *time.Timer
-	lastHeartbeatAt time.Time
 
 	// Running state
 	started bool
@@ -248,8 +249,8 @@ func (s *Sequencer) allocateGSN() uint64 {
 	return gsn
 }
 
-// HandleGSNRequest processa um GSN_REQUEST recebido (só o líder processa).
-// Atribui GSN e envia GSN_RESPONSE de volta ao requester.
+// HandleGSNRequest processa um GSN_REQUEST recebido. Se este nó não for o líder atual, apenas
+// encaminha a requisição pro líder; só o líder de fato atribui o GSN e responde ao requester.
 func (s *Sequencer) HandleGSNRequest(payload string, senderID int32) {
 	var reqID uint64
 	var requester int32
@@ -434,6 +435,10 @@ func (s *Sequencer) aDeliverUnlocked(gsn uint64, groupID uint32) bool {
 	return s.aDeliverInternal(gsn, groupID)
 }
 
+// aDeliverInternal decide se um grupo já pode entregar (tornar visível) a operação identificada
+// por este GSN. Regra: um grupo só entrega um GSN depois de já ter entregue todo GSN anterior
+// que também o toca — isso é o que garante uma única ordem global consistente para operações
+// cross-group, mesmo cada grupo rodando seu próprio MultiPaxos de forma independente.
 func (s *Sequencer) aDeliverInternal(gsn uint64, groupID uint32) bool {
 	lastDelivered := s.lastDeliveredGSN[groupID]
 	if gsn <= lastDelivered {
@@ -506,8 +511,7 @@ func (s *Sequencer) BufferCommit(gsn uint64, groupID uint32, batch *pb.Batch, an
 		s.pendingCommits[groupID] = make(map[uint64]*PendingCommit)
 	}
 	s.pendingCommits[groupID][gsn] = &PendingCommit{
-		gsn: gsn, groupID: groupID, batch: batch,
-		announce: announce, sn: sn, digest: digest,
+		batch: batch, announce: announce, sn: sn, digest: digest,
 	}
 }
 

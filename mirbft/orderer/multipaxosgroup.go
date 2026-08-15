@@ -14,12 +14,14 @@ import (
 
 type GroupID uint32
 
+// AtomicMulticast é o registro compartilhado de quais nós pertencem a cada grupo. Grupo 0 é
+// sempre o sequenciador GSN (todos os nós); grupos 1+ são grupos de dados (subconjuntos).
 type AtomicMulticast struct {
 	mu        sync.RWMutex
-	groups    map[GroupID][]int32
-	sequencer *MultiPaxosMulticastOrderer
+	groups    map[GroupID][]int32 // grupo -> lista de IDs dos nós membros
 }
 
+// GroupConfig é o formato do arquivo groups.yml carregado por LoadGroupsFromYAML.
 type GroupConfig struct {
 	Groups map[GroupID][]int32 `yaml:"groups"`
 }
@@ -28,10 +30,6 @@ func NewAtomicMulticast() *AtomicMulticast {
 	am := &AtomicMulticast{groups: make(map[GroupID][]int32)}
 	am.groups[0] = membership.AllNodeIDs()
 	return am
-}
-
-func (am *AtomicMulticast) SetSequencer(seq *MultiPaxosMulticastOrderer) {
-	am.sequencer = seq
 }
 
 func (am *AtomicMulticast) DefineGroup(g GroupID, members ...int32) {

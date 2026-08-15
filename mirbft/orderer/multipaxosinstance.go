@@ -24,49 +24,51 @@ const (
 	phaseCommitted
 )
 
+// mpxInstance é uma rodada de consenso Paxos completa para UM número de sequência (SN): decide
+// qual batch (ou ⊥/NOP) ocupa essa posição do log. Cada SN do segmento tem a sua própria
+// mpxInstance, todas rodando em paralelo (ver runSegment em multipaxosorderer.go).
 type mpxInstance struct {
-	mu               sync.Mutex
-	parent           *MultiPaxosOrderer
-	sn               int32
-	bucketId         uint32
-	groupBucketIDs   []int
-	groupBucketGroup *request.BucketGroup
-	proposeEvery     time.Duration
-	announce         AnnounceFn
-	lastProposeAt    time.Time
-	closed           bool
-	seg              manager.Segment
-	members          []int32
-	quorum           int32
-	promisedBallot   uint64
-	acceptedBallot   uint64
-	prepared         bool
-	promiseCount     int32
-	promisedFrom     map[int32]struct{}
-	lastReqBatch     *request.Batch
-	phase            instPhase
-	lastVal          *pb.MPxValue
-	lastDigest       [32]byte
-	acceptCount      int32
-	acceptedFrom     map[int32]struct{}
-	acceptRtxEvery   time.Duration
-	lastAcceptAt     time.Time
-	roundStartAt     time.Time
-	stuckSince       time.Time
-	prepSent         bool
-	leader           int32
-	currentBallot    int64
-	inProposal       bool
-	acceptTs         int64
-	lastAcceptedTs   int64
-	pendingCommitDigest *[32]byte
-	fetchInFlight    bool
-	msgCh            chan *pb.ProtocolMessage
-	stopCh           chan struct{}
-	wg               sync.WaitGroup
+	mu               sync.Mutex          // protege todos os campos abaixo (acessados por múltiplas goroutines: worker, ticker, ProposeIfDue)
+	parent           *MultiPaxosOrderer  // orderer dono desta instância (dá acesso a emit/am/maxBatchSize/etc)
+	sn               int32               // número de sequência que esta instância decide
+	bucketId         uint32              // grupo/bucket de dados ao qual este SN pertence
+	groupBucketIDs   []int               // buckets de requisição atribuídos a este grupo (round-robin sobre todos os buckets)
+	groupBucketGroup *request.BucketGroup // fila de requisições pendentes desses buckets, de onde os batches são cortados
+	proposeEvery     time.Duration       // intervalo do batch timeout, herdado do orderer pai
+	announce         AnnounceFn          // callback de commit, herdado do orderer pai
+	lastProposeAt    time.Time           // timestamp da última tentativa de proposta (ProposeIfDue)
+	closed           bool                // true depois que este SN já comitou (evita reprocessar)
+	seg              manager.Segment     // segmento ISS ao qual este SN pertence
+	members          []int32             // membros do grupo participando do consenso deste SN
+	quorum           int32               // maioria simples necessária para decidir (ver comentário em setSegment)
+	promisedBallot   uint64              // maior ballot já prometido por este nó (regra de promessa do Paxos)
+	prepared         bool                // true depois de reunir promessas suficientes (fase PREPARE concluída)
+	promiseCount     int32               // quantas PROMISE já recebemos na rodada do ballot atual
+	promisedFrom     map[int32]struct{}  // de quais nós já recebemos PROMISE (evita contar duplicata)
+	lastReqBatch     *request.Batch      // batch real cortado do bucket, se este nó é quem propôs (nil se seguiu ACCEPT de outro líder)
+	phase            instPhase           // fase atual do protocolo para este SN (Init/Prepared/AcceptSent/Committed)
+	lastVal          *pb.MPxValue        // valor (batch) sendo proposto/aceito na rodada atual
+	lastDigest       [32]byte            // digest de lastVal, comparado com o digest recebido no COMMIT
+	acceptCount      int32               // quantos ACCEPTED já recebemos na rodada do ballot atual
+	acceptedFrom     map[int32]struct{}  // de quais nós já recebemos ACCEPTED (evita contar duplicata)
+	acceptRtxEvery   time.Duration       // intervalo entre retransmissões de ACCEPT (2x proposeEvery)
+	lastAcceptAt     time.Time           // timestamp do último ACCEPT enviado; tick() usa para decidir se retransmite
+	roundStartAt     time.Time           // quando a rodada do ballot atual começou; tick() usa para decidir se troca de ballot
+	stuckSince       time.Time           // primeiro tick observado sem quorum (ver bloco GIVE-UP em tick())
+	prepSent         bool                // true depois que este nó, como líder inicial, já mandou seu primeiro PREPARE
+	leader           int32               // nó que este SN reconhece como líder atual (-1 = ainda não definido)
+	currentBallot    int64               // ballot que este nó está usando/reconhecendo agora (ver nextBallotAfter)
+	inProposal       bool                // trava reentrância de ProposeIfDue (evita duas propostas concorrentes)
+	acceptTs         int64               // timestamp de quando este nó aceitou o valor (métricas de latência)
+	lastAcceptedTs   int64               // timestamp do último ACCEPTED recebido (métricas de latência)
+	pendingCommitDigest *[32]byte        // digest de um COMMIT recebido mas ainda não entregável (esperando state transfer)
+	fetchInFlight    bool                // true enquanto uma busca de state transfer para este SN está em andamento
+	msgCh            chan *pb.ProtocolMessage // fila de mensagens de protocolo recebidas para esta instância
+	stopCh           chan struct{}       // fechado para sinalizar à goroutine worker que pare
+	wg               sync.WaitGroup      // usado por stopWorkers para esperar a goroutine worker terminar
 }
 
-func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, _ int, interval time.Duration) *mpxInstance {
+func newMPXInstance(parent *MultiPaxosOrderer, sn int32, announce AnnounceFn, interval time.Duration) *mpxInstance {
 	now := time.Now()
 	return &mpxInstance{
 		parent: parent, sn: sn, proposeEvery: interval, announce: announce,
@@ -84,6 +86,10 @@ func (i *mpxInstance) setSegment(seg manager.Segment) {
 	n := int32(len(i.members))
 	if n == 0 { n = int32(len(membership.AllNodeIDs())) }
 	if n < 1 { n = 1 }
+	// Quorum = maioria simples (n/2 + 1), não 2n/3+1 como em protocolos tolerantes a Bizantinos:
+	// MultiPaxos só tolera falhas por parada (crash), e duas maiorias de tamanho n/2+1 sempre
+	// se sobrepõem em pelo menos um nó — é isso que impede duas maiorias de decidirem valores
+	// diferentes para o mesmo número de sequência.
 	i.quorum = n/2 + 1
 }
 
@@ -100,7 +106,7 @@ func (i *mpxInstance) initGroupBuckets() {
 	i.groupBucketGroup = request.NewBucketGroup(i.groupBucketIDs)
 }
 
-func (i *mpxInstance) startWorkers(_ *sync.WaitGroup) {
+func (i *mpxInstance) startWorkers() {
 	i.wg.Add(1)
 	go func() {
 		defer i.wg.Done()
@@ -163,6 +169,16 @@ func (i *mpxInstance) handleMPxMsg(pm *pb.ProtocolMessage, mpx *pb.MPxMsg) {
 	}
 }
 
+// nextBallotAfter calcula um ballot estritamente maior que "seen". Um ballot é codificado em
+// 64 bits: os 32 bits mais altos são um contador de rodada (só cresce) e os 32 bits mais baixos
+// são o ID do nó proponente. Isso garante duas coisas: (1) ballots ficam totalmente ordenados
+// entre todos os nós do sistema, e (2) dois nós nunca produzem o mesmo ballot, porque o ID do
+// nó desempata rodadas iguais.
+func nextBallotAfter(seen uint64) int64 {
+	seenCounter := seen >> 32
+	return int64((seenCounter+1)<<32 | uint64(membership.OwnID))
+}
+
 func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -172,12 +188,16 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 	if i.groupBucketGroup == nil {
 		i.mu.Unlock(); i.initGroupBuckets(); i.mu.Lock()
 	}
+	// Alguém propôs um ballot mais novo que o nosso enquanto ainda nos achávamos líder:
+	// abandonamos a rodada atual e recomeçamos com um ballot ainda maior (ver nextBallotAfter).
 	if int64(ballot) > i.currentBallot && i.leader == membership.OwnID {
-		seenCounter := ballot >> 32
-		i.currentBallot = int64((seenCounter + 1) << 32 | uint64(membership.OwnID))
+		i.currentBallot = nextBallotAfter(ballot)
 		i.leader = -1; i.phase = phaseInit; i.prepared = false
 		i.prepSent = false; i.promiseCount = 0; i.promisedFrom = nil
 	}
+	// Regra de "promessa" do Paxos: um acceptor nunca aceita/promete um ballot menor que o
+	// maior que já prometeu. É isso que impede um líder antigo/lento de sobrescrever uma
+	// decisão já tomada por um líder mais novo.
 	if ballot < i.promisedBallot { return }
 	i.promisedBallot = ballot
 
@@ -231,10 +251,12 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	if i.phase == phaseCommitted { return }
 	ballot := uint64(a.GetBallot())
 	if ballot < i.promisedBallot { return }
+	// O ballot já codifica o ID de quem propôs (ver nextBallotAfter), então dois remetentes
+	// diferentes nunca deveriam apresentar o mesmo ballot — se isso acontece aqui, é uma
+	// mensagem duplicada/atrasada de uma rodada já conhecida, e a descartamos.
 	if i.leader != -1 && i.leader != from && ballot == i.promisedBallot { return }
 	i.promisedBallot = ballot
 	i.leader = from
-	if ballot >= i.acceptedBallot { i.acceptedBallot = ballot }
 
 	batch := a.GetBatch()
 	if batch == nil { return }
@@ -250,9 +272,7 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	resp := &pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
 		Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: accepted}}
 	if i.leader == membership.OwnID {
-		i.mu.Unlock()
-		i.onAccepted(resp, accepted.Type.(*pb.MPxMsg_Accepted).Accepted)
-		i.mu.Lock()
+		i.callUnlocked(func() { i.onAccepted(resp, accepted.Type.(*pb.MPxMsg_Accepted).Accepted) })
 		return
 	}
 	if i.parent.emit != nil { i.parent.emit(resp) }
@@ -280,10 +300,20 @@ func (i *mpxInstance) onAccepted(pm *pb.ProtocolMessage, _ *pb.MPxAccepted) {
 					},
 				}}}})
 		}
-		i.mu.Unlock()
-		i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Digest: i.lastDigest[:], GroupId: i.bucketId})
-		i.mu.Lock()
+		i.callUnlocked(func() {
+			i.onCommit(&pb.MPxCommit{Id: &pb.MPxInstanceId{Sn: i.sn}, Digest: i.lastDigest[:], GroupId: i.bucketId})
+		})
 	}
+}
+
+// callUnlocked chama f() depois de soltar o mutex desta instância e o retrava em seguida.
+// Usado quando este nó precisa processar sua própria mensagem localmente (ex: ele é o líder,
+// então não passa pela rede) — como f() reentra em métodos que também travam i.mu, soltar o
+// lock antes de chamar evita deadlock.
+func (i *mpxInstance) callUnlocked(f func()) {
+	i.mu.Unlock()
+	f()
+	i.mu.Lock()
 }
 
 func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
@@ -298,6 +328,10 @@ func (i *mpxInstance) onCommit(c *pb.MPxCommit) {
 	var cd [32]byte
 	copy(cd[:], c.GetDigest())
 	i.pendingCommitDigest = &cd
+	// Este nó pode não ter o valor que realmente atingiu quorum: ou porque ainda não recebeu
+	// nenhum ACCEPT para este SN, ou porque o valor que ele próprio aceitou (i.lastVal) é
+	// diferente do que venceu em outro lugar (ex: perdeu uma corrida de ballot). Nos dois
+	// casos, busca o valor comitado de verdade via state transfer em vez de confiar no local.
 	if i.lastVal == nil || i.lastVal.GetBatch() == nil {
 		if !i.fetchInFlight { i.fetchInFlight = true; go i.fetchCommittedValueFromGroup() }
 		return
@@ -356,7 +390,10 @@ func (i *mpxInstance) deliverCommit() {
 
 	b := i.lastVal.GetBatch()
 
-	// NOP (batch vazio)
+	// NOP (batch vazio): um valor ⊥ é um resultado legítimo e deliberado em Paxos, não um erro.
+	// Acontece quando não havia requisições pendentes na hora de propor, ou quando esta
+	// instância desistiu de esperar quorum (ver o bloco GIVE-UP em tick()). De qualquer forma,
+	// o número de sequência precisa ser preenchido para o log poder avançar.
 	if len(b.Requests) == 0 {
 		if i.announce != nil { i.announce(i.sn, b, i.lastDigest[:]) }
 		i.closed = true; traceCommit(i.sn, 0)
@@ -406,6 +443,9 @@ func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.leader != membership.OwnID || i.inProposal || i.closed { return }
+	// Já existe uma rodada de ACCEPT em aberto para este SN (enviamos um ACCEPT mas ainda não
+	// comitou) — não propõe de novo por cima, só espera essa rodada terminar ou o tick()
+	// decidir tentar de novo com um ballot maior.
 	if i.phase >= phaseAcceptSent && i.phase != phaseCommitted { return }
 	i.inProposal = true
 	defer func() { i.inProposal = false }()
@@ -465,16 +505,23 @@ func (i *mpxInstance) ProposeIfDue() {
 
 	if i.parent.emit != nil {
 		fmt.Printf("[MPX] sn=%d PROPOSE group=%d nReq=%d\n", i.sn, i.bucketId, reqs)
-		i.parent.emit(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
-			Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Accept{
-				Accept: &pb.MPxAccept{
-					Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-					Ballot: uint64(i.currentBallot), Batch: val.GetBatch(), GroupId: i.bucketId,
-				},
-			}}}})
+		i.sendAccept(val.GetBatch())
 	}
 	i.phase = phaseAcceptSent; i.lastAcceptAt = time.Now()
 	tracing.MainTrace.Event(tracing.PROPOSE, int64(i.sn), int64(reqs))
+}
+
+// sendAccept envia (ou reenvia) uma mensagem ACCEPT com o ballot atual desta instância para o
+// batch informado — usado tanto na primeira proposta (ProposeIfDue) quanto nas retransmissões
+// disparadas por tick(). O chamador já garante que i.parent.emit não é nil.
+func (i *mpxInstance) sendAccept(batch *pb.Batch) {
+	i.parent.emit(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
+		Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Accept{
+			Accept: &pb.MPxAccept{
+				Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+				Ballot: uint64(i.currentBallot), Batch: batch, GroupId: i.bucketId,
+			},
+		}}}})
 }
 
 func (i *mpxInstance) tick(now time.Time) {
@@ -488,11 +535,13 @@ func (i *mpxInstance) tick(now time.Time) {
 	// alcança quorum (porque peers suficientes saíram do grupo) trava o segmento inteiro
 	// e, por causa de WaitForCheckpoints, o resto do sweep de experimentos.
 	if i.stuckSince.IsZero() {
-		i.stuckSince = now
+		i.stuckSince = now // marca o primeiro tick sem quorum observado, não o último
 	} else if now.Sub(i.stuckSince) >= config.Config.ViewChangeTimeout {
 		fmt.Printf("[MPX] sn=%d GIVE-UP after %s sem quorum (%d/%d) — commitando NOP\n",
 			i.sn, config.Config.ViewChangeTimeout, i.acceptCount, i.quorum)
 		if i.lastReqBatch != nil {
+			// Devolve as requisições cortadas para o bucket em vez de perdê-las: como esta
+			// instância vai comitar ⊥, elas serão propostas de novo numa instância futura.
 			i.lastReqBatch.Resurrect()
 			i.lastReqBatch = nil
 		}
@@ -505,32 +554,20 @@ func (i *mpxInstance) tick(now time.Time) {
 
 	// Retransmissão de ACCEPT
 	if now.Sub(i.lastAcceptAt) >= i.acceptRtxEvery && i.parent.emit != nil && i.lastVal != nil {
-		i.parent.emit(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
-			Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Accept{
-				Accept: &pb.MPxAccept{
-					Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-					Ballot: uint64(i.currentBallot), Batch: i.lastVal.GetBatch(), GroupId: i.bucketId,
-				},
-			}}}})
+		i.sendAccept(i.lastVal.GetBatch())
 		i.lastAcceptAt = now
 	}
 
-	// Nova rodada com ballot maior
+	// Nova rodada com ballot maior: depois de retransmitir sem sucesso por um tempo, em vez de
+	// insistir no mesmo ballot para sempre, inicia uma troca de líder informal — volta para o
+	// início do protocolo (PREPARE) com um ballot mais alto. Isso é diferente do GIVE-UP acima:
+	// aqui ainda tentamos progredir dentro do protocolo normal; o GIVE-UP é o último recurso.
 	if now.Sub(i.roundStartAt) >= i.acceptRtxEvery*3 {
-		seenCounter := uint64(i.currentBallot) >> 32
-		i.currentBallot = int64((seenCounter + 1) << 32 | uint64(membership.OwnID))
+		i.currentBallot = nextBallotAfter(uint64(i.currentBallot))
 		i.phase = phaseInit; i.prepared = false
 		i.promiseCount = 0; i.promisedFrom = nil
 		i.acceptCount = 0; i.acceptedFrom = nil; i.roundStartAt = now
-		if i.parent.emit != nil {
-			i.parent.emit(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
-				Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-					Prepare: &pb.MPxPrepare{
-						Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-						Ballot: uint64(i.currentBallot), GroupId: i.bucketId,
-					},
-				}}}})
-		}
+		if i.parent.emit != nil { i.sendPrepare() }
 		i.lastAcceptAt = now
 	}
 }
@@ -542,7 +579,7 @@ func (i *mpxInstance) SetMembers(members []int32) {
 	copy(i.members, members)
 	n := int32(len(i.members))
 	if n < 1 { n = 1 }
-	i.quorum = n/2 + 1
+	i.quorum = n/2 + 1 // maioria simples — ver comentário em setSegment()
 
 	// Initialize groupBucketGroup eagerly (don't wait for onPrepare)
 	if i.groupBucketGroup == nil && i.bucketId < uint32(len(request.Buckets)) {
@@ -553,20 +590,16 @@ func (i *mpxInstance) SetMembers(members []int32) {
 	}
 
 	if i.leader == -1 {
+		// Líder deste SN é escolhido por round-robin determinístico entre os membros do grupo:
+		// todo nó calcula o mesmo dono só a partir do número de sequência, sem troca de
+		// mensagens. Por isso SNs diferentes do mesmo segmento normalmente têm líderes
+		// diferentes, mesmo sem nenhuma eleição explícita ter acontecido.
 		i.leader = i.members[i.sn%n]
 		fmt.Printf("[MPX] sn=%d SetMembers members=%v quorum=%d leader=%d\n", i.sn, members, i.quorum, i.leader)
 		i.currentBallot = int64(uint64(0)<<32 | uint64(i.leader))
 		if i.leader == membership.OwnID && !i.prepSent {
 			i.prepSent = true
-			if i.parent.emit != nil {
-				i.parent.emit(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
-					Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
-						Prepare: &pb.MPxPrepare{
-							Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
-							Ballot: uint64(i.currentBallot), GroupId: i.bucketId,
-						},
-					}}}})
-			}
+			if i.parent.emit != nil { i.sendPrepare() }
 		}
 	}
 
@@ -583,6 +616,19 @@ func (i *mpxInstance) SetMembers(members []int32) {
 func (i *mpxInstance) isInGroup(nodeID int32) bool {
 	for _, m := range i.members { if m == nodeID { return true } }
 	return false
+}
+
+// sendPrepare envia uma mensagem PREPARE com o ballot atual desta instância — usado tanto ao
+// assumir a liderança pela primeira vez (SetMembers) quanto ao iniciar uma nova rodada (tick).
+// O chamador já garante que i.parent.emit não é nil.
+func (i *mpxInstance) sendPrepare() {
+	i.parent.emit(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: i.sn,
+		Msg: &pb.ProtocolMessage_Multipaxos{Multipaxos: &pb.MPxMsg{Type: &pb.MPxMsg_Prepare{
+			Prepare: &pb.MPxPrepare{
+				Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)},
+				Ballot: uint64(i.currentBallot), GroupId: i.bucketId,
+			},
+		}}}})
 }
 
 func traceCommit(sn int32, size int) {

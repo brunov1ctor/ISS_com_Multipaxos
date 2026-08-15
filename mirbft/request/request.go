@@ -76,12 +76,6 @@ var (
 	// META publisher (injected by orderer to avoid import cycle)
 	metaPublisher func(uint64, []uint32)
 	
-	// ✅ LIVENESS: Callback para marcar request como recebida
-	requestReceivedMarker func(uint64, uint32)
-	
-	// ✅ LIVENESS: Callback para cache de requests
-	requestCacher func(uint64, *pb.ClientRequest)
-	
 	// Preprocessor customizado (ex: atomic multicast)
 	requestPreprocessor func(*pb.ClientRequest) bool
 )
@@ -237,16 +231,6 @@ func SetGroupMembersGetter(fn func(uint32) []int32) {
 // SetMETAPublisher configura publisher de META (injected by orderer)
 func SetMETAPublisher(fn func(uint64, []uint32)) {
 	metaPublisher = fn
-}
-
-// LIVENESS: SetRequestReceivedMarker configura callback para marcar requests recebidas
-func SetRequestReceivedMarker(fn func(uint64, uint32)) {
-	requestReceivedMarker = fn
-}
-
-// LIVENESS: SetRequestCacher configura callback para cache de requests
-func SetRequestCacher(fn func(uint64, *pb.ClientRequest)) {
-	requestCacher = fn
 }
 
 // SetRequestPreprocessor configura preprocessor customizado

@@ -22,6 +22,8 @@ import (
 
 type AnnounceFn func(sn int32, batch *pb.Batch, metadata []byte)
 
+// mpxDispatcher é um mapa concorrente sn -> *mpxInstance (sync.Map): dá acesso à instância
+// responsável por um número de sequência sem precisar de um mutex explícito no chamador.
 type mpxDispatcher struct { mm sync.Map }
 func (d *mpxDispatcher) load(sn int32) (*mpxInstance, bool) {
 	if v, ok := d.mm.Load(sn); ok { return v.(*mpxInstance), true }
@@ -29,45 +31,24 @@ func (d *mpxDispatcher) load(sn int32) (*mpxInstance, bool) {
 }
 func (d *mpxDispatcher) store(sn int32, inst *mpxInstance) { d.mm.Store(sn, inst) }
 
-type mpxBacklog struct {
-	mu sync.Mutex
-	qs map[int32][]*pb.ProtocolMessage
-}
-func newMPXBacklog() mpxBacklog { return mpxBacklog{qs: make(map[int32][]*pb.ProtocolMessage)} }
-func (b *mpxBacklog) drainTo(sn int32, f func(*pb.ProtocolMessage)) {
-	b.mu.Lock()
-	items := b.qs[sn]; delete(b.qs, sn)
-	b.mu.Unlock()
-	for _, m := range items { f(m) }
-}
-
 type MultiPaxosOrderer struct {
-	mgr            manager.Manager
-	segmentChan    chan manager.Segment
-	dispatcher     mpxDispatcher
-	backlog        mpxBacklog
-	last           int32
-	instMu         sync.RWMutex
-	startOnce      sync.Once
-	emit           func(pm *pb.ProtocolMessage)
-	announce       AnnounceFn
-	maxBatchSize   int
-	proposeEvery   time.Duration
-	stopWg         sync.WaitGroup
-	am             *AtomicMulticast
-	ownedGroupID   uint32
-	skipHandlerRegistration bool
-	currentSegCancel func()
-	segMu          sync.Mutex
-	currentFirstSN int32
-	firstSNMu      sync.RWMutex
+	segmentChan    chan manager.Segment          // segmentos novos publicados pelo manager (consumido por Start)
+	dispatcher     mpxDispatcher                 // sn -> instância MultiPaxos ativa para esse SN
+	last           int32                         // maior SN já finalizado/estabilizado; mensagens com sn <= last são ignoradas
+	instMu         sync.RWMutex                  // protege a leitura+escrita condicional de "last" em killSegment
+	startOnce      sync.Once                     // garante que Start() só arma a goroutine de segmentos uma vez
+	emit           func(pm *pb.ProtocolMessage)  // envia uma mensagem de protocolo aos peers do grupo (ou broadcast)
+	announce       AnnounceFn                    // callback chamado quando um SN é comitado, entrega ao log local
+	maxBatchSize   int                           // tamanho máximo de batch ao cortar requisições (config.Config.BatchSize)
+	proposeEvery   time.Duration                 // período do ticker que dispara tick()/ProposeIfDue() por SN
+	am             *AtomicMulticast              // registro de grupos/membros compartilhado (multicast atômico)
+	ownedGroupID   uint32                        // grupo de dados administrado por este orderer (0 = broadcast/standalone)
+	skipHandlerRegistration bool                 // true quando este orderer é filho de um MultiPaxosMulticastOrderer
 	commitNotifyCh chan struct{} // shared channel from parent multicast orderer
 	batchCounter   int32         // shared alternating counter for CutBatch (cross-op vs single-group)
 }
 
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
-	o.mgr = mgr
-	o.backlog = newMPXBacklog()
 	o.last = -1
 	o.maxBatchSize = int(config.Config.BatchSize)
 	o.proposeEvery = config.Config.BatchTimeout
@@ -173,8 +154,7 @@ func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		inst = o.ensureInstance(sn)
 		if mpx != nil { inst.bucketId = extractGroupID(mpx) }
 		o.dispatcher.store(sn, inst)
-		inst.startWorkers(&o.stopWg)
-		o.backlog.drainTo(sn, inst.enqueue)
+		inst.startWorkers()
 	}
 	inst.enqueue(pm)
 }
@@ -196,8 +176,6 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	// Broadcast: stride = number of parallel segments (leaders)
 	// Multicast: stride = number of groups
 	if isBroadcast { numGroups = int32(len(membership.AllNodeIDs())) }
-
-	o.firstSNMu.Lock(); o.currentFirstSN = seg.FirstSN(); o.firstSNMu.Unlock()
 
 	groupId := o.ownedGroupID
 
@@ -235,35 +213,36 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			case <-commitCh:
 				if currentSN > seg.LastSN() { continue }
 				if mirlog.GetEntry(currentSN) != nil { currentSN += numGroups; continue }
-				inst, ok := o.dispatcher.load(currentSN)
-				if !ok || inst == nil {
-					inst = o.ensureInstance(currentSN)
-					inst.setSegment(seg); inst.bucketId = gid; inst.SetMembers(members)
-					o.dispatcher.store(currentSN, inst)
-					inst.startWorkers(&o.stopWg)
-					o.backlog.drainTo(currentSN, inst.enqueue)
-				}
+				inst := o.getOrCreateInstance(currentSN, gid, seg, members)
 				inst.ProposeIfDue()
 			case <-t.C:
 				if currentSN > seg.LastSN() { continue }
 				now := time.Now()
 				if mirlog.GetEntry(currentSN) != nil { currentSN += numGroups; continue }
-				inst, ok := o.dispatcher.load(currentSN)
-				if !ok || inst == nil {
-					inst = o.ensureInstance(currentSN)
-					inst.setSegment(seg); inst.bucketId = gid; inst.SetMembers(members)
-					o.dispatcher.store(currentSN, inst)
-					inst.startWorkers(&o.stopWg)
-					o.backlog.drainTo(currentSN, inst.enqueue)
-				} else {
-					inst.mu.Lock()
-					if inst.bucketId == 0 { inst.bucketId = gid }
-					inst.mu.Unlock()
-				}
+				inst := o.getOrCreateInstance(currentSN, gid, seg, members)
 				inst.tick(now); inst.ProposeIfDue()
 			}
 		}
 	}(groupId)
+}
+
+// getOrCreateInstance retorna a instância MultiPaxos já registrada para o SN informado, ou cria
+// e registra uma nova (associando segmento, grupo e membros) se ainda não existir. Extraído
+// porque runSegment precisa fazer exatamente esse "carrega ou cria" tanto ao acordar por commit
+// quanto a cada tick do relógio.
+func (o *MultiPaxosOrderer) getOrCreateInstance(sn int32, gid uint32, seg manager.Segment, members []int32) *mpxInstance {
+	inst, ok := o.dispatcher.load(sn)
+	if !ok || inst == nil {
+		inst = o.ensureInstance(sn)
+		inst.setSegment(seg); inst.bucketId = gid; inst.SetMembers(members)
+		o.dispatcher.store(sn, inst)
+		inst.startWorkers()
+		return inst
+	}
+	inst.mu.Lock()
+	if inst.bucketId == 0 { inst.bucketId = gid }
+	inst.mu.Unlock()
+	return inst
 }
 
 func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
@@ -290,7 +269,7 @@ func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 }
 
 func (o *MultiPaxosOrderer) ensureInstance(sn int32) *mpxInstance {
-	return newMPXInstance(o, sn, o.announce, o.maxBatchSize, o.proposeEvery)
+	return newMPXInstance(o, sn, o.announce, o.proposeEvery)
 }
 
 // RunSegmentDirect runs a segment immediately without waiting for the segment channel.
