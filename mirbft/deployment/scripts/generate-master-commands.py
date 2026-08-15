@@ -4,12 +4,12 @@ import os
 import sys
 from collections import defaultdict
 
-CLIENT_TIMEOUT = 480000  # ms
-SIGNAL_DELAY = "5s"
-STOP_SLAVES_DELAY = "3s"
-SCP_RETRY_COUNT = "10"
-
-CLIENT_TIMEOUT = 480000  # ms
+# Tempo maximo que o master espera o cliente terminar (duration + drainTime + margem) antes de
+# desistir e marcar o experimento como FAILED. Piso teorico atual: 30s (duration) + 60s
+# (ClientDrainTime) = 90s; 180s da uma folga de 2x sobre isso. Reduzido de 480000ms apos analise
+# mostrar que o overhead real de coordenacao do master ~dobra esse valor (~16min reais por falha
+# com o valor antigo), custando horas de sweep desnecessariamente em experimentos ja saturados.
+CLIENT_TIMEOUT = 180000  # ms
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
