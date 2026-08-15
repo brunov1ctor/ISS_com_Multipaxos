@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/crypto"
 	"github.com/hyperledger-labs/mirbft/log"
@@ -35,23 +34,20 @@ var globalMulticastOrderer *MultiPaxosMulticastOrderer
 func GetGlobalMulticastOrderer() *MultiPaxosMulticastOrderer { return globalMulticastOrderer }
 
 type MultiPaxosMulticastOrderer struct {
-	groupOrderers  map[uint32]*MultiPaxosOrderer
-	orderersMu     sync.RWMutex
-	am             *AtomicMulticast
+	groupOrderers  map[uint32]*MultiPaxosOrderer // grupo de dados -> orderer MultiPaxos responsável (grupo 0 é tratado à parte, pelo Sequencer)
+	orderersMu     sync.RWMutex                  // protege groupOrderers
+	am             *AtomicMulticast              // registro compartilhado de grupos/membros (multicast atômico)
 	seq            *Sequencer // Sequenciador dedicado (independente do ISS)
-	mgr            manager.Manager
-	groupsFilePath string
-	missingRequests map[uint64]map[uint32]time.Time
-	missingMu       sync.RWMutex
-	requestCache    map[uint64]*pb.ClientRequest
-	cacheMu         sync.RWMutex
+	mgr            manager.Manager               // manager do ISS; usado só para assinar novos segmentos (Start -> SubscribeOrderer)
+	groupsFilePath string                        // caminho do YAML com a definição dos grupos (groups.yml)
 	// CSMR Output Processing: proxy tracks pending requests
 	proxyPending   sync.Map // key: "clientId:clientSn" -> int32 (proxyNodeID)
 }
 
+// PendingCommit é um commit já decidido pelo grupo mas ainda esperando o META (ver
+// aDeliverInternal em sequencer.go) para poder ser entregue na ordem global correta. A chave
+// (gsn, groupID) já fica em s.pendingCommits[groupID][gsn], então não precisa ser duplicada aqui.
 type PendingCommit struct {
-	gsn      uint64
-	groupID  uint32
 	batch    *pb.Batch
 	announce func(int32, *pb.Batch, []byte)
 	sn       int32
@@ -65,8 +61,6 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	o.am = NewAtomicMulticast()
 	fmt.Printf("[MULTICAST] NewAtomicMulticast: group0 members=%v\n", o.am.GetGroupMembers(0))
 	o.groupOrderers = make(map[uint32]*MultiPaxosOrderer)
-	o.missingRequests = make(map[uint64]map[uint32]time.Time)
-	o.requestCache = make(map[uint64]*pb.ClientRequest)
 	// Load groups
 	if o.groupsFilePath == "" { o.groupsFilePath = "/tmp/iss-Bruno/config/groups.yml" }
 	if err := o.am.LoadGroupsFromYAML(o.groupsFilePath); err != nil {
@@ -74,7 +68,6 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	}
 	o.am.UpdateSequencerGroup()
 	fmt.Printf("[MULTICAST] Groups loaded: %v group0=%v\n", o.am.GetDefinedGroups(), o.am.GetGroupMembers(0))
-	o.am.SetSequencer(o)
 	// Create standalone sequencer (independent from ISS)
 	o.seq = NewSequencer(o.am.GetGroupMembers(0))
 	o.seq.Start()
@@ -90,10 +83,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	messenger.OrdererMsgHandler = o.HandleMessage
 	request.SetGSNGenerator(o.seq.GetNextGSN)
 	request.SetGroupMembersGetter(o.GetGroupMembers)
-	request.SetRequestReceivedMarker(o.MarkRequestReceived)
-	request.SetRequestCacher(o.CacheRequest)
 	request.SetRequestPreprocessor(o.PreprocessRequest)
-	go o.reforwardWatchdog()
 }
 
 func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
@@ -113,7 +103,7 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 		inst.bucketId = gid
 		inst.SetMembers(members)
 		ord.dispatcher.store(firstSN, inst)
-		inst.startWorkers(&ord.stopWg)
+		inst.startWorkers()
 		ord.RunSegmentDirect(initialSeg)
 		fmt.Printf("[MULTICAST] Bootstrap: group=%d firstSN=%d members=%v ready\n", gid, firstSN, members)
 	}
@@ -204,7 +194,6 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 				// (watermark is managed by the proxy that received from client)
 				request.AddDirectToBucket(req)
 			}
-			if req.GSN > 0 && req.GroupId > 0 { o.MarkRequestReceived(req.GSN, req.GroupId) }
 		}
 		return
 	}
@@ -273,29 +262,6 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 		messenger.EnqueueMsg(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: -1,
 			Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{Req: req}}}, nodeID)
 	}
-}
-
-func (o *MultiPaxosMulticastOrderer) sendToGroupExceptSelf(req *pb.ClientRequest, groupID uint32) {
-	for _, nodeID := range o.am.GetGroupMembers(groupID) {
-		if nodeID == membership.OwnID { continue }
-		messenger.EnqueueMsg(&pb.ProtocolMessage{SenderId: membership.OwnID, Sn: -1,
-			Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{Req: req}}}, nodeID)
-	}
-}
-
-func (o *MultiPaxosMulticastOrderer) MarkRequestReceived(gsn uint64, groupID uint32) {
-	o.missingMu.Lock()
-	defer o.missingMu.Unlock()
-	if groups, exists := o.missingRequests[gsn]; exists {
-		delete(groups, groupID)
-		if len(groups) == 0 { delete(o.missingRequests, gsn) }
-	}
-}
-
-func (o *MultiPaxosMulticastOrderer) CacheRequest(gsn uint64, req *pb.ClientRequest) {
-	o.cacheMu.Lock()
-	defer o.cacheMu.Unlock()
-	if _, exists := o.requestCache[gsn]; !exists { o.requestCache[gsn] = req }
 }
 
 // CSMR Output Processing: handle COMMIT_NOTIFY from group replicas
@@ -370,37 +336,6 @@ func (o *MultiPaxosMulticastOrderer) NotifyProxy(batch *pb.Batch, sn int32) {
 	}
 }
 
-func (o *MultiPaxosMulticastOrderer) reforwardWatchdog() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		o.missingMu.RLock()
-		now := time.Now()
-		toReforward := make(map[uint64][]uint32)
-		for gsn, groups := range o.missingRequests {
-			for gid, ts := range groups {
-				if now.Sub(ts) > 60*time.Second { toReforward[gsn] = append(toReforward[gsn], gid) }
-			}
-		}
-		o.missingMu.RUnlock()
-		for gsn, groups := range toReforward {
-			o.cacheMu.RLock()
-			req, exists := o.requestCache[gsn]
-			o.cacheMu.RUnlock()
-			if !exists { continue }
-			for _, gid := range groups {
-				o.sendToGroup(&pb.ClientRequest{
-					RequestId: req.RequestId, Payload: req.Payload, Signature: req.Signature,
-					Pubkey: req.Pubkey, GroupId: gid, TouchedGroups: req.TouchedGroups, GSN: gsn,
-				}, gid)
-				o.missingMu.Lock()
-				if o.missingRequests[gsn] != nil { o.missingRequests[gsn][gid] = time.Now() }
-				o.missingMu.Unlock()
-			}
-		}
-	}
-}
-
 func (o *MultiPaxosMulticastOrderer) Sign(data []byte) ([]byte, error) {
 	if membership.OwnPrivKey == nil { return nil, fmt.Errorf("private key not initialized") }
 	return crypto.Sign(data, membership.OwnPrivKey)
@@ -435,7 +370,12 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	if strings.HasPrefix(string(req.Payload), "SYSTEM:COMMIT_NOTIFY") { return true }
 	if req.GetRequestId() == nil { return true }
 
-	// Already preprocessed
+	// Já foi preprocessada antes — cada guard cobre um caso de requisição que já foi roteada
+	// por este método anteriormente (ex: reenviada de outro nó) e não deve ser processada de novo:
+	//   1) cross-group que já tem GSN (já passou pelo sequenciador e foi despachada);
+	//   2) single-group que já foi roteada pro seu único grupo;
+	//   3) cross-group que ainda não tem GSN, mas já foi marcada com GroupId (está em trânsito
+	//      pra um grupo específico, aguardando o GSN chegar por outro caminho).
 	if req.GroupId > 0 && req.GSN > 0 { return false }
 	if req.GroupId > 0 && len(req.TouchedGroups) == 1 { return false }
 	if req.GroupId > 0 && len(req.TouchedGroups) > 1 && req.GSN == 0 { return false }
@@ -470,14 +410,16 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		return true
 	}
 
-	// Cross-group: get GSN + publish META + fanout
+	// Cross-group: requisição toca mais de um grupo, então não dá pra confiar só no consenso
+	// de um grupo pra ordená-la. Em vez disso: (1) pede um número de sequência global (GSN) ao
+	// sequenciador — é isso que garante uma ordem única entre operações de grupos diferentes;
+	// (2) publica um META avisando todos os grupos envolvidos qual GSN foi atribuído; (3) manda
+	// uma cópia da requisição pra cada grupo tocado. Cada grupo roda seu próprio MultiPaxos
+	// independente, e o GSN + META é o que permite depois reconstruir a ordem relativa correta
+	// entre eles sem precisar de uma única instância de consenso global.
 	gsn := o.seq.GetNextGSN()
 	if gsn == 0 { return true }
 	o.seq.PublishMETA(gsn, req.TouchedGroups)
-	o.CacheRequest(gsn, &pb.ClientRequest{
-		RequestId: req.RequestId, Payload: req.Payload, Signature: req.Signature,
-		Pubkey: req.Pubkey, TouchedGroups: req.TouchedGroups, GSN: gsn,
-	})
 	for _, groupID := range req.TouchedGroups {
 		o.sendToGroup(&pb.ClientRequest{
 			RequestId: req.RequestId, Payload: req.Payload, Signature: req.Signature,

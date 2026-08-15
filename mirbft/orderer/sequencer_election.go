@@ -59,8 +59,9 @@ func (s *Sequencer) startElectionTimerLocked() {
 	s.electionTimer = time.AfterFunc(timeout, s.onElectionTimeout)
 }
 
-// onElectionTimeout dispara quando o seguidor não ouve o líder por tempo
-// demais: incrementa o termo, vira candidato, vota em si mesmo e pede votos.
+// onElectionTimeout dispara quando o timer de eleição deste nó expira sem heartbeat do líder
+// nem vitória — seguidor sem notícia do líder, ou candidato cuja própria eleição não deu quórum
+// a tempo. Em ambos os casos, incrementa o termo, vira candidato, vota em si mesmo e pede votos.
 func (s *Sequencer) onElectionTimeout() {
 	s.electMu.Lock()
 	if s.status == leader {
@@ -214,8 +215,9 @@ func (s *Sequencer) leaderHeartbeatLoop(term int32) {
 	}
 }
 
-// HandleHeartbeat processa um heartbeat recebido do líder atual (ou de um
-// candidato/líder com termo mais recente).
+// HandleHeartbeat processa um heartbeat recebido do líder atual, ou de um líder
+// com termo mais recente que este nó ainda não reconhecia (só líderes enviam
+// heartbeat — candidatos enviam pedido de voto, tratado por HandleVoteRequest).
 func (s *Sequencer) HandleHeartbeat(payload string, senderID int32) {
 	var term int64
 	var leaderID int32
@@ -234,7 +236,6 @@ func (s *Sequencer) HandleHeartbeat(payload string, senderID int32) {
 	s.leader = leaderID
 	s.votedFor = leaderID
 	s.status = follower
-	s.lastHeartbeatAt = time.Now()
 	s.startElectionTimerLocked()
 	s.electMu.Unlock()
 
