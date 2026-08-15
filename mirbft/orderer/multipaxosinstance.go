@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/manager"
 	"github.com/hyperledger-labs/mirbft/membership"
 	"github.com/hyperledger-labs/mirbft/request"
@@ -51,6 +52,7 @@ type mpxInstance struct {
 	acceptRtxEvery   time.Duration
 	lastAcceptAt     time.Time
 	roundStartAt     time.Time
+	stuckSince       time.Time
 	prepSent         bool
 	leader           int32
 	currentBallot    int64
@@ -479,6 +481,27 @@ func (i *mpxInstance) tick(now time.Time) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.phase != phaseAcceptSent || i.acceptCount >= i.quorum { return }
+
+	// SB4 (Eventual Progress, ISS/EuroSys'22 §2.2): se este SN não consegue quorum por
+	// tempo suficiente (líder suspeito/peers indisponíveis), desiste e commita ⊥ (NOP) em
+	// vez de retransmitir/trocar de ballot para sempre. Sem isso, um peer que nunca mais
+	// alcança quorum (porque peers suficientes saíram do grupo) trava o segmento inteiro
+	// e, por causa de WaitForCheckpoints, o resto do sweep de experimentos.
+	if i.stuckSince.IsZero() {
+		i.stuckSince = now
+	} else if now.Sub(i.stuckSince) >= config.Config.ViewChangeTimeout {
+		fmt.Printf("[MPX] sn=%d GIVE-UP after %s sem quorum (%d/%d) — commitando NOP\n",
+			i.sn, config.Config.ViewChangeTimeout, i.acceptCount, i.quorum)
+		if i.lastReqBatch != nil {
+			i.lastReqBatch.Resurrect()
+			i.lastReqBatch = nil
+		}
+		emptyBatch := &pb.Batch{Requests: nil}
+		i.lastVal = &pb.MPxValue{Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)}, Batch: emptyBatch}
+		copy(i.lastDigest[:], request.BatchDigest(emptyBatch))
+		i.deliverCommit()
+		return
+	}
 
 	// Retransmissão de ACCEPT
 	if now.Sub(i.lastAcceptAt) >= i.acceptRtxEvery && i.parent.emit != nil && i.lastVal != nil {
