@@ -30,6 +30,7 @@ const (
 	startDelay                = 500 * time.Millisecond
 	receivedEntriesBufferSize = 4096
 	entryFetchInterval        = 500 * time.Millisecond
+	maxEntryFetchInterval     = 5 * time.Second
 )
 
 type missingEntry struct {
@@ -61,8 +62,11 @@ func CatchUp(checkpoint *pb.StableCheckpoint) {
 	// Give the protocol some time to acquire the entries normally.
 	time.Sleep(startDelay)
 
-	sources := make([]int32, len(checkpoint.Proof))
-	for peerID, _ := range checkpoint.Proof {
+	sources := make([]int32, 0, len(checkpoint.Proof))
+	for peerID := range checkpoint.Proof {
+		if peerID == membership.OwnID {
+			continue // a node can never supply its own missing entry
+		}
 		sources = append(sources, peerID)
 	}
 
@@ -109,6 +113,9 @@ func FetchMissingEntry(sn int32, sources []int32) {
 	}
 
 	// Keep sending entry request messages until the entry appears in the log.
+	// Rotates through shuffledSources on every retry instead of hammering a single
+	// (possibly unresponsive) peer forever, and caps the backoff so a source that
+	// never had the entry doesn't stall retries into near-silence.
 	sIndex := 0
 	delay := entryFetchInterval
 	for log.GetEntry(sn) == nil {
@@ -121,7 +128,10 @@ func FetchMissingEntry(sn int32, sources []int32) {
 		messenger.EnqueueMsg(msg, shuffledSources[sIndex])
 
 		time.Sleep(delay)
-		delay *= 2
+		sIndex = (sIndex + 1) % len(shuffledSources)
+		if delay *= 2; delay > maxEntryFetchInterval {
+			delay = maxEntryFetchInterval
+		}
 	}
 }
 
