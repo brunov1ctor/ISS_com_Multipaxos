@@ -40,8 +40,13 @@ faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 da
 clients1="4"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
-systemSizes="5" #"4 16 64 128"  Must be sorted in ascending order!
-failureCounts=(0 0 0 0) # For each system size, the corresponding failure count (on top of the correct nodes)
+systemSizes="5 5" #"4 16 64 128"  Must be sorted in ascending order! (repeating "5" runs the whole sweep a 2nd time
+                  # at the same base size, this time carving failureCounts[1] failures OUT of those same 5 nodes
+                  # instead of adding extra ones -- see the numFailures check around "numPeers += numFailures" below)
+failureCounts=(0 3) # For each system size, the corresponding failure count.
+                     # 2nd pass: Failures=3 out of 5 total peers, quorum=floor(5/2)+1=3, so only 2 stay alive --
+                     # permanently below quorum. Carved out of the existing 5 physical peers rather than added
+                     # on top, since adding would need extra Emulab nodes the current topology doesn't have.
 reuseFaulty=true  # If true, both correct and faulty peers will have the same tag and will be launched together, with the same config file.
                   # The failure count is only expressed as a parameter in (every peer's) config file, and even the faulty peers will see
                   # Faulty=false in their config file. They need to derive their behavior from the Failures config field (and potentially
@@ -117,17 +122,28 @@ crossOpRatios="5 10 20 50 75"  # [%] Percentage of client requests that are cros
 
 # Used to skip certain parameter combinations.
 #
-# crossOpRatioOrderers is NOT a sweep parameter (it doesn't add combinations) --
-# it's a filter for the crossOpRatios sweep above: only these orderers get
-# tested across the full crossOpRatios list; every other orderer only runs at
-# the "20" baseline (the same ratio used for the main Table 1 / Figures 2-3
-# comparison). This is what lets a single deploy.sh cover both the protocol
-# comparison and the cross-op-ratio ablation without wasting runs on
-# protocols that don't have that test in the paper (PBFT/HotStuff/Raft don't
-# read GroupId/TouchedGroups at all, so the ratio has no effect on them).
+# crossOpRatioOrderers is a filter, not a sweep parameter: only these orderers get tested across
+# the full crossOpRatios list; every other orderer only runs at the "20" baseline. Avoids wasting
+# runs on protocols that don't read GroupId/TouchedGroups (PBFT/HotStuff/Raft), where the ratio
+# has no effect anyway.
 crossOpRatioOrderers="MultiPaxosMulticast MultiPaxos"
 
 function skip() {
+  if [ "$numFailures" -gt 0 ]; then
+    # When failures>0, leaderPolicy is forced to SimulatedRandomFailures further down regardless of
+    # $targetLeaderPolicy (Simple or Single), so both leaderPolicies values would otherwise produce
+    # byte-identical experiments. Keep only the first (Simple) pass to avoid generating exact duplicates.
+    if [ "$targetLeaderPolicy" = "Single" ]; then
+      return 0 # skip
+    fi
+    # The permanent-quorum-loss recovery in multipaxosinstance.go only exists for MultiPaxos/
+    # MultiPaxosMulticast (both share mpxInstance). PBFT/HotStuff/Raft have no equivalent, so under
+    # this pass's permanent quorum loss they'd just hang for the full experiment duration. Restrict
+    # the failover pass to the two orderers that actually have the recovery.
+    if [ "$orderer" != "MultiPaxos" ] && [ "$orderer" != "MultiPaxosMulticast" ]; then
+      return 0 # skip
+    fi
+  fi
   if [ "$crossOpRatio" != "20" ]; then
     local relevant=false
     for o in $crossOpRatioOrderers; do
@@ -708,7 +724,9 @@ for numPeers in $systemSizes; do
   numFailures=${failureCounts[0]}
   failureCounts=(${failureCounts[@]:1})
 
-  if $reuseFaulty; then
+  # Failures are carved out of the existing peers, not added on top, whenever numFailures>0 --
+  # see the comment on failureCounts above for why. When numFailures=0 this is a no-op either way.
+  if $reuseFaulty && [ "$numFailures" -eq 0 ]; then
     numPeers=$((numPeers + numFailures))
   fi
 
