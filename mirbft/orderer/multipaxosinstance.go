@@ -348,11 +348,20 @@ func (i *mpxInstance) onMissingEntry(me *pb.MissingEntry) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if me == nil || me.Batch == nil { return }
+	if i.phase == phaseCommitted { return } // already have this SN, nothing to do
+
 	i.lastVal = &pb.MPxValue{Batch: me.Batch}
 	copy(i.lastDigest[:], request.BatchDigest(me.Batch))
-	if i.pendingCommitDigest == nil { return }
-	if *i.pendingCommitDigest != i.lastDigest { i.fetchInFlight = false; return }
-	i.fetchInFlight = false; i.pendingCommitDigest = nil
+
+	if i.pendingCommitDigest != nil {
+		// We were specifically waiting for a cross-group committed value (fetchCommittedValueFromGroup);
+		// only accept a response whose digest matches what we asked for.
+		if *i.pendingCommitDigest != i.lastDigest { i.fetchInFlight = false; return }
+		i.fetchInFlight = false; i.pendingCommitDigest = nil
+	}
+	// Either the cross-group digest matched above, or this is a generic checkpoint-driven
+	// catch-up (statetransfer.CatchUp/FetchMissingEntry) with no pending digest to match --
+	// in both cases, commit the fetched entry to fill the gap in this instance's SN.
 	i.deliverCommit()
 }
 
