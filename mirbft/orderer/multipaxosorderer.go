@@ -136,7 +136,13 @@ func (o *MultiPaxosOrderer) Start(wg *sync.WaitGroup) {
 
 func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	sn := pm.Sn
-	if sn <= atomic.LoadInt32(&o.last) { return }
+	// MissingEntry catch-up responses are for SNs this node fell behind on -- by definition
+	// often <= o.last once other segments have since progressed. Exempt them from the
+	// staleness filter below, or a legitimately fetched entry would be silently dropped here
+	// and the requesting node would retry forever without ever being able to apply it.
+	if _, isMissingEntry := pm.Msg.(*pb.ProtocolMessage_MissingEntry); !isMissingEntry {
+		if sn <= atomic.LoadInt32(&o.last) { return }
+	}
 	mpx := pm.GetMultipaxos()
 	if mpx != nil {
 		groupID := extractGroupID(mpx)
