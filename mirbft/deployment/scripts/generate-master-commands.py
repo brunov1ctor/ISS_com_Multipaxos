@@ -14,6 +14,14 @@ SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 
+# Tempo maximo de espera pelo marcador QUIESCENT de cada peer (ver maintainQuiescenceMarker em
+# cmd/orderingpeer/main.go) antes de mandar SIGINT de qualquer forma. Bounded on purpose: se o
+# marcador nunca aparecer (por qualquer motivo), nao pode travar o sweep -- so reduzimos a chance
+# da corrida de encerramento, nao criamos uma nova forma de travar para sempre.
+QUIESCENCE_TIMEOUT_MS = 15000
+# Tempo de espera apos a escalada para SIGKILL (rede de seguranca final, incondicional).
+KILL_SETTLE_DELAY = "2s"
+
 BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
     f"/users/{os.environ.get('USER', 'user')}/iss",
@@ -281,17 +289,47 @@ def runClients(expID, clients):
         output("sync {0}".format(c))
     output("")
 
-def stopPeers(peers):
+def stopPeers(peers, expID):
     """Stop orderingpeer without terminating discoveryslave.
-    
-    Send SIGINT and wait a fixed delay for graceful shutdown.
-    Using 'wait for' instead of 'exec-wait' to avoid WaitGroup panic
-    when slaves reconnect or respond multiple times.
+
+    Um peer que ainda esta no meio de um catch-up de entradas atrasadas
+    (statetransfer.FetchMissingEntry) e interrompido por SIGINT pode tentar
+    enviar uma mensagem a outro peer que ja recebeu seu proprio SIGINT e
+    fechou a conexao -- esse envio falha (EOF) e o peer remetente fica preso
+    para sempre incapaz de responder a ninguem (ver Limitacoes no artigo).
+    Isso ja aconteceu de forma reproduzivel na bateria de experimentos.
+
+    Para evitar essa corrida, esperamos primeiro (com timeout limitado) que
+    cada peer sinalize, via o marcador QUIESCENT que ele proprio mantem
+    (maintainQuiescenceMarker em cmd/orderingpeer/main.go), que nao tem
+    nenhum catch-up em andamento -- so entao mandamos o SIGINT. A espera e
+    limitada de proposito: se o marcador nunca aparecer, seguimos para o
+    SIGINT (e a escalada para SIGKILL logo depois) do mesmo jeito, sem
+    travar o sweep. A escalada SIGKILL incondicional continua existindo como
+    rede de seguranca final, para qualquer OUTRO motivo de um peer nao sair
+    sozinho -- nao so para esta corrida especifica.
+
+    Usa 'wait for' (nao 'exec-wait') apos o SIGINT/SIGKILL para evitar o
+    WaitGroup panic ja conhecido quando slaves reconectam ou respondem mais
+    de uma vez.
     """
+    marker = "{0}/QUIESCENT".format(_exp_slave_dir(expID))
+
+    output("# wait for peers to signal no pending catch-up (bounded, best-effort)")
+    for p in peers:
+        output("exec-start {0} - wait-quiescent.sh {1} {2}".format(p, marker, QUIESCENCE_TIMEOUT_MS))
+    for p in peers:
+        output("exec-wait {0} {1}".format(p, QUIESCENCE_TIMEOUT_MS + FS_SETTLE_DELAY_MS))
+
     output("# stop peers (send SIGINT to orderingpeer)")
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
+
+    output("# escalate to SIGKILL for any peer that still didn't exit (final safety net)")
+    for p in peers:
+        output("exec-signal {0} SIGKILL".format(p))
+    output("wait for {0}".format(KILL_SETTLE_DELAY))
     output("")
 
 def saveConfig(expID, slaves):
@@ -356,7 +394,7 @@ def generateCommands(expID, peers, clients):
     setBandwidth(expID, bandwidths)
     startPeers(expID, list(peers))
     runClients(expID, list(clients))
-    stopPeers(list(peers))
+    stopPeers(list(peers), expID)
     unsetBandwidth(expID, bandwidths)
 
     saveConfig(expID, slaves)
