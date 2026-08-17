@@ -29,6 +29,14 @@ import (
 const (
 	// TODO: Remove this ugly ad-hoc sampling and use the mechanism provided by the tracing package
 	msgBatchTraceSampling = 128
+
+	// Backoff between reconnect attempts on a BufferedMultiConnection after a send failure.
+	// Capped the same way as the catch-up fetch backoff in statetransfer (maxEntryFetchInterval),
+	// so a permanently unreachable peer (e.g. one that already exited for this experiment) doesn't
+	// make this goroutine spin hot -- it just backs off quietly until the process is killed by the
+	// deploy harness at the end of the experiment.
+	reconnectInitialDelay = 500 * time.Millisecond
+	reconnectMaxDelay     = 5 * time.Second
 )
 
 type PeerConnection interface {
@@ -231,11 +239,18 @@ type BufferedMultiConnection struct {
 
 	sendChans         []chan *pb.ProtocolMessage
 	sendPriorityChans []chan *pb.ProtocolMessage
+
+	// redial re-establishes a connection to the same peer this BufferedMultiConnection was created
+	// for. Used by sendMessages to recover from a send failure instead of marking the connection
+	// permanently closed. May be nil (e.g. in tests), in which case sendMessages falls back to the
+	// old permanent-closure behavior.
+	redial func() pb.Messenger_ListenClient
 }
 
 func NewBufferedMultiConnection(msgSinks []pb.Messenger_ListenClient,
 	priorityMsgSinks []pb.Messenger_ListenClient,
-	bufSize int) *BufferedMultiConnection {
+	bufSize int,
+	redial func() pb.Messenger_ListenClient) *BufferedMultiConnection {
 
 	bmc := &BufferedMultiConnection{
 		msgSinks:          msgSinks,
@@ -244,6 +259,7 @@ func NewBufferedMultiConnection(msgSinks []pb.Messenger_ListenClient,
 		nextPriorityChan:  0,
 		sendChans:         make([]chan *pb.ProtocolMessage, len(msgSinks), len(msgSinks)),
 		sendPriorityChans: make([]chan *pb.ProtocolMessage, len(priorityMsgSinks), len(priorityMsgSinks)),
+		redial:            redial,
 	}
 
 	for i, msgSink := range bmc.msgSinks {
@@ -318,19 +334,55 @@ func (bmc *BufferedMultiConnection) Close() {
 }
 
 // Reads messages from input channel and submits them to the underlying message sink.
-// Closes underlying message sink when any of input channel is closed.
+// On a send failure, attempts to reconnect (with backoff) instead of permanently closing the
+// connection: a single failed send (e.g. a brief network blip, or the peer having already exited
+// at the end of an experiment) used to mark the whole connection as closed forever, silently
+// dropping every subsequent message for the rest of the process's lifetime (see Limitações no
+// artigo). The failed message itself is dropped -- the consensus protocols running on top already
+// tolerate message loss via retransmission -- but the connection keeps working for future sends.
+// Closes underlying message sink when the input channel is closed.
 func (bmc *BufferedMultiConnection) sendMessages(msgChan chan *pb.ProtocolMessage, msgSink pb.Messenger_ListenClient) {
 	for msg := range msgChan {
 		checkForHotStuffProposal(msg, "Sending HotStuff proposal.")
 		if err := msgSink.Send(msg); err != nil {
-			logger.Error().Err(err).Msg("Failed to send protocol message. Dropping all future outgoing protocol messages.")
-			atomic.StoreInt32(&bmc.nextChan, -1)
-			atomic.StoreInt32(&bmc.nextPriorityChan, -1)
+			logger.Warn().Err(err).Msg("Failed to send protocol message. Reconnecting.")
+			if newSink := bmc.reconnectWithBackoff(); newSink != nil {
+				msgSink = newSink
+			} else {
+				// No redial function configured: fall back to the old permanent-closure behavior.
+				atomic.StoreInt32(&bmc.nextChan, -1)
+				atomic.StoreInt32(&bmc.nextPriorityChan, -1)
+				return
+			}
 		}
 	}
 
 	if err := msgSink.CloseSend(); err != nil {
 		logger.Error().Err(err).Msg("Failed to close connection.")
+	}
+}
+
+// reconnectWithBackoff retries bmc.redial with capped exponential backoff until it succeeds.
+// Returns nil immediately if bmc.redial is nil. Loops forever otherwise: a peer that is
+// permanently gone (e.g. exited at the end of an experiment) will simply keep failing to redial
+// until this process itself is terminated by the deploy harness -- there is no separate signal
+// available to distinguish "gone forever" from "temporarily unreachable", and giving up here would
+// reintroduce the original bug for the temporarily-unreachable case.
+func (bmc *BufferedMultiConnection) reconnectWithBackoff() pb.Messenger_ListenClient {
+	if bmc.redial == nil {
+		return nil
+	}
+
+	delay := reconnectInitialDelay
+	for {
+		if sink := bmc.redial(); sink != nil {
+			logger.Info().Msg("Reconnected to peer after send failure.")
+			return sink
+		}
+		time.Sleep(delay)
+		if delay *= 2; delay > reconnectMaxDelay {
+			delay = reconnectMaxDelay
+		}
 	}
 }
 

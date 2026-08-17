@@ -17,7 +17,6 @@ package statetransfer
 import (
 	"fmt"
 	"math/rand"
-	"sync/atomic"
 	"time"
 
 	logger "github.com/rs/zerolog/log"
@@ -44,22 +43,10 @@ var (
 	missingEntries    = make(map[int32]*missingEntry)
 	newMissingEntries = make(chan *missingEntry)
 	receivedEntries   = make(chan *pb.MissingEntry, receivedEntriesBufferSize)
-
-	// pendingFetches tracks how many entries are currently being fetched via catch-up.
-	// Kept separate from the missingEntries map (owned exclusively by processMissingEntries)
-	// so it can be read concurrently from other goroutines via PendingFetches.
-	pendingFetches int32
 )
 
 func Init() {
 	go processMissingEntries()
-}
-
-// PendingFetches returns how many log entries this node is currently trying to catch up on.
-// Used to signal quiescence (no catch-up in flight) before this node accepts a shutdown signal --
-// see maintainQuiescenceMarker in cmd/orderingpeer/main.go.
-func PendingFetches() int32 {
-	return atomic.LoadInt32(&pendingFetches)
 }
 
 func HandleMessage(msg *pb.ProtocolMessage) {
@@ -162,7 +149,6 @@ func processMissingEntries() {
 				break
 			}
 			missingEntries[missingEntry.Sn] = missingEntry
-			atomic.AddInt32(&pendingFetches, 1)
 		case resp, ok := <-receivedEntries:
 			if !ok {
 				break
@@ -190,7 +176,6 @@ func processResponse(resp *pb.MissingEntry) error {
 
 	// Clean up to prevent handling duplicate responses
 	delete(missingEntries, resp.Sn)
-	atomic.AddInt32(&pendingFetches, -1)
 
 	// Create a new entry object
 	entry := &log.Entry{
