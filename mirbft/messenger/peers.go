@@ -38,6 +38,11 @@ import (
 const (
 	// Maximum size of a gRPC message
 	maxMessageSize = 134217728 // 128 MB
+
+	// Bounds a single reconnect dial attempt (see createConnectionTimeout / reconnectWithBackoff in
+	// peerconnection.go), so a peer that never answers doesn't hold the retry goroutine hostage in a
+	// single blocking gRPC dial -- backoff between attempts happens between these bounded tries.
+	reconnectDialTimeout = 2 * time.Second
 )
 
 // Simulated Crash Flag. It is set true if the peer is supposed to have crashed.
@@ -357,8 +362,14 @@ func connectToPeer(nodeID int32) PeerConnection {
 	}
 
 	// Create a new peer connection (wrapped around the network connection).
+	// The redial closure lets the connection recover from a send failure by re-establishing a new
+	// underlying gRPC stream to the same peer, instead of considering the connection permanently
+	// closed (see BufferedMultiConnection.sendMessages).
+	redial := func() pb.Messenger_ListenClient {
+		return createConnectionTimeout(addrString, dialOpts, reconnectDialTimeout)
+	}
 	var connection PeerConnection
-	connection = NewBufferedMultiConnection(basicMsgSinks, priorityMsgSinks, config.Config.OutMessageBufSize)
+	connection = NewBufferedMultiConnection(basicMsgSinks, priorityMsgSinks, config.Config.OutMessageBufSize, redial)
 
 	// If configured, add batching to the connection
 	// Note that the batched connection includes "infinite" buffering for the message batches.
@@ -512,6 +523,36 @@ func createConnection(addr string, dialOpts []grpc.DialOption) pb.Messenger_List
 	}
 
 	// Return the message sing connected to the peer.
+	return msgSink
+}
+
+// Like createConnection, but bounds the dial attempt with a timeout instead of blocking
+// indefinitely (via grpc.WithBlock in dialOpts with no deadline of its own). Used for reconnect
+// attempts after a send failure, where an unbounded blocking dial against a peer that is
+// permanently gone (e.g. already exited at the end of an experiment) would hold the retry
+// goroutine in a single dial call instead of backing off between bounded attempts. The Listen()
+// stream itself, once established, still uses a background context with no deadline, same as the
+// initial connection -- only the dial is time-bounded.
+func createConnectionTimeout(addr string, dialOpts []grpc.DialOption, timeout time.Duration) pb.Messenger_ListenClient {
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	conn, err := grpc.DialContext(ctx, addr, dialOpts...)
+	if err != nil {
+		logger.Warn().Err(err).Str("addrStr", addr).Msg("Could not reconnect to node.")
+		return nil
+	}
+
+	client := pb.NewMessengerClient(conn)
+
+	msgSink, err := client.Listen(context.Background())
+	if err != nil {
+		logger.Warn().Err(err).Str("addrStr", addr).Msg("Could not invoke Listen RPC while reconnecting.")
+		conn.Close()
+		return nil
+	}
+
 	return msgSink
 }
 

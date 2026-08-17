@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -195,42 +194,12 @@ func main() {
 	go mngr.Start(&wg)
 	go ord.Start(&wg)
 
-	// Signal to the deploy harness, via a marker file, whenever this node has no catch-up fetch
-	// in flight -- lets it wait for a real quiescence confirmation before sending SIGINT at the
-	// end of an experiment, instead of a fixed delay that can land while catch-up is still
-	// running (see mirbft/deployment/scripts/generate-master-commands.py's stopPeers).
-	if len(os.Args) > 5 {
-		go maintainQuiescenceMarker(filepath.Join(filepath.Dir(os.Args[5]), "QUIESCENT"))
-	}
-
 	logger.Info().Msg("All modules started. Waiting for termination (SIGINT or process exit).")
 
 	// Wait for all modules to finish.
 	wg.Wait()
 
 	logger.Info().Msg("orderingpeer terminated cleanly.")
-}
-
-// maintainQuiescenceMarker keeps a marker file's existence in sync with whether this node
-// currently has any catch-up fetch in flight (statetransfer.PendingFetches). The deploy harness
-// polls for this file before sending SIGINT at the end of an experiment, so a node that fell
-// behind and is still fetching missing entries doesn't get interrupted mid-catch-up -- which is
-// what caused a real, reproducible permanent hang (see Limitações in the article): a node still
-// sending a message during catch-up to another node that had already been signaled and closed
-// its connection got an unrecoverable send failure and never made progress again.
-func maintainQuiescenceMarker(path string) {
-	present := false
-	for range time.Tick(200 * time.Millisecond) {
-		quiescent := statetransfer.PendingFetches() == 0
-		if quiescent && !present {
-			if err := os.WriteFile(path, nil, 0644); err == nil {
-				present = true
-			}
-		} else if !quiescent && present {
-			os.Remove(path)
-			present = false
-		}
-	}
 }
 
 // Enables and starts the profiler of used resources.
