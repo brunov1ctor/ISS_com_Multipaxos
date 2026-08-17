@@ -333,8 +333,13 @@ copy_required_assets() {
     "${this_dir}/global-vars.sh" \
     "${remote_user}@${ip}:${remote_work_dir}/scripts/global-vars.sh"
 
+  scp_with_retry "${scp_retries}" \
+    "${this_dir}/wait-quiescent.sh" \
+    "${remote_user}@${ip}:${remote_work_dir}/scripts/wait-quiescent.sh"
+
   ssh ${ssh_options} "${remote_user}@${ip}" "\
     chmod +x '${remote_work_dir}/scripts/start-slave.sh' \
+             '${remote_work_dir}/scripts/wait-quiescent.sh' \
     2>/dev/null || true
   " </dev/null || true
 
