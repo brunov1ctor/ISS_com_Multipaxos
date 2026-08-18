@@ -393,7 +393,7 @@ function deployMachines() {
   # Generate machine template files
   for location in $locations; do
     templateFile="$machineType-$location.cmt"
-    cat $machineType | jq --arg dc "$location" '. + {datacenter: {name: $dc}}' > $templateFile
+    python3 -c "import json; d=json.load(open('$machineType')); d.setdefault('datacenter',{})['name']='$location'; print(json.dumps(d))" > $templateFile 2>/dev/null || cp $machineType $templateFile
     machineTemplates="$machineTemplates $templateFile"
     numLocations=$((numLocations + 1))
   done
