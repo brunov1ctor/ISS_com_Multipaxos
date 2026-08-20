@@ -347,8 +347,9 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		nextSubmitTime := time.Now().UnixNano() / 1000 // Submit first request immediately
 
 		// Submit requests
+		// numRequests == 0 means unlimited: only the ClientRunTime timer stops the client.
 		var i int32
-		for i = int32(0); i < int32(c.numRequests) && atomic.LoadInt32(&c.stop) == 0; i++ {
+		for i = int32(0); (c.numRequests == 0 || i < int32(c.numRequests)) && atomic.LoadInt32(&c.stop) == 0; i++ {
 
 			if config.Config.RequestRate != -1 {
 				now := time.Now().UnixNano() / 1000
