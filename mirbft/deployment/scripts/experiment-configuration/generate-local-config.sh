@@ -99,7 +99,7 @@ batchsizes="4096"           # [requests]
 batchrates="32"             # [batches/s]
 minBatchTimeout="1000"      # [ms]
 maxBatchTimeout="4000"      # [ms]
-segmentLengths="51"         # [entries] (Single policy overrides this to singleLeaderEpoch=256 automatically below)
+segmentLengths="16"         # [entries] (Single policy overrides this to singleLeaderEpoch=256 automatically below)
 viewChangeTimeouts="60000"  # [ms]
 drain_time_ms="60000"       # [ms]  Should be >= viewChangeTimeout to allow all responses to arrive
 nodeToLeaderRatios="1"      # How many nodes are initally leaders, set to 1 to have initially all nodes in the leaderset
