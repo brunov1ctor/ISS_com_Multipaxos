@@ -338,16 +338,11 @@ perClientRate() {
 }
 
 requestsPerClient() {
-    local duration=$1
-    local totalRate=$2
-    local totalClients=$3
-
-    # The factor 2 is a margin to compensate for non-uniform client throughput.
-    # Every client creates twice as many requests as would be needed to fill experiment duration
-    # if the throughput was uniform across all clients.
-    # The experiment duration itself is enforced separately by clients stopping after $duration seconds,
-    # even if they did not submit all requests.
-    echo $(( 2 * $duration*$totalRate/$totalClients ))
+    # Return 0 = no request limit. The client stops exclusively by the ClientRunTime timer
+    # (duration * 1000 ms), which is always set. This avoids the previous issue where slow
+    # orderers (Pbft/HotStuff/Raft, ~500 req/s) would exhaust a fixed request count before
+    # the timer fired, leaving the truncated measurement window empty.
+    echo 0
 }
 
 clientWatermarks() {
