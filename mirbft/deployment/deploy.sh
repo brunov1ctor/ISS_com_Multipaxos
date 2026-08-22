@@ -136,8 +136,12 @@ ensure_local_binaries() {
 usage() {
   cat >&2 <<EOF
 Uso:
+  $0 local new [config_generator]
+  $0 local <exp_data_dir>
   $0 remote <instance-info> new [config_generator]
   $0 remote <instance-info> <exp_data_dir>
+  $0 cloud <instance-info> new [config_generator]
+  $0 cloud <instance-info> <exp_data_dir>
 EOF
   exit 1
 }
@@ -150,7 +154,7 @@ pick_next_experiment_dir() {
   mkdir -p "$root"
 
   while :; do
-    candidate="$(printf "%s/remote-%04d" "$root" "$idx")"
+    candidate="$(printf "%s/${depl_type}-%04d" "$root" "$idx")"
 
     # Se o diretório do experimento já existe, considera usado e pula.
     if [ -d "$candidate" ]; then
@@ -177,30 +181,29 @@ fi
 depl_type="$1"
 shift
 
-if [ "$depl_type" != "remote" ]; then
-  log_err "Este deploy.sh suporta apenas 'remote'."
-  exit 2
-fi
-
-if [ "$#" -lt 1 ]; then
-  usage
-fi
-
-instance_info_file="$1"
-shift || true
-
-if [[ ! -f "$instance_info_file" ]]; then
-  if [[ -f "$deploy_dir/$instance_info_file" ]]; then
-    instance_info_file="$deploy_dir/$instance_info_file"
-  elif [[ -f "$deploy_dir/scripts/$instance_info_file" ]]; then
-    instance_info_file="$deploy_dir/scripts/$instance_info_file"
-  else
-    log_err "Arquivo de instance-info não encontrado: $instance_info_file"
-    exit 1
+if [ "$depl_type" = "local" ]; then
+  instance_info_file=""
+else
+  if [ "$#" -lt 1 ]; then
+    usage
   fi
+  instance_info_file="$1"
+  shift || true
 fi
 
-log_info "Using instance-info file: $instance_info_file"
+if [ -n "$instance_info_file" ]; then
+  if [[ ! -f "$instance_info_file" ]]; then
+    if [[ -f "$deploy_dir/$instance_info_file" ]]; then
+      instance_info_file="$deploy_dir/$instance_info_file"
+    elif [[ -f "$deploy_dir/scripts/$instance_info_file" ]]; then
+      instance_info_file="$deploy_dir/scripts/$instance_info_file"
+    else
+      log_err "Arquivo de instance-info não encontrado: $instance_info_file"
+      exit 1
+    fi
+  fi
+  log_info "Using instance-info file: $instance_info_file"
+fi
 
 if [ "$#" -lt 1 ]; then
   usage
@@ -291,11 +294,25 @@ if $init_only; then
   exit 0
 fi
 
-log_sep "[REMOTE] Deploy remoto + start"
-export exp_data_dir
-export instance_info_file
-
-bash "$deploy_dir/scripts/deploy-remote.sh"
+# Start the deployment
+if [ "$depl_type" = "local" ]; then
+  log_sep "[LOCAL] Deploy local + start"
+  export exp_data_dir
+  source "$deploy_dir/scripts/deploy-local.sh"
+elif [ "$depl_type" = "cloud" ]; then
+  log_sep "[CLOUD] Deploy cloud + start"
+  export exp_data_dir
+  export instance_info_file
+  source "$deploy_dir/scripts/deploy-cloud.sh"
+elif [ "$depl_type" = "remote" ]; then
+  log_sep "[REMOTE] Deploy remoto + start"
+  export exp_data_dir
+  export instance_info_file
+  bash "$deploy_dir/scripts/deploy-remote.sh"
+else
+  >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
+  exit 1
+fi
 
 echo "Generating result summary."
 scripts/analyze/summarize.sh $exp_data_dir/$csv_filename $exp_data_dir/published/experiment-output 2> /dev/null | tee $exp_data_dir/$result_summary_file
