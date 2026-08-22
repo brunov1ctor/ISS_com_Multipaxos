@@ -231,8 +231,9 @@ def setBandwidth(expID, bandwidths):
                 "exec-start {0} {1}/FAILED echo Could not set bandwidth; "
                 "exec-wait {0} {2}".format(s, _exp_slave_dir(expID), FS_SETTLE_DELAY_MS)
             )
-    for s in bandwidths:
-        output("sync {0}".format(s))
+    for s, bandwidth in bandwidths.items():
+        if bandwidth != "0" and bandwidth != "unlimited":
+            output("sync {0}".format(s))
     output("")
 
 def unsetBandwidth(expID, bandwidths):
@@ -245,8 +246,9 @@ def unsetBandwidth(expID, bandwidths):
                 )
             )
             output("exec-wait {0} 5000".format(s))
-    for s in bandwidths:
-        output("sync {0}".format(s))
+    for s, bandwidth in bandwidths.items():
+        if bandwidth != "0" and bandwidth != "unlimited":
+            output("sync {0}".format(s))
     output("")
 
 def startPeers(expID, peers):
@@ -281,7 +283,6 @@ def runClients(expID, clients):
             "exec-start {0} {1}/FAILED echo Client failed or timed out; "
             "exec-wait {0} {3}".format(c, _exp_slave_dir(expID), timeout, FS_SETTLE_DELAY_MS)
         )
-        output("sync {0}".format(c))
     output("")
 
 def stopPeers(peers):
