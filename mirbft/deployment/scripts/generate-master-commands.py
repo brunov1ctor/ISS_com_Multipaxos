@@ -14,9 +14,6 @@ SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY = "3s"
 SCP_RETRY_COUNT = "10"
 
-# Tempo de espera apos a escalada para SIGKILL (rede de seguranca final, incondicional).
-KILL_SETTLE_DELAY = "2s"
-
 BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
     f"/users/{os.environ.get('USER', 'user')}/iss",
@@ -286,39 +283,10 @@ def runClients(expID, clients):
     output("")
 
 def stopPeers(peers):
-    """Stop orderingpeer without terminating discoveryslave.
-
-    Um peer que ainda esta no meio de um catch-up de entradas atrasadas
-    (statetransfer.FetchMissingEntry) e interrompido por SIGINT pode tentar
-    enviar uma mensagem a outro peer que ja recebeu seu proprio SIGINT e
-    fechou a conexao -- esse envio falha (EOF) e o peer remetente fica preso
-    para sempre incapaz de responder a ninguem (ver Limitacoes no artigo).
-    Isso ja aconteceu de forma reproduzivel na bateria de experimentos.
-
-    Tentamos anteriormente esperar (com timeout limitado) um marcador de
-    quiescencia por peer antes do SIGINT, mas essa abordagem provou ser
-    inviavel nesta infraestrutura: o discoveryslave so admite um comando em
-    execucao por vez por no, e o orderingpeer (ja em execucao durante todo o
-    experimento) ocupa esse unico slot, entao o comando auxiliar de espera e
-    sempre rejeitado (ver Limitacoes no artigo). Removida essa tentativa,
-    ficamos apenas com a escalada incondicional para SIGKILL como rede de
-    seguranca: nao elimina a janela de corrida em si, mas garante que o
-    sweep nunca trave indefinidamente esperando um peer preso, seja qual for
-    o motivo.
-
-    Usa 'wait for' (nao 'exec-wait') apos o SIGINT/SIGKILL para evitar o
-    WaitGroup panic ja conhecido quando slaves reconectam ou respondem mais
-    de uma vez.
-    """
-    output("# stop peers (send SIGINT to orderingpeer)")
+    output("# Stop peers.")
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
-
-    output("# escalate to SIGKILL for any peer that still didn't exit (final safety net)")
-    for p in peers:
-        output("exec-signal {0} SIGKILL".format(p))
-    output("wait for {0}".format(KILL_SETTLE_DELAY))
     output("")
 
 def saveConfig(expID, slaves):
