@@ -310,6 +310,18 @@ cmdLoop:
 						exitMessage = "Error sending signal to program: " + err.Error()
 						exitStatus = 2
 					} else {
+						// Reap the child in background so it does not become a zombie.
+						// ExecWait is not called after ExecSignal in the current protocol.
+						cmdToReap := execCmd
+						outFileToClose := execOutFile
+						execCmd = nil
+						execOutFile = nil
+						go func() {
+							_ = cmdToReap.Wait()
+							if outFileToClose != nil {
+								_ = outFileToClose.Close()
+							}
+						}()
 						exitMessage = "OK"
 					}
 				}
