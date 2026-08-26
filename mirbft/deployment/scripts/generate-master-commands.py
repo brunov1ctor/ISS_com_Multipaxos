@@ -290,7 +290,7 @@ def stopPeers(peers):
     # Force-kill any lingering orderingpeer that did not exit after SIGINT.
     for p in peers:
         output("exec-start {0} - pkill -9 -f {1}".format(p, ORDERINGPEER_BIN))
-        output("exec-wait {0} 5000".format(p))
+    output("wait for {0}".format(STOP_SLAVES_DELAY))
     output("")
 
 def saveConfig(expID, slaves):
