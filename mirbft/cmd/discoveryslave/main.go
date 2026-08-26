@@ -229,8 +229,9 @@ cmdLoop:
 
 			logger.Info().Str("cmdType", "ExecWait").Msg("Received command.")
 			if execCmd == nil {
-				exitMessage = "No program to wait for."
-				exitStatus = 1
+				// Processo já terminou antes do exec-wait chegar (ex: pkill rápido). OK.
+				exitMessage = "OK (no program running)"
+				exitStatus = 0
 			} else {
 
 				// Send a INT signal to the process after the timeout.
