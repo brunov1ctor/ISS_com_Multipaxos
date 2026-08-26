@@ -284,6 +284,9 @@ def runClients(expID, clients):
 
 def stopPeers(peers):
     output("# Stop peers.")
+    # sync garante que todos os slaves processaram o exec-wait anterior antes do sinal.
+    for p in peers:
+        output("sync {0}".format(p))
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))

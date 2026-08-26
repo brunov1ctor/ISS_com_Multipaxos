@@ -289,8 +289,9 @@ cmdLoop:
 			exitStatus = 0
 			logger.Info().Str("cmdType", "ExecSignal").Msg("Received command.")
 			if execCmd == nil {
-				exitMessage = "No program to signal."
-				exitStatus = 1
+				// Processo já terminou antes do sinal chegar. OK.
+				exitMessage = "OK (no program to signal)"
+				exitStatus = 0
 			} else {
 				// Translate Signum enum to syscall.Signal
 				var sig syscall.Signal
