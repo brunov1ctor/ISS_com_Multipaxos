@@ -11,7 +11,7 @@ from collections import defaultdict
 # com o valor antigo), custando horas de sweep desnecessariamente em experimentos ja saturados.
 CLIENT_TIMEOUT = 180000  # ms
 SIGNAL_DELAY = "5s"
-STOP_SLAVES_DELAY = "3s"
+STOP_SLAVES_DELAY_MS = 5000  # exec-wait timeout for pkill (pkill exit=1 when no match is OK)
 SCP_RETRY_COUNT = "10"
 
 BASE_DIR = os.environ.get(
@@ -290,7 +290,9 @@ def stopPeers(peers):
     # Force-kill any lingering orderingpeer that did not exit after SIGINT.
     for p in peers:
         output("exec-start {0} - pkill -9 -f {1}".format(p, ORDERINGPEER_BIN))
-    output("wait for {0}".format(STOP_SLAVES_DELAY))
+    # exec-wait obrigatório: sem ele execCmd=pkill bloqueia o próximo exec-start.
+    for p in peers:
+        output("exec-wait {0} {1}".format(p, STOP_SLAVES_DELAY_MS))
     output("")
 
 def saveConfig(expID, slaves):
