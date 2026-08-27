@@ -284,18 +284,13 @@ def runClients(expID, clients):
 
 def stopPeers(peers):
     output("# Stop peers.")
-    # sync garante que todos os slaves processaram o exec-wait anterior antes do sinal.
-    for p in peers:
-        output("sync {0}".format(p))
     for p in peers:
         output("exec-signal {0} SIGINT".format(p))
     output("wait for {0}".format(SIGNAL_DELAY))
-    # Force-kill any lingering orderingpeer that did not exit after SIGINT.
+    # SIGKILL via exec-signal: zera execCmd atomicamente no slave, sem race com exec-start.
     for p in peers:
-        output("exec-start {0} - pkill -9 -f {1}".format(p, ORDERINGPEER_BIN))
-    # exec-wait obrigatório: sem ele execCmd=pkill bloqueia o próximo exec-start.
-    for p in peers:
-        output("exec-wait {0} {1}".format(p, STOP_SLAVES_DELAY_MS))
+        output("exec-signal {0} SIGKILL".format(p))
+    output("wait for {0}s".format(STOP_SLAVES_DELAY_MS // 1000))
     output("")
 
 def saveConfig(expID, slaves):
