@@ -215,17 +215,6 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 		// Update slave status
 		s.(*slave).Status = status.Status
 
-		// If the slave is reporting a stale cmdId (lower than what we're waiting for),
-		// it likely reconnected after a drop. Unblock the responseWG for the lost response.
-		if atomic.LoadInt32(&ds.waitingForCmd) > status.CmdId && ds.responseWG != nil {
-			logger.Warn().
-				Int32("slaveID", status.SlaveId).
-				Int32("staleCmdId", status.CmdId).
-				Int32("waitingFor", atomic.LoadInt32(&ds.waitingForCmd)).
-				Msg("Slave reconnected with stale cmdId; unblocking responseWG.")
-			ds.responseWG.Done()
-		}
-
 		// If status is non-zero, report response as an error.
 		if s.(*slave).Status != 0 {
 			logger.Error().
@@ -282,26 +271,8 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 			}},
 		}, nil
 	} else {
-		// Slave ID is unknown but not -1: this happens when a slave reconnects after
-		// a connection drop and its old entry was already removed, or when the slave
-		// sends a stale ID. Treat it as a new registration so it can rejoin.
-		logger.Warn().
-			Int32("slaveID", status.SlaveId).
-			Str("addrPort", p.Addr.String()).
-			Msg("Unknown slave ID; re-registering as new slave.")
-
-		// If the master is waiting for this (now-dead) slave to respond to a command,
-		// unblock the WaitGroup so the experiment can continue.
-		if atomic.LoadInt32(&ds.waitingForCmd) == status.CmdId && ds.responseWG != nil {
-			ds.responseWG.Done()
-		}
-
-		newSlave := ds.addNewSlave(ctx, status.Tag)
-		return &pb.MasterCommand{
-			Cmd: &pb.MasterCommand_InitSlave{InitSlave: &pb.InitSlave{
-				SlaveId: newSlave.SlaveID,
-			}},
-		}, nil
+		logger.Error().Int32("slaveID", status.SlaveId).Msg("Unknown slave.")
+		return nil, nil // TODO: return a more meaningful error value.
 	}
 }
 
