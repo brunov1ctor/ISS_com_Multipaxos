@@ -257,9 +257,12 @@ log_info "ISS_EXPERIMENT_OUTPUT_DIR=$ISS_EXPERIMENT_OUTPUT_DIR"
 log_sep "[INIT] Gerando config/deployment para o novo experimento"
 
 if $new_experiment; then
-  if [[ ! -x "$config_generator_script" ]]; then
+  # Resolve config_generator_script to absolute path before any cd
+  if [[ "$config_generator_script" != /* ]]; then
     if [[ -x "$deploy_dir/$config_generator_script" ]]; then
       config_generator_script="$deploy_dir/$config_generator_script"
+    elif [[ -x "$(pwd)/$config_generator_script" ]]; then
+      config_generator_script="$(pwd)/$config_generator_script"
     fi
   fi
 
@@ -274,6 +277,7 @@ if $new_experiment; then
   log_info "exp_data_dir    : $exp_data_dir"
 
   # evita que o "set -u" (nounset) deste deploy.sh vaze pro generate-config.sh via SHELLOPTS
+  # cd para deploy_dir para que paths relativos no script (config-file-templates/, scripts/) resolvam corretamente
   ( cd "$deploy_dir" && env -u SHELLOPTS bash "$config_generator_script" "$exp_data_dir" ) | tee "$exp_data_dir/logs/config-generator.log"
 
   if [ ! -f "$exp_data_dir/$csv_filename" ] || [ ! -f "$exp_data_dir/$dpl_filename" ]; then
