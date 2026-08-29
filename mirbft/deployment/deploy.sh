@@ -202,6 +202,8 @@ if [ -n "$instance_info_file" ]; then
       exit 1
     fi
   fi
+  # Always resolve to absolute path
+  instance_info_file="$(cd "$(dirname "$instance_info_file")" && pwd)/$(basename "$instance_info_file")"
   log_info "Using instance-info file: $instance_info_file"
 fi
 
