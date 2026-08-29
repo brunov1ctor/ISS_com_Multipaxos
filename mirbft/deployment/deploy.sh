@@ -274,7 +274,7 @@ if $new_experiment; then
   log_info "exp_data_dir    : $exp_data_dir"
 
   # evita que o "set -u" (nounset) deste deploy.sh vaze pro generate-config.sh via SHELLOPTS
-  env -u SHELLOPTS bash "$config_generator_script" "$exp_data_dir" | tee "$exp_data_dir/logs/config-generator.log"
+  ( cd "$deploy_dir" && env -u SHELLOPTS bash "$config_generator_script" "$exp_data_dir" ) | tee "$exp_data_dir/logs/config-generator.log"
 
   if [ ! -f "$exp_data_dir/$csv_filename" ] || [ ! -f "$exp_data_dir/$dpl_filename" ]; then
     log_err "Config generator não gerou $csv_filename e/ou $dpl_filename em $exp_data_dir"
