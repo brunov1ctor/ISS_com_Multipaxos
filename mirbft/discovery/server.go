@@ -95,6 +95,11 @@ type DiscoveryServer struct {
 	// this variable stores the maximum exit status of all the responses to that command.
 	// This is used with "exec-wait" to detect if a timeout occurred.
 	maxCommandExitStatus int32
+
+	// Stores the last signal sent via exec-signal.
+	// exec-wait skips blocking if the last signal was SIGKILL,
+	// since SIGKILL may disrupt slave gRPC connections making confirmations impossible.
+	lastSignalSent string
 }
 
 // Creates and initializes a new instance of a discovery server.

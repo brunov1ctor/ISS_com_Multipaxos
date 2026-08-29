@@ -158,11 +158,15 @@ func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
 			Str("timeoutCommands", timeoutCommands).
 			Msg("Processing command.")
 
-		// Wait until this command returns and potentially react by executing timeoutCommands
-		atomic.StoreInt32(&ds.waitingForCmd, mc.CmdId)
-		atomic.StoreInt32(&ds.maxCommandExitStatus, 0)
-		ds.responseWG = &sync.WaitGroup{}
-		ds.responseWG.Add(ds.countSlaves(tag))
+		if ds.lastSignalSent == "SIGKILL" {
+			logger.Info().Msg("Skipping exec-wait block after SIGKILL.")
+		} else {
+			// Wait until this command returns and potentially react by executing timeoutCommands
+			atomic.StoreInt32(&ds.waitingForCmd, mc.CmdId)
+			atomic.StoreInt32(&ds.maxCommandExitStatus, 0)
+			ds.responseWG = &sync.WaitGroup{}
+			ds.responseWG.Add(ds.countSlaves(tag))
+		}
 
 	// Send a signal to the process executing the program (started using exec-start)
 	// See pb.ExecSignal_Signum_value for possible parameter values.
@@ -172,6 +176,7 @@ func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
 		mc.Cmd = &pb.MasterCommand_ExecSignal{
 			ExecSignal: &pb.ExecSignal{Signum: pb.ExecSignal_Signum(pb.ExecSignal_Signum_value[sigVal])},
 		}
+		ds.lastSignalSent = sigVal
 		logger.Info().
 			Str("cmdName", "exec-signal").
 			Str("tag", tag).
