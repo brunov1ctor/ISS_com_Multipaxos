@@ -312,7 +312,7 @@ elif [ "$depl_type" = "remote" ]; then
   log_sep "[REMOTE] Deploy remoto + start"
   export exp_data_dir
   export instance_info_file
-  bash "$deploy_dir/scripts/deploy-remote.sh"
+  ( cd "$deploy_dir" && bash "scripts/deploy-remote.sh" )
 else
   >&2 echo "$0: unknown deployment type: $depl_type (allowed values: local, cloud, remote)"
   exit 1
