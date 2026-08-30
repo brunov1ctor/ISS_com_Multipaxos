@@ -27,6 +27,14 @@ import (
 	logger "github.com/rs/zerolog/log"
 )
 
+// Bounds the blocking send in enqueueMasterCommand. If a slave's NextCommand goroutine is not
+// currently waiting to receive (e.g. its gRPC stream dropped and hasn't reconnected/re-entered the
+// receive yet), the send would otherwise block forever, freezing the single sequential dispatcher
+// goroutine for every slave and every subsequent command -- not just the stuck one. This was found
+// to be a real, previously-unpatched hang distinct from the responseWG/peerWg/syncWg races already
+// fixed (none of those timeouts cover this code path).
+const enqueueCommandTimeout = 30 * time.Second
+
 // waitWithTimeout waits for wg with a deadline.
 // Returns true if wg reached zero, false if timeout expired.
 func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
@@ -358,13 +366,39 @@ func (ds *DiscoveryServer) enqueueMasterCommand(tag string, mc *pb.MasterCommand
 		i++
 		if tag == WildcardAllTags || value.(*slave).Tag == tag {
 			j++
-			logger.Debug().Int32("slaveID", value.(*slave).SlaveID).Str("cmd", mc.String()).Str("tag", tag).Msg("Pushing command to slave.")
-			value.(*slave).CommandQueue <- mc
+			sl := value.(*slave)
+			logger.Info().
+				Int32("slaveID", sl.SlaveID).
+				Str("cmd", mc.String()).
+				Str("tag", tag).
+				Msg("Pushing command to slave.")
+
+			start := time.Now()
+			select {
+			case sl.CommandQueue <- mc:
+				if elapsed := time.Since(start); elapsed > time.Second {
+					logger.Warn().
+						Int32("slaveID", sl.SlaveID).
+						Str("tag", tag).
+						Dur("waited", elapsed).
+						Msg("Slave took unusually long to pick up command (but did).")
+				}
+			case <-time.After(enqueueCommandTimeout):
+				// This slave's NextCommand goroutine is not currently waiting to receive --
+				// most likely its gRPC stream dropped and hasn't reconnected past this point yet.
+				// Skip it instead of freezing the dispatcher (and every other slave) forever.
+				logger.Warn().
+					Int32("slaveID", sl.SlaveID).
+					Str("tag", tag).
+					Str("cmd", mc.String()).
+					Dur("timeout", enqueueCommandTimeout).
+					Msg("Timeout pushing command to slave (not currently receiving); skipping this slave for this command.")
+			}
 		}
 		return true
 	})
 
-	logger.Debug().Str("cmd", mc.String()).Int("numSlaves", i).Int("numPushes", j).Msg("Finished pushing command to slaves.")
+	logger.Info().Str("cmd", mc.String()).Int("numSlaves", i).Int("numPushes", j).Msg("Finished pushing command to slaves.")
 }
 
 // Waits until n slaves are connected.
