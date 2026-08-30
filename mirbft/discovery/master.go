@@ -318,12 +318,15 @@ func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
 		// Wait for response if necessary.
 		if ds.responseWG != nil {
 			logger.Debug().Msg("Waiting for response.")
-			if !waitWithTimeout(ds.responseWG, 120*time.Second) {
+			rwg := ds.responseWG
+			if !waitWithTimeout(rwg, 120*time.Second) {
 				logger.Warn().Str("cmd", mc.String()).Msg("Timeout waiting for slave responses; continuing.")
 			}
 			logger.Debug().Msg("response received.")
-			ds.responseWG = nil
+			ds.mu.Lock()
 			atomic.StoreInt32(&ds.waitingForCmd, -1)
+			ds.responseWG = nil
+			ds.mu.Unlock()
 		}
 	}
 
