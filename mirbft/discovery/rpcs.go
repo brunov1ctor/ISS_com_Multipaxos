@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 	"sync/atomic"
+	"time"
 
 	"github.com/hyperledger-labs/mirbft/crypto"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
@@ -251,15 +252,20 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 		}
 
 		// Get next master command (block here until one is added to the queue)
-		logger.Debug().
+		waitStart := time.Now()
+		logger.Info().
+			Str("addrPort", p.Addr.String()).
 			Int32("slaveID", s.(*slave).SlaveID).
 			Int32("finishedCmdID", status.CmdId).
 			Msg("Waiting for next command for slave.")
 		mc := <-s.(*slave).CommandQueue
-		logger.Debug().
-			Int32("slaveID", s.(*slave).SlaveID).
-			Int32("newCmdID", status.CmdId).
-			Msg("Sending next command to slave.")
+		if waited := time.Since(waitStart); waited > time.Second {
+			logger.Info().
+				Str("addrPort", p.Addr.String()).
+				Int32("slaveID", s.(*slave).SlaveID).
+				Dur("waited", waited).
+				Msg("Received next command for slave after a non-trivial wait.")
+		}
 
 		// Return next command
 		return mc, nil
