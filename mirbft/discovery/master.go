@@ -258,9 +258,13 @@ func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
 			Str("cmdName", "discover-wait").
 			Msg("Processing command.")
 
-		ds.peerWg.Wait()
+		if !waitWithTimeout(&ds.peerWg, 120*time.Second) {
+			logger.Warn().Msg("Timeout waiting for peers to register (discover-wait peerWg); continuing.")
+		}
 		logger.Info().Msg("All peer processes started. Waiting until they connect to each other (discover-wait).")
-		ds.syncWg.Wait()
+		if !waitWithTimeout(&ds.syncWg, 120*time.Second) {
+			logger.Warn().Msg("Timeout waiting for peers to sync (discover-wait syncWg); continuing.")
+		}
 		logger.Info().Msg("Peers connected to each other. Done waiting (discover-wait).")
 
 	// Sends a NOOP command to the slaves and waits until they respond.

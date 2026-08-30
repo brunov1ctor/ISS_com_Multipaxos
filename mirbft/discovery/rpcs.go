@@ -239,14 +239,12 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 		// Use CAS on lastAckedCmd to ensure Done() is called at most once per slave per command.
 		waitingFor := atomic.LoadInt32(&ds.waitingForCmd)
 		if ds.responseWG != nil && waitingFor >= 0 && status.CmdId <= waitingFor {
-			if atomic.CompareAndSwapInt32(&s.(*slave).lastAckedCmd, s.(*slave).lastAckedCmd, waitingFor) {
-				prev := atomic.SwapInt32(&s.(*slave).lastAckedCmd, waitingFor)
-				if prev < waitingFor {
-					if atomic.LoadInt32(&ds.maxCommandExitStatus) < status.Status {
-						atomic.StoreInt32(&ds.maxCommandExitStatus, status.Status)
-					}
-					ds.responseWG.Done()
+			prev := atomic.SwapInt32(&s.(*slave).lastAckedCmd, waitingFor)
+			if prev < waitingFor {
+				if atomic.LoadInt32(&ds.maxCommandExitStatus) < status.Status {
+					atomic.StoreInt32(&ds.maxCommandExitStatus, status.Status)
 				}
+				ds.responseWG.Done()
 			}
 		}
 
