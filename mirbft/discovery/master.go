@@ -27,6 +27,19 @@ import (
 	logger "github.com/rs/zerolog/log"
 )
 
+// waitWithTimeout waits for wg with a deadline.
+// Returns true if wg reached zero, false if timeout expired.
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	ch := make(chan struct{})
+	go func() { wg.Wait(); close(ch) }()
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 func ParseCommandStr(cmdStr string, tokenChannel chan string) {
 
 	// Trim all white space from the start and end of cmdStr.
@@ -301,7 +314,9 @@ func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
 		// Wait for response if necessary.
 		if ds.responseWG != nil {
 			logger.Debug().Msg("Waiting for response.")
-			ds.responseWG.Wait()
+			if !waitWithTimeout(ds.responseWG, 120*time.Second) {
+				logger.Warn().Str("cmd", mc.String()).Msg("Timeout waiting for slave responses; continuing.")
+			}
 			logger.Debug().Msg("response received.")
 			ds.responseWG = nil
 			atomic.StoreInt32(&ds.waitingForCmd, -1)
