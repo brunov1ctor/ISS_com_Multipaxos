@@ -33,7 +33,7 @@ type slave struct {
 	Status       int32                  // Status reported by the slave in a NextCommand request. -1 before the first request.
 	CommandQueue chan *pb.MasterCommand // Commands to be sent to the slave.
 	Tag          string                 // Tag inherent to the slave (specified by the user when starting the slave, not assigned by master).
-	// Tags are used to differentiate slaves. Commands can be sent to slaves with a specific tag.
+	lastAckedCmd int32                  // Last command ID this slave has acked to the responseWG. Prevents double-Done().
 }
 
 // Represents a discovery server and saves all its state.
