@@ -236,8 +236,10 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 		// If slave just executed a command the master is waiting for, notify the master.
 		// Also handle reconnecting slaves that report a stale cmdID (< waitingForCmd):
 		// they missed the command due to a dropped connection, so count them as responded.
+		// Use lastAckedCmd to ensure Done() is called at most once per slave per command.
 		waitingFor := atomic.LoadInt32(&ds.waitingForCmd)
-		if ds.responseWG != nil && waitingFor >= 0 && status.CmdId <= waitingFor {
+		if ds.responseWG != nil && waitingFor >= 0 && status.CmdId <= waitingFor && s.(*slave).lastAckedCmd < waitingFor {
+			s.(*slave).lastAckedCmd = waitingFor
 			if atomic.LoadInt32(&ds.maxCommandExitStatus) < status.Status {
 				atomic.StoreInt32(&ds.maxCommandExitStatus, status.Status)
 			}
@@ -350,12 +352,11 @@ func (ds *DiscoveryServer) addNewSlave(ctx context.Context, tag string) *slave {
 
 	// Create new slave data structure and add it to local list of slaves.
 	newSlave := &slave{
-		SlaveID: newID,
-		Status:  0,
-		// Note that this channel is unbuffered. When a slave is slow in asking for the next command,
-		// writing to this channel might block.
+		SlaveID:      newID,
+		Status:       0,
 		CommandQueue: make(chan *pb.MasterCommand),
 		Tag:          tag,
+		lastAckedCmd: -1,
 	}
 
 	ds.slaves.Store(newID, newSlave)
