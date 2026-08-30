@@ -236,14 +236,18 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 		// If slave just executed a command the master is waiting for, notify the master.
 		// Also handle reconnecting slaves that report a stale cmdID (< waitingForCmd):
 		// they missed the command due to a dropped connection, so count them as responded.
-		// Use lastAckedCmd to ensure Done() is called at most once per slave per command.
+		// Use CAS on lastAckedCmd to ensure Done() is called at most once per slave per command.
 		waitingFor := atomic.LoadInt32(&ds.waitingForCmd)
-		if ds.responseWG != nil && waitingFor >= 0 && status.CmdId <= waitingFor && s.(*slave).lastAckedCmd < waitingFor {
-			s.(*slave).lastAckedCmd = waitingFor
-			if atomic.LoadInt32(&ds.maxCommandExitStatus) < status.Status {
-				atomic.StoreInt32(&ds.maxCommandExitStatus, status.Status)
+		if ds.responseWG != nil && waitingFor >= 0 && status.CmdId <= waitingFor {
+			if atomic.CompareAndSwapInt32(&s.(*slave).lastAckedCmd, s.(*slave).lastAckedCmd, waitingFor) {
+				prev := atomic.SwapInt32(&s.(*slave).lastAckedCmd, waitingFor)
+				if prev < waitingFor {
+					if atomic.LoadInt32(&ds.maxCommandExitStatus) < status.Status {
+						atomic.StoreInt32(&ds.maxCommandExitStatus, status.Status)
+					}
+					ds.responseWG.Done()
+				}
 			}
-			ds.responseWG.Done()
 		}
 
 		// Get next master command (block here until one is added to the queue)
