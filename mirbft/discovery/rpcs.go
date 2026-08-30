@@ -234,10 +234,10 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 		}
 
 		// If slave just executed a command the master is waiting for, notify the master.
-		if atomic.LoadInt32(&ds.waitingForCmd) == status.CmdId && ds.responseWG != nil {
-
-			// This is not at all safe, but it's good enough for now.
-			// It can miss the actual maximum, but it will never be falsely 0.
+		// Also handle reconnecting slaves that report a stale cmdID (< waitingForCmd):
+		// they missed the command due to a dropped connection, so count them as responded.
+		waitingFor := atomic.LoadInt32(&ds.waitingForCmd)
+		if ds.responseWG != nil && waitingFor >= 0 && status.CmdId <= waitingFor {
 			if atomic.LoadInt32(&ds.maxCommandExitStatus) < status.Status {
 				atomic.StoreInt32(&ds.maxCommandExitStatus, status.Status)
 			}
