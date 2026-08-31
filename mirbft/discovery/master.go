@@ -123,6 +123,17 @@ func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
 	// In such a case the command string is stored here and executed at the tail of this function.
 	timeoutCommands := ""
 
+	// How long the trailing "Wait for response if necessary" block (below) waits for responseWG.
+	// Defaults to 120s (covers sync/noop and any command with no meaningful timeout of its own).
+	// The "exec-wait" case overrides this with the command's own timeout plus margin: that timeout
+	// is what the SLAVE uses locally to decide when to escalate SIGINT/SIGKILL to its child process
+	// (e.g. CLIENT_TIMEOUT=180000ms in generate-master-commands.py), so if this master-side wait is
+	// shorter, the master gives up and moves on to the NEXT script command (e.g. the next
+	// experiment's mkdir/config-save) while the slave is still legitimately busy running the
+	// PREVIOUS one -- which is exactly what caused the flood of "Timeout pushing command" warnings
+	// observed for the client slave once its own exec-wait ran past 120s under saturation.
+	responseTimeout := 120 * time.Second
+
 	// Based on the first token, decide which command to send to the slaves.
 	switch cmdName {
 
@@ -187,6 +198,13 @@ func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
 			atomic.StoreInt32(&ds.maxCommandExitStatus, 0)
 			ds.responseWG = &sync.WaitGroup{}
 			ds.responseWG.Add(ds.countSlaves(tag))
+
+			// Give the master-side wait at least as long as the slave's own local timeout for
+			// this command, plus margin for network/dispatch overhead. See responseTimeout comment
+			// above for why a shorter fixed wait here causes the master to move on prematurely.
+			if cmdTimeout := time.Duration(timeout)*time.Millisecond + 30*time.Second; cmdTimeout > responseTimeout {
+				responseTimeout = cmdTimeout
+			}
 		}
 
 	// Send a signal to the process executing the program (started using exec-start)
@@ -327,8 +345,8 @@ func (ds *DiscoveryServer) processCommand(cmdName string, params chan string) {
 		if ds.responseWG != nil {
 			logger.Debug().Msg("Waiting for response.")
 			rwg := ds.responseWG
-			if !waitWithTimeout(rwg, 120*time.Second) {
-				logger.Warn().Str("cmd", mc.String()).Msg("Timeout waiting for slave responses; continuing.")
+			if !waitWithTimeout(rwg, responseTimeout) {
+				logger.Warn().Str("cmd", mc.String()).Dur("timeout", responseTimeout).Msg("Timeout waiting for slave responses; continuing.")
 			}
 			logger.Debug().Msg("response received.")
 			ds.mu.Lock()
