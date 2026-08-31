@@ -2,8 +2,6 @@ package main
 
 import (
 	"bufio"
-	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -33,17 +31,6 @@ func main() {
 		Out:        os.Stdout,
 		TimeFormat: "15:04:05.000",
 	})
-
-	// TEMPORARY diagnostic server (net/http/pprof): bound to localhost only, never exposed off-node.
-	// If the master ever appears frozen again, run on node-0 itself:
-	//   curl -s 'http://localhost:6060/debug/pprof/goroutine?debug=2'
-	// to get the exact stack of every goroutine -- proof of where it's stuck, not inference from
-	// logs alone. Safe to leave running (idle cost is negligible); remove once no longer needed.
-	go func() {
-		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
-			logger.Warn().Err(err).Msg("pprof debug server failed to start (non-fatal).")
-		}
-	}()
 
 	if len(os.Args) < 2 {
 		logger.Fatal().

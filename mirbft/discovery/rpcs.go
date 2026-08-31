@@ -253,14 +253,14 @@ func (ds *DiscoveryServer) NextCommand(ctx context.Context, status *pb.SlaveStat
 
 		// Get next master command (block here until one is added to the queue)
 		waitStart := time.Now()
-		logger.Info().
+		logger.Debug().
 			Str("addrPort", p.Addr.String()).
 			Int32("slaveID", s.(*slave).SlaveID).
 			Int32("finishedCmdID", status.CmdId).
 			Msg("Waiting for next command for slave.")
 		mc := <-s.(*slave).CommandQueue
 		if waited := time.Since(waitStart); waited > time.Second {
-			logger.Info().
+			logger.Debug().
 				Str("addrPort", p.Addr.String()).
 				Int32("slaveID", s.(*slave).SlaveID).
 				Dur("waited", waited).

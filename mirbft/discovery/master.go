@@ -385,7 +385,7 @@ func (ds *DiscoveryServer) enqueueMasterCommand(tag string, mc *pb.MasterCommand
 		if tag == WildcardAllTags || value.(*slave).Tag == tag {
 			j++
 			sl := value.(*slave)
-			logger.Info().
+			logger.Debug().
 				Int32("slaveID", sl.SlaveID).
 				Str("cmd", mc.String()).
 				Str("tag", tag).
@@ -416,7 +416,7 @@ func (ds *DiscoveryServer) enqueueMasterCommand(tag string, mc *pb.MasterCommand
 		return true
 	})
 
-	logger.Info().Str("cmd", mc.String()).Int("numSlaves", i).Int("numPushes", j).Msg("Finished pushing command to slaves.")
+	logger.Debug().Str("cmd", mc.String()).Int("numSlaves", i).Int("numPushes", j).Msg("Finished pushing command to slaves.")
 }
 
 // Waits until n slaves are connected.
