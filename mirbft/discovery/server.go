@@ -96,10 +96,13 @@ type DiscoveryServer struct {
 	// This is used with "exec-wait" to detect if a timeout occurred.
 	maxCommandExitStatus int32
 
-	// Stores the last signal sent via exec-signal.
-	// exec-wait skips blocking if the last signal was SIGKILL,
-	// since SIGKILL may disrupt slave gRPC connections making confirmations impossible.
-	lastSignalSent string
+	// Stores the last signal sent via exec-signal, PER TAG (e.g. "peers", "1client").
+	// exec-wait skips blocking for a given tag if the last signal sent to THAT SAME tag
+	// was SIGKILL, since SIGKILL may disrupt slave gRPC connections making confirmations
+	// impossible. Must be scoped per tag: a SIGKILL sent to "peers" must not affect the
+	// "1client" tag's exec-wait (they are different processes on different slaves), and
+	// must be reset on discover-reset so it does not leak into the next experiment.
+	lastSignalSent map[string]string
 }
 
 // Creates and initializes a new instance of a discovery server.
@@ -117,6 +120,7 @@ func NewDiscoveryServer() *DiscoveryServer {
 	// Initially not waiting for any command.
 	ds.waitingForCmd = -1
 	ds.maxCommandExitStatus = 0
+	ds.lastSignalSent = make(map[string]string)
 
 	// ✅ Initialize IP to ID map (will be populated from instance-info)
 	ds.ipToIDMap = make(map[string]int32)
@@ -209,6 +213,13 @@ func (ds *DiscoveryServer) resetPC(numPeers int) {
 	ds.syncWg.Add(numPeers)
 	ds.doOnce = sync.Once{}
 	ds.keyGenOnce = sync.Once{}
+
+	// Novo experimento começando: nenhum sinal foi enviado a nenhuma tag
+	// ainda. Sem isto, um SIGKILL do experimento anterior (ex.: "peers")
+	// permaneceria marcado para sempre e faria o exec-wait de QUALQUER
+	// tag (inclusive "1client", que nunca recebeu SIGKILL algum) pular o
+	// bloqueio de espera em todos os experimentos seguintes.
+	ds.lastSignalSent = make(map[string]string)
 }
 
 

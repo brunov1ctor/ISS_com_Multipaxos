@@ -281,7 +281,18 @@ log_i "Todos os slaves disparados."
 # MINIMA CORREÇÃO: esperar o master finalizar (status == DONE) antes do fetch
 # -----------------------------------------------------------------------------
 log_i "Aguardando o master finalizar (status: ${remote_status_file})..."
-timeout_s="${WAIT_DONE_TIMEOUT_S:-10800}"   # 3h para 72 experimentos (override via env se quiser)
+
+# Timeout escala com o numero de experimentos (override: WAIT_DONE_TIMEOUT_S).
+default_timeout_s=10800
+if [[ -f "$exp_data_dir/deployment.csv" ]]; then
+  n_experiments="$(tail -n +2 "$exp_data_dir/deployment.csv" | grep -c '[^[:space:]]' || true)"
+  if [[ "${n_experiments:-0}" -gt 0 ]]; then
+    # Orcamento generoso por experimento (setup + workload + dreno + margem).
+    default_timeout_s=$(( n_experiments * 1200 ))
+    log_i "Timeout de espera calculado: ${n_experiments} experimentos x 1200s = ${default_timeout_s}s (~$(( default_timeout_s / 3600 ))h)."
+  fi
+fi
+timeout_s="${WAIT_DONE_TIMEOUT_S:-$default_timeout_s}"
 sleep_s="${WAIT_DONE_POLL_S:-3}"
 start_epoch="$(date +%s)"
 
