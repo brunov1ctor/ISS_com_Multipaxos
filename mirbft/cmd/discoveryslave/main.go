@@ -311,18 +311,28 @@ cmdLoop:
 						exitMessage = "Error sending signal to program: " + err.Error()
 						exitStatus = 2
 					} else {
-						// Reap the child in background so it does not become a zombie.
-						// ExecWait is not called after ExecSignal in the current protocol.
+						// Espera de verdade o processo morrer (com timeout de seguranca) antes de
+						// responder "OK" ao master. Sem isso, o master avanca para o proximo
+						// exec-start apos um "wait for" de tempo fixo, sem confirmacao real —
+						// sob carga alta o processo pode demorar mais que esse tempo fixo para
+						// liberar a porta, causando "address already in use" no proximo experimento.
 						cmdToReap := execCmd
 						outFileToClose := execOutFile
 						execCmd = nil
 						execOutFile = nil
+						done := make(chan struct{})
 						go func() {
 							_ = cmdToReap.Wait()
 							if outFileToClose != nil {
 								_ = outFileToClose.Close()
 							}
+							close(done)
 						}()
+						select {
+						case <-done:
+						case <-time.After(4 * time.Second):
+							logger.Warn().Str("signal", sig.String()).Msg("Timed out waiting for process to exit after signal; continuing in background.")
+						}
 						exitMessage = "OK"
 					}
 				}
