@@ -24,4 +24,4 @@ openssl genrsa -out "$keyfile" 4096
 
 echo
 echo "Generating CA self-signed certificate."
-openssl req -new -x509 -key "$keyfile" -sha256 -subj "/C=MR/ST=MR/O=Mir" -days 365 -out "$certfile"
+openssl req -new -x509 -key "$keyfile" -sha256 -subj "/C=MR/ST=MR/O=Mir" -days 3650 -out "$certfile"
