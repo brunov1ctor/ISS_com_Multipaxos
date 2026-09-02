@@ -14,7 +14,6 @@ from mirbftview.protocol.types import (
     Message,
     RequestInfo,
     EventLog,
-    SegmentInfo,
 )
 
 __all__ = [
@@ -27,5 +26,4 @@ __all__ = [
     "Message",
     "RequestInfo",
     "EventLog",
-    "SegmentInfo",
 ]

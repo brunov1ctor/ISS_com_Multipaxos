@@ -65,7 +65,7 @@ class BucketsPanel(QWidget):
         p.setPen(QColor(C["text3"]))
         p.setFont(QFont("Segoe UI", 7))
         p.drawText(QRectF(10, h - 16, w - 20, 14), Qt.AlignLeft,
-                   f"Regra: bucket = (clientID + clientSN) mod {num}")
+                   f"Regra: bucket = (clientID + clientSN) mod {num} (buckets sao POR GRUPO)")
 
         top_y = 26
         bot_y = h - 22
@@ -79,14 +79,20 @@ class BucketsPanel(QWidget):
         total_w = bucket_w * num + spacing * (num - 1)
         start_x = margin_x + (available_w - total_w) / 2
 
-        group_colors = ["#EF4444", "#6C63FF", "#34D399", "#F97316", "#A855F7", "#58D8FF", "#FACC15", "#8B7DFF"]
+        # Nota: este painel mostra um pool compartilhado de indices de bucket
+        # (0..num-1) por simplicidade visual. Na implementacao real, cada
+        # grupo de dados tem seu PROPRIO conjunto de buckets (a formula
+        # (clientID+clientSN) mod numBuckets e aplicada dentro do grupo para
+        # onde a chave da requisicao ja foi roteada) — o grupo de cada
+        # requisicao aparece no seu proprio evento/bolha, nao no indice do
+        # bucket em si, que nao tem "dono" fixo aqui.
+        bucket_color = QColor(C["accent"])
         self._bucket_rects = []
 
         for i in range(num):
             contents = self.sim.bucket_contents[i] if i < len(self.sim.bucket_contents) else []
             x = start_x + i * (bucket_w + spacing)
-            group_id = 1 + (i % max(1, len(self.sim.groups) - 1))
-            gc = QColor(group_colors[group_id % len(group_colors)])
+            gc = bucket_color
 
             bucket_h = available_h - 20
             bx, by = x, top_y + 14
@@ -138,7 +144,7 @@ class BucketsPanel(QWidget):
                 p.setFont(QFont("Segoe UI", 6))
                 p.drawText(QRectF(bx, by + 2, bucket_w, 10), Qt.AlignCenter, f"+{len(contents) - max_visible}")
 
-            self._draw_bucket_labels(p, bx, by, bucket_w, bucket_h, top_y, i, group_id, gc, is_selected, contents)
+            self._draw_bucket_labels(p, bx, by, bucket_w, bucket_h, i, gc, is_selected, contents)
 
             # Glow on bucket_in event
             for ev in (self.sim.visual_events if hasattr(self.sim, 'visual_events') else []):
@@ -234,14 +240,10 @@ class BucketsPanel(QWidget):
                        Qt.AlignLeft | Qt.AlignVCenter, line)
             ty += line_h
 
-    def _draw_bucket_labels(self, p, bx, by, bucket_w, bucket_h, top_y, i, group_id, gc, is_selected, contents):
+    def _draw_bucket_labels(self, p, bx, by, bucket_w, bucket_h, i, gc, is_selected, contents):
         p.setPen(QColor(C["text"] if is_selected else C["text2"]))
         p.setFont(QFont("Segoe UI", 7, QFont.Bold))
         p.drawText(QRectF(bx, by + bucket_h + 2, bucket_w, 12), Qt.AlignCenter, f"B{i}")
-
-        p.setPen(gc)
-        p.setFont(QFont("Segoe UI", 6))
-        p.drawText(QRectF(bx, top_y, bucket_w, 12), Qt.AlignCenter, f"G{group_id}")
 
         if contents:
             badge_r = 8
@@ -259,25 +261,16 @@ class BucketsPanel(QWidget):
         bid = self._selected_bucket
         contents = self.sim.bucket_contents[bid] if bid < len(self.sim.bucket_contents) else []
 
-        leader = "?"
-        if hasattr(self.sim, 'epoch_mgr') and self.sim.epoch_mgr:
-            ba = self.sim.epoch_mgr.bucket_assignment
-            for lid, bkts in ba.items():
-                if bid in bkts:
-                    leader = f"Node {lid}"
-                    break
-
-        group_id = 1 + (bid % max(1, len(self.sim.groups) - 1))
         fill_count = self.sim.batch_fill.get(bid, 0) if hasattr(self.sim, 'batch_fill') else 0
         batch_size = self.sim.batch_visual_size if hasattr(self.sim, 'batch_visual_size') else 3
 
         lines = [
             f"Bucket {bid}",
-            f"Lider: {leader}",
-            f"Grupo destino: G{group_id}",
             f"Pedidos na fila: {len(contents)}",
             f"Batch fill: {fill_count}/{batch_size}",
             f"Formula: (clientID + clientSN) mod {self.sim.num_buckets} = {bid}",
+            f"(cada grupo tem seu proprio conjunto de buckets;",
+            f" o grupo de cada pedido aparece no evento dele)",
         ]
         for item in contents[:6]:
             lines.append(f"  {item}")

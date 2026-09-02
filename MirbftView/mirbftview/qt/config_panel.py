@@ -22,7 +22,6 @@ _BUILTIN_PRESETS = {
         "num_groups": 1,
         "nodes_per_group": 3,
         "orderer": "MultiPaxosMulticast",
-        "leader_policy": "Simple",
         "batch_size": 1,
         "batch_timeout": 1000,
         "num_buckets": 3,
@@ -37,7 +36,6 @@ _BUILTIN_PRESETS = {
         "num_groups": 4,
         "nodes_per_group": 3,
         "orderer": "MultiPaxosMulticast",
-        "leader_policy": "Simple",
         "batch_size": 4096,
         "batch_timeout": 1000,
         "num_buckets": 16,
@@ -160,10 +158,6 @@ class ConfigPanel(QWidget):
         self._orderer.addItems(["MultiPaxosMulticast", "MultiPaxos", "Pbft", "HotStuff", "Raft"])
         self._orderer.setCurrentText("MultiPaxosMulticast")
         layout.addLayout(_row("Orderer:", self._orderer))
-
-        self._leader_policy = _NoScrollComboBox()
-        self._leader_policy.addItems(["Simple", "Single", "Blacklist", "Backoff"])
-        layout.addLayout(_row("Leader Policy:", self._leader_policy))
 
         self._batch_size = _NoScrollSpinBox()
         self._batch_size.setRange(1, 65536)
@@ -332,7 +326,6 @@ class ConfigPanel(QWidget):
             "num_groups": self._num_groups.value(),
             "nodes_per_group": self._nodes_per_group.value(),
             "orderer": self._orderer.currentText(),
-            "leader_policy": self._leader_policy.currentText(),
             "batch_size": self._batch_size.value(),
             "batch_timeout": self._batch_timeout.value(),
             "num_buckets": self._num_buckets.value(),
@@ -348,7 +341,6 @@ class ConfigPanel(QWidget):
         self._num_groups.setValue(cfg.get("num_groups", 4))
         self._nodes_per_group.setValue(cfg.get("nodes_per_group", 3))
         self._orderer.setCurrentText(cfg.get("orderer", "MultiPaxosMulticast"))
-        self._leader_policy.setCurrentText(cfg.get("leader_policy", "Simple"))
         self._batch_size.setValue(cfg.get("batch_size", 4096))
         self._batch_timeout.setValue(cfg.get("batch_timeout", 1000))
         self._num_buckets.setValue(cfg.get("num_buckets", 16))

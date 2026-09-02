@@ -69,12 +69,12 @@ class ExecutionPanel(QWidget):
         # Métricas
         badge_y = 24
         badge_h = 32
-        n_leaders = len(s.epoch_mgr.current_leaders) if s.epoch_mgr else 0
+        n_groups = len([g for g in s.groups if g.id != 0]) if s.groups else 0
         remaining = s._checkpoint_interval - (s._committed % s._checkpoint_interval) if s._committed > 0 else s._checkpoint_interval
         metrics = [
-            ("Epoch", str(s._epoch), C["accent"]),
+            ("Checkpoints", str(s._checkpoints_done), C["accent"]),
             ("Commits", str(s._committed), C["green"]),
-            ("Lideres", str(n_leaders), C["gold"]),
+            ("Grupos", str(n_groups), C["gold"]),
             ("Falta Ckpt", str(remaining), C["orange"]),
         ]
         badge_w = (w - 20 - 6 * (len(metrics) - 1)) / len(metrics)

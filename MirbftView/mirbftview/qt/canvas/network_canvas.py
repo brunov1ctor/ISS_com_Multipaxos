@@ -1,7 +1,7 @@
 """NetworkCanvas — classe principal do grafo da rede."""
 
 import math
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget, QTextEdit
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer
 from PySide6.QtGui import QPainter, QPainterPath, QColor, QPen, QFont
 
@@ -40,7 +40,7 @@ class NetworkCanvas(QWidget):
         self._pan_offset = QPointF(0, 0)
         self._panning = False
         self._pan_start = QPointF(0, 0)
-        self._inspect_popup: dict | None = None
+        self._popup_widget = self._make_popup_widget()
         self._thought_bubbles: dict[int, dict] = {}
         self._color_pool_idx = 0
         self._known_msgs: set = set()
@@ -58,6 +58,89 @@ class NetworkCanvas(QWidget):
         )
         self.sim.tick()
         self.update()
+
+    # ─── Popup de inspeção (widget real, texto selecionável) ────────────────
+
+    # Cores no estilo do painel "Variables" do debugger do VSCode.
+    _DBG_KEY_COLOR = "#9CDCFE"
+    _DBG_VAL_COLOR = "#D4D4D4"
+    _DBG_HEADER_COLOR = "#6A9955"
+
+    def _make_popup_widget(self) -> QTextEdit:
+        """Popup no estilo do painel 'Variables' do debugger do VSCode: nome
+        da variável e valor em cores diferentes (discretas), uma única fonte
+        monoespaçada e tamanho para tudo, sem negrito nem caixas internas.
+        Texto selecionável e copiável com Ctrl+C — ao contrário do antigo
+        popup pintado com QPainter, que não permitia selecionar nem copiar."""
+        w = QTextEdit(self)
+        w.setReadOnly(True)
+        w.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        w.setFont(QFont("Consolas", 9))
+        w.setStyleSheet(
+            "QTextEdit { background: rgba(12,20,38,240); color: #D4D4D4; "
+            "border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; "
+            "padding: 4px; selection-background-color: rgba(88,216,255,0.35); }"
+        )
+        w.setLineWrapMode(QTextEdit.NoWrap)
+        w.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        w.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        w.hide()
+        return w
+
+    def _lines_to_debug_html(self, lines: list[str]) -> str:
+        """Renderiza cada linha como 'nome: valor', coloridas como no painel
+        Variables do VSCode (nome em azul claro, valor em cinza claro),
+        preservando indentação. Linhas de título (--- Algo ---) ficam num
+        verde discreto, sem negrito, mesmo tamanho de fonte que o resto."""
+        import html as html_mod
+        rows = []
+        for line in lines:
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip(" "))
+            pad = "&nbsp;" * indent
+            is_header = stripped.startswith("--") or stripped.startswith("─")
+            if is_header or ":" not in stripped:
+                color = self._DBG_HEADER_COLOR if is_header else self._DBG_VAL_COLOR
+                rows.append(f'<div style="color:{color};">{pad}{html_mod.escape(stripped)}</div>')
+                continue
+            key, _, val = stripped.partition(":")
+            rows.append(
+                f'<div>{pad}<span style="color:{self._DBG_KEY_COLOR};">{html_mod.escape(key.rstrip())}</span>'
+                f'<span style="color:{self._DBG_VAL_COLOR};">:{html_mod.escape(val)}</span></div>'
+            )
+        return "".join(rows)
+
+    def _show_debug_popup(self, lines: list[str], pos: QPointF):
+        body = self._lines_to_debug_html(lines)
+        self._popup_widget.setHtml(f'<div style="font-family:Consolas; font-size:9pt; white-space:pre;">{body}</div>')
+
+        w_canvas, h_canvas = self.width(), self.height()
+
+        # Mede o tamanho REAL do conteúdo renderizado (HTML, não texto puro
+        # via fontMetrics — a marcação/indentação em &nbsp; renderiza um
+        # pouco diferente e o cálculo por fontMetrics ficava subestimado,
+        # fazendo a barra de rolagem aparecer mesmo cabendo tudo).
+        doc = self._popup_widget.document()
+        doc.setTextWidth(-1)
+        ideal_w = doc.idealWidth()
+        popup_w = min(ideal_w + 24, w_canvas - 20)
+        doc.setTextWidth(popup_w - 12)
+        popup_h = min(doc.size().height() + 16, h_canvas - 20)
+        px = pos.x() + 15
+        py = pos.y() - popup_h / 2
+        if px + popup_w > w_canvas - 10:
+            px = pos.x() - popup_w - 15
+        if py < 10:
+            py = 10
+        if py + popup_h > h_canvas - 10:
+            py = h_canvas - popup_h - 10
+
+        self._popup_widget.setGeometry(int(px), int(py), int(popup_w), int(popup_h))
+        self._popup_widget.show()
+        self._popup_widget.raise_()
+
+    def _hide_debug_popup(self):
+        self._popup_widget.hide()
 
     # ─── Geometry ─────────────────────────────────────────────────────────
 
@@ -109,6 +192,34 @@ class NetworkCanvas(QWidget):
                 best_msg = msg
         return best_msg
 
+    def _gsn_panel_rect(self) -> QRectF:
+        """Retângulo do painel 'GSN Sequencer' (mesma fórmula de draw_hud.py
+        draw_gsn_meta_panel), usado para hit-test do clique."""
+        meta = self.sim.meta_stream
+        visible_meta = meta[-5:] if meta else []
+        n_entries = max(len(visible_meta), 1)
+        box_w, box_x, box_y, line_h = 220, 10, 10, 16
+        box_h = line_h * 3 + n_entries * 22 + 16
+        return QRectF(box_x, box_y, box_w, box_h)
+
+    def _adeliver_panel_rect(self) -> QRectF:
+        """Retângulo do painel 'ADeliver (por grupo)' (mesma fórmula de
+        draw_hud.py draw_adeliver_panel), usado para hit-test do clique."""
+        dlv = self.sim.delivery
+        if not dlv or not dlv._last_delivered_gsn:
+            return QRectF()
+        groups_with_data = sorted(dlv._last_delivered_gsn.keys())
+
+        meta = self.sim.meta_stream
+        visible_meta = meta[-5:] if meta else []
+        n_entries = max(len(visible_meta), 1)
+        gsn_box_h = 16 * 3 + n_entries * 22 + 16
+
+        box_w, box_x, line_h = 220, 10, 18
+        box_y = 10 + gsn_box_h + 8
+        box_h = line_h + len(groups_with_data) * 24 + 12
+        return QRectF(box_x, box_y, box_w, box_h)
+
     def _is_over_config(self, pos: QPointF) -> bool:
         for child in self.children():
             if hasattr(child, 'isVisible') and child.isVisible() and hasattr(child, 'geometry'):
@@ -128,7 +239,7 @@ class NetworkCanvas(QWidget):
         self._zoom = max(0.3, min(5.0, self._zoom * factor))
         cursor_pos = event.position()
         self._pan_offset = cursor_pos - (self._zoom / old_zoom) * (cursor_pos - self._pan_offset)
-        self._inspect_popup = None
+        self._hide_debug_popup()
         self.update()
         event.accept()
 
@@ -149,6 +260,8 @@ class NetworkCanvas(QWidget):
                 else:
                     self._drag_offset = self._client_pos[id_] - scene_pos
                 self.setCursor(Qt.ClosedHandCursor)
+            elif self._gsn_panel_rect().contains(event.position()) or self._adeliver_panel_rect().contains(event.position()):
+                self._dragging = None
             else:
                 msg = self._hit_test_message(event.position())
                 if not msg:
@@ -173,19 +286,23 @@ class NetworkCanvas(QWidget):
                 self._node_pos[id_] = new_pos
             else:
                 self._client_pos[id_] = new_pos
-            self._inspect_popup = None
+            self._hide_debug_popup()
             self.update()
         elif self._panning:
             self._drag_moved = True
             delta = event.position() - self._pan_start
             self._pan_offset += delta
             self._pan_start = event.position()
-            self._inspect_popup = None
+            self._hide_debug_popup()
             self.update()
         else:
             hit = self._hit_test(event.position())
             msg = self._hit_test_message(event.position()) if not hit else None
-            self.setCursor(Qt.PointingHandCursor if (hit or msg) else Qt.ArrowCursor)
+            panel_hit = False
+            if not (hit or msg):
+                panel_hit = (self._gsn_panel_rect().contains(event.position())
+                             or self._adeliver_panel_rect().contains(event.position()))
+            self.setCursor(Qt.PointingHandCursor if (hit or msg or panel_hit) else Qt.ArrowCursor)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -196,16 +313,80 @@ class NetworkCanvas(QWidget):
                 msg = self._hit_test_message(event.position())
                 if msg:
                     self._open_msg_inspect(msg, event.position())
+                elif self._gsn_panel_rect().contains(event.position()):
+                    self._open_gsn_inspect(event.position())
+                elif self._adeliver_panel_rect().contains(event.position()):
+                    self._open_adeliver_inspect(event.position())
                 else:
-                    self._inspect_popup = None
+                    self._hide_debug_popup()
             elif self._panning and not self._drag_moved:
-                self._inspect_popup = None
+                self._hide_debug_popup()
             self._dragging = None
             self._panning = False
             self.setCursor(Qt.ArrowCursor)
         super().mouseReleaseEvent(event)
 
     # ─── Inspect popups ───────────────────────────────────────────────────
+
+    def _open_gsn_inspect(self, pos):
+        """Struct real do Sequenciador (orderer/sequencer.go), populada com
+        os valores atuais da simulacao — mesmo espirito do popup de mensagem:
+        a caixa 'GSN Sequencer' e uma metafora visual (fichas/senhas), o
+        popup mostra os campos como eles existem de fato no codigo Go."""
+        sim = self.sim
+        members = sim.groups[0].members if sim.groups else []
+        leader = min(members) if members else 0
+
+        recent_meta = sim.meta_stream[-8:]
+        metadata = "{" + ", ".join(f"{e['gsn']}: {e['groups']}" for e in recent_meta) + "}" if recent_meta else "{}"
+
+        last_delivered = {}
+        pending_queue = {}
+        if sim.delivery:
+            last_delivered = dict(sim.delivery._last_delivered_gsn)
+            for gid, entries in sim.delivery._pending.items():
+                pend = sorted(e.gsn for e in entries if not e.delivered)
+                if pend:
+                    pending_queue[gid] = pend
+        lastdeliv_str = "{" + ", ".join(f"{g}: {v}" for g, v in sorted(last_delivered.items())) + "}" if last_delivered else "{}"
+        queue_str = "{" + ", ".join(f"{g}: {v}" for g, v in sorted(pending_queue.items())) + "}" if pending_queue else "{}"
+
+        lines = [
+            "--- Sequencer (orderer/sequencer.go) ---",
+            f"nextGSN: {sim.gsn + 1}",
+            f"metadata: {metadata}",
+            f"groupGSNQueue: {queue_str}",
+            f"lastDeliveredGSN: {lastdeliv_str}",
+            f"members: {members}",
+            f"leader: {leader}",
+            "term: 0 (eleicao nao simulada aqui)",
+            "status: leader (idem)",
+        ]
+        self._show_debug_popup(lines, pos)
+
+    def _open_adeliver_inspect(self, pos):
+        """Struct real da entrega atômica por grupo (aDeliverInternal em
+        orderer/sequencer.go: lastDeliveredGSN[groupID] e groupGSNQueue
+        [groupID]), populada com os valores atuais desta simulação — a
+        caixa 'ADeliver (por grupo)' é a metáfora visual, o popup mostra
+        os campos como eles existem de fato no código Go."""
+        sim = self.sim
+        dlv = sim.delivery
+        if not dlv:
+            return
+        groups_with_data = sorted(dlv._last_delivered_gsn.keys())
+
+        lines = ["--- ADeliver / aDeliverInternal (orderer/sequencer.go) ---"]
+        for gid in groups_with_data:
+            last = dlv._last_delivered_gsn.get(gid, 0)
+            pending = dlv._pending.get(gid, [])
+            queue_repr = [f"{e.gsn}{'*' if e.committed else ''}" for e in pending]
+            n_blocked = len(sim.blocked_requests.get(gid, []))
+            lines.append(f"G{gid}.lastDeliveredGSN: {last}")
+            lines.append(f"G{gid}.groupGSNQueue: {queue_repr}")
+            lines.append(f"G{gid}.requestsBloqueadas: {n_blocked}")
+        lines.append("(* = ja commitado, ainda atras de um GSN anterior)")
+        self._show_debug_popup(lines, pos)
 
     def _open_inspect(self, hit, pos):
         kind, id_str = hit.split(":")
@@ -215,21 +396,16 @@ class NetworkCanvas(QWidget):
         else:
             lines, color = self._inspect_client_lines(id_)
         if lines:
-            self._inspect_popup = {"type": kind, "lines": lines, "pos": pos, "color": color}
-            self.update()
+            self._show_debug_popup(lines, pos)
 
     def _inspect_node_lines(self, node_id):
         node = self.sim.nodes[node_id] if node_id < len(self.sim.nodes) else None
         if not node:
             return [], C["accent"]
         groups = [f"G{g}" for g in node.groups]
-        assigned_buckets = []
-        if hasattr(self.sim, 'epoch_mgr') and self.sim.epoch_mgr:
-            assigned_buckets = self.sim.epoch_mgr.bucket_assignment.get(node_id, [])
-        buffer_items = []
-        for b in assigned_buckets:
-            if b < len(self.sim.bucket_contents):
-                buffer_items.extend(self.sim.bucket_contents[b])
+        # Buckets pertencem ao GRUPO (todos os membros veem os mesmos buckets),
+        # não a um nó específico — o líder de cada SN roda por rodízio dentro
+        # do grupo, então não há "buckets deste nó" fixos para mostrar aqui.
         req = self.sim.current_request
         role = "Ocioso"
         if req:
@@ -244,15 +420,7 @@ class NetworkCanvas(QWidget):
             f"Estado: {'\U0001f7e2 Ativo' if node.is_alive else '\U0001f534 Falhou'}",
             f"Papel atual: {role}",
             f"Grupos: {', '.join(groups)}",
-            f"Filas (buckets): {assigned_buckets[:8]}{'...' if len(assigned_buckets) > 8 else ''}",
-            f"Buffer ({len(buffer_items)} pedidos):",
         ]
-        for item in buffer_items[:5]:
-            lines.append(f"  \u2022 {item}")
-        if len(buffer_items) > 5:
-            lines.append(f"  ... +{len(buffer_items) - 5} mais")
-        if not buffer_items:
-            lines.append("  (vazio)")
         return lines, C["accent"]
 
     def _inspect_client_lines(self, client_id):
@@ -298,10 +466,30 @@ class NetworkCanvas(QWidget):
             f"Progresso: {int(msg.progress * 100)}%",
             f"Fase atual: {phase_name}",
         ]
+        lines.extend(self._struct_lines(msg))
         lines.extend(self._msg_detail_lines(msg))
-        color = msg.color if msg.color else C["text2"]
-        self._inspect_popup = {"type": "msg", "lines": lines, "pos": pos, "color": color}
-        self.update()
+        self._show_debug_popup(lines, pos)
+
+    @staticmethod
+    def _struct_lines(msg):
+        """Struct real de protobufs.ClientRequest (request.pb.go), com os
+        valores desta request no instante desta mensagem \u2014 um teste de mesa
+        visual din\u00e2mico, n\u00e3o est\u00e1tico."""
+        snap = msg.req_snapshot
+        if not snap:
+            return []
+        touched = snap["touched_groups"]
+        gsn = snap["gsn"]
+        return [
+            "--- ClientRequest (protobuf) ---",
+            f"RequestId: {{ClientId: {snap['client_id']}, ClientSn: {snap['client_sn']}}}",
+            f"Payload:   \"{snap['payload']}\"" if snap['payload'] else "Payload:   (vazio)",
+            f"Pubkey:    0x{snap['pubkey']} (simulado)",
+            f"Signature: 0x{snap['signature']} (simulado)",
+            f"GroupId:   {snap['group_id']}",
+            f"TouchedGroups: {touched if touched else '[]'}",
+            f"GSN:       {gsn if gsn > 0 else '0 (nao alocado \u2014 single-group)'}",
+        ]
 
     @staticmethod
     def _msg_detail_lines(msg):
@@ -317,9 +505,11 @@ class NetworkCanvas(QWidget):
         if msg.msg_type in dispatch:
             return dispatch[msg.msg_type]
         lines = []
-        if msg.detail:
+        # Payload j\u00e1 aparece no bloco da struct (_struct_lines) \u2014 evita
+        # duplicar o mesmo campo com formata\u00e7\u00e3o diferente.
+        if msg.detail and not msg.detail.startswith("Payload="):
             lines.append(msg.detail)
-        elif msg.label:
+        elif msg.label and not msg.label.startswith("REQ "):
             lines.append(f"R\u00f3tulo: {msg.label}")
         return lines
 
@@ -348,7 +538,6 @@ class NetworkCanvas(QWidget):
         draw_gsn_meta_panel(p, self.sim)
         draw_adeliver_panel(p, self.sim)
         self._draw_phase_banner(p)
-        self._draw_inspect_popup(p)
         p.end()
 
     _PHASE_BANNER_TEXT = {
@@ -403,45 +592,3 @@ class NetworkCanvas(QWidget):
         p.drawText(QRectF(bx, by + banner_h * 0.5, banner_w, banner_h * 0.45),
                    Qt.AlignCenter | Qt.AlignTop, subtitle)
 
-    def _draw_inspect_popup(self, p):
-        popup = self._inspect_popup
-        if not popup:
-            return
-        lines, pos, color = popup["lines"], popup["pos"], popup["color"]
-        w_canvas, h_canvas = self.width(), self.height()
-
-        p.setFont(QFont("Segoe UI", 8))
-        fm = p.fontMetrics()
-        line_h = fm.height() + 2
-        max_text_w = max(fm.horizontalAdvance(l) for l in lines) + 24
-        popup_w = min(max_text_w, 300)
-        popup_h = line_h * len(lines) + 16
-
-        px = pos.x() + 15
-        py = pos.y() - popup_h / 2
-        if px + popup_w > w_canvas - 10:
-            px = pos.x() - popup_w - 15
-        if py < 10:
-            py = 10
-        if py + popup_h > h_canvas - 10:
-            py = h_canvas - popup_h - 10
-
-        rect = QRectF(px, py, popup_w, popup_h)
-        bg = QPainterPath()
-        bg.addRoundedRect(rect, 10, 10)
-        p.fillPath(bg, QColor(12, 20, 38, 235))
-        border_c = QColor(color)
-        border_c.setAlpha(150)
-        p.setPen(QPen(border_c, 1.5))
-        p.drawPath(bg)
-
-        y = py + 10
-        for i, line in enumerate(lines):
-            if i == 0:
-                p.setPen(QColor(color))
-                p.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            else:
-                p.setPen(QColor(C["text"]))
-                p.setFont(QFont("Segoe UI", 8))
-            p.drawText(QRectF(px + 10, y, popup_w - 20, line_h), Qt.AlignLeft | Qt.AlignVCenter, line)
-            y += line_h

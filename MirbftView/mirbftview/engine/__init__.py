@@ -5,7 +5,7 @@ compatibilidade com canvas, panels, app.
 """
 
 from mirbftview.protocol.types import (
-    Phase, MsgType, Node, Client, Group, Message, RequestInfo, EventLog, SegmentInfo,
+    Phase, MsgType, Node, Client, Group, Message, RequestInfo, EventLog,
 )
 from mirbftview.engine.state import SimState
 from mirbftview.engine.tick import tick as _tick
@@ -76,7 +76,7 @@ class Simulation:
     @property
     def _committed(self): return self._st.committed
     @property
-    def _epoch(self): return self._st.epoch_mgr.epoch
+    def _checkpoints_done(self): return self._st.checkpoints_done
     @property
     def _last_checkpoint(self): return self._st.last_checkpoint_sn
     @property
@@ -105,6 +105,10 @@ class Simulation:
     # Pipeline: requests ativas
     @property
     def active_requests(self): return self._st.active_requests
+
+    # Requests genuinamente bloqueadas pelo ADeliver (BufferCommit real)
+    @property
+    def blocked_requests(self): return self._st.blocked_requests
 
     # Steady-state flag
     @property
@@ -175,22 +179,14 @@ class Simulation:
             if n.id == node_id:
                 n.is_alive = True
 
-    def trigger_view_change(self, segment_id: int = 0):
-        """Força um view change para demonstração."""
-        seg = None
-        for s in self._st.epoch_mgr.current_segments:
-            if s.seg_id == segment_id:
-                seg = s
-                break
-        if not seg:
-            seg = self._st.epoch_mgr.current_segments[0] if self._st.epoch_mgr.current_segments else None
-        if seg:
-            old_leader = seg.leader
-            all_ids = [n.id for n in self._st.nodes]
-            old_idx = all_ids.index(old_leader) if old_leader in all_ids else 0
-            new_leader = all_ids[(old_idx + 1) % len(all_ids)]
-            new_ballot = seg.seg_id + len(all_ids)
-            phase_view_change(self._st, old_leader, new_leader, new_ballot)
+    def trigger_view_change(self, group_id: int = 1):
+        """Força um view change para demonstração (líder atual do grupo dado)."""
+        old_leader = self._st.epoch_mgr.leader_for_group(group_id)
+        all_ids = [n.id for n in self._st.nodes]
+        old_idx = all_ids.index(old_leader) if old_leader in all_ids else 0
+        new_leader = all_ids[(old_idx + 1) % len(all_ids)]
+        new_ballot = group_id + len(all_ids)
+        phase_view_change(self._st, old_leader, new_leader, new_ballot)
 
     # ─── Configuração (usado pelo config_panel) ──────────────────────────
 
@@ -223,8 +219,11 @@ class Simulation:
     def get_scenario(self, key: str) -> bool:
         return self._st.scenarios.get(key, False)
 
-    def set_scenario(self, key: str, enabled: bool):
+    def set_scenario(self, key: str, enabled: bool, label: str = ""):
         self._st.scenarios[key] = enabled
+        status = "LIGADO" if enabled else "DESLIGADO"
+        name = label or key
+        self._st.log_event(Phase.SCENARIO, "Cenario", f"[{status}] {name}", "accent")
 
     # step_mode e paused expostos para ControlBar
     @property

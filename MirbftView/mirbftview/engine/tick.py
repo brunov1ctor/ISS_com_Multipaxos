@@ -14,7 +14,10 @@ Cada grupo tem seu próprio líder e segmento independente.
 
 import random
 
-from mirbftview.protocol.types import Phase, MsgType, Message, RequestInfo
+from mirbftview.protocol.types import (
+    Phase, MsgType, Message, RequestInfo, snapshot_client_request, key_to_group,
+)
+from mirbftview.protocol.delivery import DeliveryEntry
 from mirbftview.engine.state import SimState
 from mirbftview.engine import phases
 
@@ -24,42 +27,27 @@ from mirbftview.engine import phases
 # CLIENT_SEND = requests chegam ao sistema
 # BUCKET_ASSIGN = request entra no bucket (visível: leigo vê o balde enchendo)
 # ACCEPT/ACCEPTED/COMMIT = proposta de batch (ProposeIfDue, CutBatch interno)
-SINGLE_GROUP_SEQUENCE = [
+# Bootstrap: só o líder se anunciando ao grupo (SetMembers/PREPARE/PROMISE),
+# sem nenhum cliente envolvido — termina em DONE sem passar por CLIENT_SEND.
+BOOTSTRAP_SEQUENCE = [
     Phase.PREPARE,
     Phase.PROMISE,
-    Phase.CLIENT_SEND,
-    Phase.BUCKET_ASSIGN,
-    Phase.ACCEPT,
-    Phase.ACCEPTED,
-    Phase.COMMIT,
-    Phase.COMMIT_NOTIFY,
-    Phase.ADELIVER,
-    Phase.DONE,
-]
-
-CROSS_GROUP_SEQUENCE = [
-    Phase.PREPARE,
-    Phase.PROMISE,
-    Phase.CLIENT_SEND,
-    Phase.BUCKET_ASSIGN,
-    Phase.GSN_ASSIGN,
-    Phase.ACCEPT,
-    Phase.ACCEPTED,
-    Phase.COMMIT,
-    Phase.COMMIT_NOTIFY,
-    Phase.ADELIVER,
     Phase.DONE,
 ]
 
 # Sequência STEADY-STATE (após primeiro ciclo: prepared=true, pula PREPARE/PROMISE)
+# Ordem real (multipaxosinstance.go:420-444): deliverCommit checa ADeliver
+# ANTES de chamar announce() — e é announce() que dispara o COMMIT_NOTIFY.
+# Se bloqueado, announce()/COMMIT_NOTIFY nem chegam a acontecer naquele
+# momento (fica em BufferCommit ate o drainBuffer liberar depois).
 STEADY_STATE_SEQUENCE = [
     Phase.CLIENT_SEND,
     Phase.BUCKET_ASSIGN,
     Phase.ACCEPT,
     Phase.ACCEPTED,
     Phase.COMMIT,
-    Phase.COMMIT_NOTIFY,
     Phase.ADELIVER,
+    Phase.COMMIT_NOTIFY,
     Phase.DONE,
 ]
 
@@ -70,8 +58,8 @@ STEADY_STATE_CROSS_SEQUENCE = [
     Phase.ACCEPT,
     Phase.ACCEPTED,
     Phase.COMMIT,
-    Phase.COMMIT_NOTIFY,
     Phase.ADELIVER,
+    Phase.COMMIT_NOTIFY,
     Phase.DONE,
 ]
 
@@ -116,10 +104,12 @@ def tick(st: SimState):
     for req in list(st.active_requests):
         st.current_request = req
         _advance_request(st, req)
-        # Todas as mensagens desta request herdam a cor da request
+        # Todas as mensagens desta request herdam a cor e o snapshot da struct
+        snap = snapshot_client_request(req)
         for msg in st.messages:
             if not msg.color:
                 msg.color = req.color
+            msg.req_snapshot = snap
         new_messages.extend(st.messages)
         st.messages = []
 
@@ -161,58 +151,68 @@ def _spawn_batch(st: SimState):
     from mirbftview.qt.canvas._constants import MSG_COLOR_POOL
 
     data_groups = [g for g in st.groups if g.id != 0]
-    is_first_cycle = not st.prepared
 
+    if not st.prepared:
+        _spawn_bootstrap(st, data_groups, MSG_COLOR_POOL)
+        return
+
+    # "single_request" só limita QUANTAS requisições novas nascem por vez
+    # (1, em vez de uma por grupo em paralelo) — qual grupo cada uma toca
+    # não é mais escolhido aqui: é consequência do hash real da chave
+    # (key_to_group), exatamente como no cliente real (createPayload).
+    n_slots = 1 if st.scenarios.get('single_request', False) else len(data_groups)
+
+    for i in range(n_slots):
+        color = MSG_COLOR_POOL[i % len(MSG_COLOR_POOL)]
+        req = _generate_client_request(st, color)
+        st.active_requests.append(req)
+
+    # Executa CLIENT_SEND para todas as requests recem-criadas
+    new_messages: list[Message] = []
+    for req in st.active_requests:
+        st.current_request = req
+        _do_client_send(st, req)
+        snap = snapshot_client_request(req)
+        for msg in st.messages:
+            if not msg.color:
+                msg.color = req.color
+            msg.req_snapshot = snap
+        new_messages.extend(st.messages)
+        st.messages = []
+
+    st.messages = new_messages
+    st.phase = Phase.CLIENT_SEND
+    if st.active_requests:
+        st.current_request = st.active_requests[0]
+
+
+def _spawn_bootstrap(st: SimState, data_groups, color_pool):
+    """Bootstrap real: cada grupo se prepara (SetMembers/PREPARE/PROMISE) de
+    uma so vez, em paralelo, ANTES de qualquer requisicao de cliente existir.
+    Nenhum cliente participa disso, por isso sempre roda em paralelo, mesmo
+    com o cenario "single_request" ligado (que so restringe requisicoes
+    reais de cliente, geradas depois deste bootstrap).
+    """
+    new_messages: list[Message] = []
     for i, group in enumerate(data_groups):
-        # Líder do grupo (conforme GetGroupLeaderForSegment)
-        leader = group.members[st.committed % len(group.members)]
         quorum = len(group.members) // 2 + 1
-
-        # Segmento do líder
-        seg = st.epoch_mgr.get_segment_for_leader(leader)
-
-        # Atribui SN
-        if seg and seg.sns:
-            sn = seg.sns[min(st.committed % seg.sn_length, seg.sn_length - 1)]
-        else:
-            sn = st.committed + i
-
-        # Fase inicial depende se é primeiro ciclo ou steady-state
-        initial_phase = Phase.PREPARE if is_first_cycle else Phase.CLIENT_SEND
+        sn = st.epoch_mgr.next_sn_for(group.id)
+        leader = st.epoch_mgr.leader_for_group(group.id, sn)
 
         req = RequestInfo(
             group_id=group.id,
             sn=sn,
-            segment_id=seg.seg_id if seg else -1,
             leader=leader,
-            ballot=seg.seg_id if seg else i,
+            ballot=0,
             quorum=quorum,
-            is_cross_group=random.random() < st.cross_op_pct,
-            phase=initial_phase,
+            phase=Phase.PREPARE,
         )
-
-        if req.is_cross_group:
-            st.gsn += 1
-            req.gsn = st.gsn
-            req.touched_groups = [group.id, random.choice([g.id for g in data_groups if g.id != group.id])]
-        else:
-            req.touched_groups = [group.id]
-
-        # Cor única
-        req.color = MSG_COLOR_POOL[i % len(MSG_COLOR_POOL)]
-        # Marca se esta request é do ciclo de setup (usa sequência com PREPARE/PROMISE)
-        req._is_setup = is_first_cycle
+        req.color = color_pool[i % len(color_pool)]
+        req._is_bootstrap = True
         st.active_requests.append(req)
 
-    # Executa a fase inicial para todas
-    new_messages: list[Message] = []
-    for req in st.active_requests:
         st.current_request = req
-        if is_first_cycle:
-            phases.phase_prepare(st)
-        else:
-            _do_client_send(st, req)
-        # Mensagens herdam cor da request
+        phases.phase_prepare(st)
         for msg in st.messages:
             if not msg.color:
                 msg.color = req.color
@@ -220,29 +220,32 @@ def _spawn_batch(st: SimState):
         st.messages = []
 
     st.messages = new_messages
-    st.phase = Phase.PREPARE if is_first_cycle else Phase.CLIENT_SEND
+    st.phase = Phase.PREPARE
     if st.active_requests:
         st.current_request = st.active_requests[0]
 
-    # Marca prepared após primeiro ciclo (PROMISE vai setar)
-    if is_first_cycle:
-        st.info_text = (
-            "\u270b SETUP do Segmento (primeira vez)\n\n"
-            "No MultiPaxos, o l\u00edder precisa fazer PREPARE/PROMISE\n"
-            "UMA VEZ no in\u00edcio do segmento (SetMembers).\n\n"
-            "Depois disso, entra em STEADY STATE:\n"
-            "pula direto para ACCEPT (ProposeIfDue).\n\n"
-            "Isso \u00e9 a otimiza\u00e7\u00e3o do MultiPaxos vs Paxos b\u00e1sico."
-        )
+    st.info_text = (
+        "\u270b SETUP do Segmento (primeira vez)\n\n"
+        "No MultiPaxos, o l\u00edder precisa fazer PREPARE/PROMISE\n"
+        "UMA VEZ no in\u00edcio do segmento (SetMembers), antes de\n"
+        "qualquer requisicao de cliente existir. Sempre roda em\n"
+        "paralelo para todos os grupos, mesmo com o modo\n"
+        "'uma mensagem por vez' ligado - nenhum cliente esta\n"
+        "envolvido aqui ainda.\n\n"
+        "Depois disso, entra em STEADY STATE:\n"
+        "pula direto para ACCEPT (ProposeIfDue)."
+    )
 
 
 def _advance_request(st: SimState, req: RequestInfo):
     """Avança uma request individual para sua próxima fase."""
     # Sequência é determinada pelo ciclo em que a request nasceu:
-    # requests que começaram com PREPARE usam sequência completa
-    # requests que começaram com CLIENT_SEND usam steady-state
-    if getattr(req, '_is_setup', False):
-        seq = CROSS_GROUP_SEQUENCE if req.is_cross_group else SINGLE_GROUP_SEQUENCE
+    # bootstrap (PREPARE/PROMISE, sem cliente) usa a sequência truncada;
+    # qualquer requisição real de cliente usa sempre a sequência steady-state,
+    # mesmo a primeira — PREPARE/PROMISE já foram feitos separadamente no
+    # bootstrap antes de qualquer requisição de cliente existir.
+    if getattr(req, '_is_bootstrap', False):
+        seq = BOOTSTRAP_SEQUENCE
     else:
         seq = STEADY_STATE_CROSS_SEQUENCE if req.is_cross_group else STEADY_STATE_SEQUENCE
 
@@ -316,16 +319,18 @@ def _advance_request(st: SimState, req: RequestInfo):
             st.batch_fill[bucket_id] = st.batch_fill.get(bucket_id, 0) + 1
             st.phase = Phase.ACCEPT
             st.log_event(Phase.ACCEPT, "Batch RESURRECT",
-                         f"Batch invalidado (lider mudou/epoch)\n"
+                         f"Instancia desistiu do quorum (Eventual Progress)\n"
                          f"Request volta ao Bucket {bucket_id}\n"
                          f"Aguardando novo batch cut",
                          "orange")
             st.info_text = (
                 f"Batch INVALIDADO!\n\n"
-                f"O batch foi descartado (ex: lider mudou,\n"
-                f"epoch transitou, ou conflito detectado).\n\n"
-                f"As requests voltam ao bucket {bucket_id}\n"
-                f"e serao re-empacotadas pelo novo lider."
+                f"A instancia de consenso desistiu de esperar\n"
+                f"quorum para esta posicao do log (mecanismo real\n"
+                f"de Eventual Progress) e commitou um valor nulo.\n\n"
+                f"Requisicoes que ja tinham sido cortadas em lote\n"
+                f"mas nao decididas voltam a fila do bucket {bucket_id}\n"
+                f"para serem re-propostas depois."
             )
             st.messages = [Message(
                 MsgType.CLIENT_REQUEST, req.leader, req.leader,
@@ -378,13 +383,68 @@ def _advance_request(st: SimState, req: RequestInfo):
             req.phase = Phase.CHECKPOINT
             return
 
+    # ADeliver bloqueou de verdade (BufferCommit real, orderer/multipaxos
+    # instance.go:432-436): a request sai do pipeline ativo e so volta
+    # quando outro commit do mesmo grupo liberar o GSN anterior — nao avanca
+    # para COMMIT_NOTIFY (announce()) enquanto isso nao acontece.
+    if current == Phase.ADELIVER and next_phase == Phase.COMMIT_NOTIFY:
+        entries = getattr(req, '_delivery_entries', None)
+        if entries and not all(e.delivered for e in entries):
+            st.active_requests.remove(req)
+            for gid in {e.group_id for e in entries}:
+                st.blocked_requests.setdefault(gid, []).append(req)
+            return
+
     # Executa fase
     _execute_phase(st, req, next_phase)
     req.phase = next_phase
 
+    # Depois de rodar ADeliver, tenta liberar requests de outros commits do
+    # mesmo grupo que ficaram bloqueadas antes: o _try_deliver interno pode
+    # ter destravado varias entradas pendentes de uma vez (drainBuffer real).
+    if next_phase == Phase.ADELIVER:
+        _release_unblocked(st, req.group_id)
+
     # Marca prepared=true após PROMISE (steady-state a partir do próximo ciclo)
     if next_phase == Phase.PROMISE and not st.prepared:
         st.prepared = True
+
+
+def _release_unblocked(st: SimState, group_id: int):
+    """Libera requests bloqueadas pelo ADeliver deste grupo cujas entradas
+    (uma por grupo tocado) acabaram de ser TODAS entregues (drainBuffer
+    real). Uma request cross-group fica registrada em blocked_requests de
+    cada grupo que ela toca; só é liberada (e removida de todos eles) quando
+    todas as suas entradas estiverem entregues. Continua a partir de
+    ADELIVER (já executado) — o próximo tick avança para COMMIT_NOTIFY."""
+    blocked = st.blocked_requests.get(group_id)
+    if not blocked:
+        return
+    still_blocked = []
+    released = []
+    for req in blocked:
+        entries = getattr(req, '_delivery_entries', None)
+        if entries and all(e.delivered for e in entries):
+            released.append(req)
+        else:
+            still_blocked.append(req)
+    if still_blocked:
+        st.blocked_requests[group_id] = still_blocked
+    else:
+        st.blocked_requests.pop(group_id, None)
+
+    for req in released:
+        # Remove de qualquer outro grupo em que também estivesse pendurada.
+        for gid, lst in list(st.blocked_requests.items()):
+            if req in lst:
+                lst.remove(req)
+                if not lst:
+                    st.blocked_requests.pop(gid, None)
+        st.log_event(Phase.ADELIVER, "ADeliver liberado",
+                     f"GSN={req.gsn} finalmente entregue\n"
+                     f"Request retomada para COMMIT_NOTIFY",
+                     "green")
+        st.active_requests.append(req)
 
 
 def _execute_phase(st: SimState, req: RequestInfo, phase: Phase):
@@ -411,42 +471,89 @@ def _execute_phase(st: SimState, req: RequestInfo, phase: Phase):
         phases.phase_done(st)
 
 
-def _do_client_send(st: SimState, req: RequestInfo):
-    """Gera a request do cliente APÓS o segmento estar preparado.
+def _generate_client_request(st: SimState, color: str) -> RequestInfo:
+    """Gera uma request de cliente nova, fiel ao cliente real
+    (cmd/orderingclient/client.go: createPayload):
 
-    No código real, requests chegam em paralelo ao setup do segmento.
-    Aqui simplificamos: após PROMISE (prepared=true), mostramos
-    o cliente enviando a request que será proposta no ACCEPT.
+      - cada cliente mantém seu PRÓPRIO contador sequencial (seqNr), não um
+        contador global compartilhado;
+      - a chave é sempre K{seqNr:08d} (sequencial, não aleatória);
+      - TX vs GET é decidido deterministicamente por seqNr%100 < CrossOpRatio
+        (não por sorteio); a segunda chave de uma TX é sempre seqNr+1000;
+      - o GRUPO é uma CONSEQUÊNCIA do hash real da chave (key_to_group,
+        mesmo CRC32%numDataGroups de keyToGroup em request.go) — não é mais
+        escolhido antes e "encaixado" numa chave depois.
+
+    Se as duas chaves de uma TX colidirem no mesmo grupo (hash), a operação
+    vira single-group de verdade, exatamente como a deduplicação real de
+    TouchedGroups faria (ver "Quando duas chaves colidem no mesmo grupo").
     """
-    import hashlib
-    import string
+    data_groups = [g for g in st.groups if g.id != 0]
+    num_data_groups = len(data_groups)
 
     client = random.choice(st.clients)
-    st.client_sn += 1
+    seq_nr = st.client_seq.get(client.id, 0)
+    st.client_seq[client.id] = seq_nr + 1
 
-    payload = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
-    payload_hash = hashlib.sha256(payload.encode()).hexdigest()[:16]
+    cross_ratio_pct = round(st.cross_op_pct * 100)
+    k1 = f"K{seq_nr:08d}"
+    if (seq_nr % 100) < cross_ratio_pct:
+        k2 = f"K{seq_nr + 1000:08d}"
+        payload = f"TX {k1},{k2}"
+        touched = sorted({key_to_group(k1, num_data_groups), key_to_group(k2, num_data_groups)})
+    else:
+        payload = f"GET {k1}"
+        touched = [key_to_group(k1, num_data_groups)]
 
-    # Preenche dados da request
-    req.client_id = client.id
-    req.client_sn = st.client_sn
-    req.payload = payload
+    is_cross = len(touched) > 1
+    group_id = touched[0]
+    group = st.groups[group_id]
+    quorum = len(group.members) // 2 + 1
+    sn = st.epoch_mgr.next_sn_for(group_id)
+    leader = st.epoch_mgr.leader_for_group(group_id, sn)
+
+    req = RequestInfo(
+        client_id=client.id,
+        client_sn=seq_nr,
+        payload=payload,
+        group_id=group_id,
+        sn=sn,
+        leader=leader,
+        ballot=0,
+        quorum=quorum,
+        is_cross_group=is_cross,
+        touched_groups=touched,
+        phase=Phase.CLIENT_SEND,
+        color=color,
+    )
+    if is_cross:
+        st.gsn += 1
+        req.gsn = st.gsn
+    return req
+
+
+def _do_client_send(st: SimState, req: RequestInfo):
+    """Log/mensagem visual do envio — a request já chega aqui totalmente
+    gerada por _generate_client_request (cliente, seqNr, payload, grupo,
+    líder, SN)."""
+    import hashlib
+
+    client = st.clients[req.client_id] if req.client_id < len(st.clients) else st.clients[0]
+    payload_hash = hashlib.sha256(req.payload.encode()).hexdigest()[:16]
     req.payload_hash = payload_hash
 
-    # Bucket assignment (interno)
-    req.bucket_id = st.epoch_mgr.get_request_bucket(client.id, st.client_sn)
+    # Bucket assignment (interno) — (ClientId+ClientSn) mod numBuckets, com
+    # ClientSn = seqNr real deste cliente (GetBucketNr real em request.go).
+    req.bucket_id = st.epoch_mgr.get_request_bucket(client.id, req.client_sn)
 
-    # Proxy = qualquer membro do grupo
-    group = st.groups[req.group_id] if req.group_id < len(st.groups) else st.groups[1]
+    group = st.groups[req.group_id]
     req.proxy_node = random.choice(group.members)
-
-    # Registra proxy
-    st.proxy.register_request(client.id, st.client_sn, req.proxy_node)
+    st.proxy.register_request(client.id, req.client_sn, req.proxy_node)
 
     st.phase = Phase.CLIENT_SEND
     st.log_event(Phase.CLIENT_SEND, "Cliente envia request",
                  f"{client.name} -> Node {req.proxy_node} (proxy)\n"
-                 f"Payload: \"{payload}\" | Hash: {payload_hash[:8]}\n"
+                 f"Payload: \"{req.payload}\" | Hash: {payload_hash[:8]}\n"
                  f"Grupo: G{req.group_id} | Lider: Node {req.leader}",
                  "orange")
 
@@ -458,7 +565,7 @@ def _do_client_send(st: SimState, req: RequestInfo):
         f"ja foram feitos). Quando o batch estiver pronto,\n"
         f"o lider (Node {req.leader}) vai propor via ACCEPT.\n\n"
         f"\u2500\u2500\u2500 Detalhes \u2500\u2500\u2500\n"
-        f"Payload: \"{payload}\" | Hash: {payload_hash[:8]}\n"
+        f"Payload: \"{req.payload}\" | Hash: {payload_hash[:8]}\n"
         f"Grupo G{req.group_id} membros={group.members}"
     )
 
@@ -466,10 +573,27 @@ def _do_client_send(st: SimState, req: RequestInfo):
         MsgType.CLIENT_REQUEST, client.id, req.proxy_node,
         from_is_client=True,
         label=f"REQ h={payload_hash[:8]}",
-        detail=f"Payload=\"{payload}\"",
         sn=req.sn,
         batch_digest="",
     )]
+
+
+def _force_close_delivery(st: SimState, req: RequestInfo):
+    """Fecha a posição de entrega desta request em cada grupo tocado, mesmo
+    sem ter passado por ADeliver de verdade — usado quando a request é
+    interrompida antes disso (ex.: falha de nó). Evita travar para sempre a
+    fila de outro grupo esperando por este GSN, e libera qualquer request
+    que já estivesse bloqueada atrás dele."""
+    if not req.is_cross_group or req.gsn <= 0:
+        return
+    groups = req.touched_groups if req.touched_groups else [req.group_id]
+    touched = set()
+    for gid in groups:
+        entry = DeliveryEntry(sn=req.sn, gsn=req.gsn, group_id=gid, batch_digest=req.batch_digest)
+        st.delivery.register_commit(entry)
+        touched.add(gid)
+    for gid in touched:
+        _release_unblocked(st, gid)
 
 
 def _trigger_node_failure(st: SimState, req: RequestInfo):
@@ -486,12 +610,19 @@ def _trigger_node_failure(st: SimState, req: RequestInfo):
 def _handle_special(st: SimState, req: RequestInfo):
     """Trata fases especiais para uma request."""
     if req.phase == Phase.CHECKPOINT:
-        phases.phase_epoch_transition(st)
-        req.phase = Phase.EPOCH_TRANSITION
-    elif req.phase == Phase.EPOCH_TRANSITION:
+        # Checkpoint no MultiPaxosMulticastOrderer só trunca o log — não troca
+        # líder nem redistribui buckets (grupos são estáticos), então segue
+        # direto para DONE, sem uma fase de transição de época.
         phases.phase_done(st)
         req.phase = Phase.DONE
     elif req.phase == Phase.VIEW_CHANGE:
+        # Falha de nó pode ter interrompido esta request ANTES do ADeliver.
+        # Se ela já tinha GSN alocado (passou por GSN_ASSIGN/register_touch),
+        # sua posição na fila de entrega de cada grupo tocado ficaria
+        # travada para sempre sem isto — Eventual Progress real garante que
+        # toda posição do log eventualmente avança (mesmo que para ⊥)
+        # justamente para isso não acontecer.
+        _force_close_delivery(st, req)
         phases.phase_done(st)
         req.phase = Phase.DONE
     elif req.phase == Phase.RETRANSMIT:
@@ -504,7 +635,7 @@ def _handle_special(st: SimState, req: RequestInfo):
 
 def _needs_checkpoint(st: SimState) -> bool:
     """Verifica se é hora de fazer checkpoint."""
-    if st.scenarios.get('epoch_force', False) and st.committed > 0:
+    if st.scenarios.get('checkpoint_force', False) and st.committed > 0:
         return st.last_checkpoint_sn != st.current_request.sn
     return (
         st.committed > 0

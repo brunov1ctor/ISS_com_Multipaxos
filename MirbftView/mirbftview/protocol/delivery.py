@@ -35,23 +35,41 @@ class DeliveryEntry:
 class AtomicDelivery:
     """Gerencia a entrega atômica baseada em GSN.
 
-    Regra: para cada grupo, cross-ops são entregues em ordem de GSN.
-    Se GSN=N não foi entregue, GSN=N+1 fica bloqueado.
+    Regra: para cada grupo, cross-ops são entregues na ordem em que o META
+    (register_touch) as apresentou àquele grupo — não uma sequência de
+    inteiros consecutivos, já que o GSN é global e compartilhado entre
+    pares de grupos diferentes; um grupo só vê os GSNs que de fato o
+    tocam, exatamente como groupGSNQueue no código real (sequencer.go).
     """
 
     def __init__(self):
         # Último GSN entregue por grupo
         self._last_delivered_gsn: dict[int, int] = {}  # group_id → last_gsn
-        # Fila de entries aguardando entrega por grupo
+        # Fila de entries por grupo, na ordem em que o META anunciou (pode
+        # conter placeholders ainda não commitados — register_touch).
         self._pending: dict[int, list[DeliveryEntry]] = {}  # group_id → [entries]
         # Historico de entregas (para visualizacao)
         self.delivery_history: list[dict] = []  # [{gsn, groups, sn, status}]
+
+    def register_touch(self, gsn: int, group_id: int):
+        """Anuncia que este GSN toca este grupo — chamado assim que o META
+        é conhecido (GSN_ASSIGN), ANTES do commit em si. Espelha
+        RegisterMetadata/groupGSNQueue reais: a ordem de entrega de um grupo
+        é fixada pela chegada do META, não pela hora em que aquele grupo
+        específico termina seu próprio consenso."""
+        pending = self._pending.setdefault(group_id, [])
+        if any(e.gsn == gsn for e in pending):
+            return
+        pending.append(DeliveryEntry(sn=-1, gsn=gsn, group_id=group_id, batch_digest="", committed=False))
+        pending.sort(key=lambda e: e.gsn)
 
     def register_commit(self, entry: DeliveryEntry) -> list[DeliveryEntry]:
         """Registra um commit e retorna entries que podem ser entregues agora.
 
         Single-group (gsn=0): entrega imediata.
-        Cross-group (gsn>0): só entrega se GSN anterior já foi entregue.
+        Cross-group (gsn>0): só entrega quando estiver na frente da fila
+        deste grupo (ou seja, todo GSN anterior que também o toca já foi
+        entregue) — substitui o placeholder de register_touch, se existir.
         """
         entry.committed = True
 
@@ -66,14 +84,19 @@ class AtomicDelivery:
                 self.delivery_history = self.delivery_history[-30:]
             return [entry]
 
-        # Cross-group: adiciona à fila e tenta entregar em ordem
+        # Cross-group: substitui o placeholder (register_touch) pela entrada
+        # real do commit, ou adiciona se por algum motivo não existia ainda.
         gid = entry.group_id
-        if gid not in self._pending:
-            self._pending[gid] = []
-        self._pending[gid].append(entry)
+        pending = self._pending.setdefault(gid, [])
+        for i, e in enumerate(pending):
+            if e.gsn == entry.gsn and not e.committed:
+                pending[i] = entry
+                break
+        else:
+            pending.append(entry)
+            pending.sort(key=lambda e: e.gsn)
 
         delivered = self._try_deliver(gid)
-        # Registra no historico
         for d in delivered:
             self.delivery_history.append({
                 "gsn": d.gsn, "sn": d.sn, "group": d.group_id,
@@ -84,36 +107,30 @@ class AtomicDelivery:
         return delivered
 
     def _try_deliver(self, group_id: int) -> list[DeliveryEntry]:
-        """Tenta entregar entries pendentes em ordem de GSN."""
+        """Entrega, em ordem, todo prefixo já commitado da fila deste grupo.
+
+        Como a fila está sempre ordenada por GSN (pela ordem de chegada do
+        META, via register_touch), basta parar no primeiro ainda não
+        commitado — sem assumir que os GSNs sejam inteiros consecutivos.
+        """
         delivered = []
         last_gsn = self._last_delivered_gsn.get(group_id, 0)
-
-        # Ordena por GSN
         pending = self._pending.get(group_id, [])
-        pending.sort(key=lambda e: e.gsn)
 
-        while pending:
-            entry = pending[0]
-            if not entry.committed:
-                break  # Ainda não committed, não pode entregar
-            if entry.gsn <= last_gsn + 1:
-                # Pode entregar (GSN consecutivo ou igual)
-                entry.delivered = True
-                if entry.gsn > last_gsn:
-                    last_gsn = entry.gsn
-                delivered.append(pending.pop(0))
-            else:
-                # GSN gap: bloqueado até GSN anterior ser entregue
-                break
+        while pending and pending[0].committed:
+            entry = pending.pop(0)
+            entry.delivered = True
+            last_gsn = entry.gsn
+            delivered.append(entry)
 
         self._last_delivered_gsn[group_id] = last_gsn
         return delivered
 
     def get_blocked_entries(self, group_id: int) -> list[DeliveryEntry]:
-        """Retorna entries bloqueadas aguardando GSN anterior."""
-        last_gsn = self._last_delivered_gsn.get(group_id, 0)
+        """Retorna entries já commitadas mas ainda atrás de um GSN anterior
+        (não commitado ou ainda não anunciado) na fila deste grupo."""
         pending = self._pending.get(group_id, [])
-        return [e for e in pending if e.committed and e.gsn > last_gsn + 1]
+        return [e for e in pending if e.committed]
 
     def get_next_expected_gsn(self, group_id: int) -> int:
         """Retorna o próximo GSN esperado para entrega neste grupo."""

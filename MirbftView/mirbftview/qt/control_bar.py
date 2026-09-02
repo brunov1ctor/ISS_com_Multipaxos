@@ -123,19 +123,61 @@ class ControlBar(QWidget):
             f"border-radius: 8px; padding: 6px; }}"
             f"QMenu::item {{ color: {C['text']}; padding: 4px 12px; }}"
             f"QCheckBox {{ color: {C['text']}; font-size: 9pt; spacing: 6px; padding: 4px 8px; }}"
+            f"QToolTip {{ background: rgba(10,18,36,0.98); color: {C['text']}; "
+            f"border: 1px solid rgba(255,255,255,0.2); padding: 6px; font-size: 8pt; }}"
         )
         scenarios = [
-            ("timeout", "Timeout / Retransmissao"),
-            ("node_failure", "Falha de no"),
-            ("cross_group", "Forcar cross-group"),
-            ("epoch_force", "Epoch a cada commit"),
-            ("adeliver_block", "ADeliver bloqueado"),
-            ("batch_resurrect", "Batch Resurrect"),
+            ("single_request", "Uma mensagem por vez (didatico)",
+             "Restringe o regime estacionario a 1 grupo de dados por vez,\n"
+             "em rodizio, em vez dos N grupos em paralelo. So afeta o\n"
+             "trafego apos o bootstrap inicial (que sempre prepara todos\n"
+             "os grupos de uma vez, como no Start() real). Tambem alterna\n"
+             "cross-group e single-group a cada novo envio, em vez de\n"
+             "sortear pela taxa configurada, para mostrar sempre os dois\n"
+             "fluxos em sequencia."),
+            ("timeout", "Timeout / Retransmissao",
+             "Com chance aleatoria, simula o lider nao recebendo quorum\n"
+             "de ACCEPTED a tempo e retransmitindo o ACCEPT (acceptRtxEvery\n"
+             "no codigo real). Mecanismo real de tolerancia a mensagens\n"
+             "perdidas ou atrasadas — reenviar e seguro, duplicatas sao\n"
+             "ignoradas pelo protocolo."),
+            ("node_failure", "Falha de no",
+             "Com chance aleatoria, simula a queda do lider atual antes do\n"
+             "ACCEPT e dispara um View Change: os demais membros elegem um\n"
+             "novo lider com ballot maior. Mecanismo real de tolerancia a\n"
+             "falhas do MultiPaxos."),
+            ("cross_group", "Forcar cross-group",
+             "Forca toda nova requisicao a ser cross-group (tocar 2 grupos\n"
+             "distintos), em vez de sortear aleatoriamente pela taxa\n"
+             "configurada (cross_op_pct). Util para ver sempre o fluxo\n"
+             "completo com GSN/META/ADeliver, sem esperar o sorteio."),
+            ("checkpoint_force", "Checkpoint a cada commit",
+             "Forca um CHECKPOINT depois de toda unica decisao, em vez de\n"
+             "esperar o intervalo normal (checkpoint_interval, por padrao\n"
+             "a cada 80 commits). O checkpoint em si e real e periodico;\n"
+             "isso so exagera a frequencia para voce ver o evento sem\n"
+             "esperar. No MultiPaxosMulticastOrderer, um checkpoint so\n"
+             "permite truncar o log — nao troca lider nem redistribui\n"
+             "buckets (grupos sao estaticos)."),
+            ("adeliver_block", "ADeliver bloqueado",
+             "Forca artificialmente, numa operacao cross-group, o bloqueio\n"
+             "real do ADeliver: um grupo so entrega um GSN depois de ja ter\n"
+             "entregue todo GSN anterior que tambem o toca. No simulador,\n"
+             "com poucos grupos e poucas operacoes, esse bloqueio natural\n"
+             "e raro — o cenario garante que voce veja o log 'BLOQUEADO'\n"
+             "sem depender de coincidencia."),
+            ("batch_resurrect", "Batch Resurrect",
+             "Com chance aleatoria, simula uma instancia desistindo de\n"
+             "esperar quorum para uma posicao do log (mecanismo real de\n"
+             "Eventual Progress): ela commita um valor nulo e devolve a\n"
+             "fila do bucket as requisicoes ja cortadas em lote mas ainda\n"
+             "nao decididas, para serem re-propostas depois."),
         ]
-        for key, label in scenarios:
+        for key, label, tooltip in scenarios:
             cb = QCheckBox(label)
             cb.setChecked(self.sim.get_scenario(key))
-            cb.toggled.connect(lambda checked, k=key: self.sim.set_scenario(k, checked))
+            cb.setToolTip(tooltip)
+            cb.toggled.connect(lambda checked, k=key, lbl=label: self.sim.set_scenario(k, checked, lbl))
             action = QWidgetAction(menu)
             action.setDefaultWidget(cb)
             menu.addAction(action)

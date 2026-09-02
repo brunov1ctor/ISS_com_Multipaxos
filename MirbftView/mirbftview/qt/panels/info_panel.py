@@ -23,7 +23,6 @@ _PHASE_DESCRIPTIONS = {
     Phase.ADELIVER: "Entrega atomica (ordem global)",
     Phase.GSN_ASSIGN: "Numeracao global para pedido multi-grupo",
     Phase.CHECKPOINT: "Salvando progresso (checkpoint)",
-    Phase.EPOCH_TRANSITION: "Troca de turno (novo epoch)",
     Phase.VIEW_CHANGE: "Lider caiu — elegendo substituto",
     Phase.RETRANSMIT: "Timeout — retransmitindo mensagem",
 }
@@ -40,7 +39,6 @@ _PHASE_ICONS = {
     Phase.ADELIVER: "\U0001f513",
     Phase.GSN_ASSIGN: "\U0001f522",
     Phase.CHECKPOINT: "\U0001f3c1",
-    Phase.EPOCH_TRANSITION: "\U0001f504",
     Phase.VIEW_CHANGE: "\u26a0\ufe0f",
     Phase.RETRANSMIT: "\u23f1\ufe0f",
 }

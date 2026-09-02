@@ -21,10 +21,10 @@ _PHASE_SHORT = {
     Phase.COMMIT_NOTIFY:  "NTFY",
     Phase.ADELIVER:       "ADLV",
     Phase.CHECKPOINT:     "CKPT",
-    Phase.EPOCH_TRANSITION: "EPCH",
     Phase.VIEW_CHANGE:    "VIEW",
     Phase.RETRANSMIT:     "RTXM",
     Phase.DONE:           "DONE",
+    Phase.SCENARIO:       "CFG",
 }
 
 
@@ -173,6 +173,10 @@ class EventLogPanel(QWidget):
         elif phase == Phase.CHECKPOINT:
             parts = detail.split("\n")
             return parts[0].strip() if parts else ""
+
+        elif phase == Phase.SCENARIO:
+            # "[LIGADO] Nome do cenario" ou "[DESLIGADO] Nome do cenario"
+            return detail.strip()
 
         else:
             parts = detail.split("\n")
