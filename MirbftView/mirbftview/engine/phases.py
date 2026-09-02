@@ -5,7 +5,7 @@ import random
 import string
 
 from mirbftview.protocol.types import (
-    Phase, MsgType, Message, RequestInfo, SegmentInfo,
+    Phase, MsgType, Message, RequestInfo,
 )
 from mirbftview.protocol.batch import PendingRequest
 from mirbftview.protocol.delivery import DeliveryEntry
@@ -34,12 +34,9 @@ def phase_client_send(st: SimState):
     group = st.groups[group_id] if group_id < len(st.groups) else st.groups[1]
     quorum = len(group.members) // 2 + 1
 
-    # Lider do grupo (conforme GetGroupLeaderForSegment no codigo real)
-    # No ISS: lider = members[firstSN % len(members)] por segmento
-    leader = group.members[st.committed % len(group.members)]
-
-    # Segmento do lider
-    seg = st.epoch_mgr.get_segment_for_leader(leader)
+    # Lider da PROXIMA posicao do log deste grupo (multipaxosinstance.go:606:
+    # i.leader = i.members[i.sn % n] — fixo pelo SN, nao muda com epoch/policy).
+    leader = st.epoch_mgr.leader_for_group(group_id)
 
     # Bucket assignment (interno, para visualizacao do painel de buckets)
     bucket_id = st.epoch_mgr.get_request_bucket(client.id, st.client_sn)
@@ -55,10 +52,9 @@ def phase_client_send(st: SimState):
         bucket_id=bucket_id,
         group_id=group_id,
         gsn=gsn,
-        sn=0,  # será atribuído quando o batch for proposto
-        segment_id=seg.seg_id if seg else -1,
+        sn=0,  # será atribuído quando o batch for proposto (phase_batch_cut)
         leader=leader,
-        ballot=seg.seg_id if seg else 0,
+        ballot=0,
         quorum=quorum,
         is_cross_group=is_cross,
         touched_groups=touched,
@@ -129,26 +125,24 @@ def phase_bucket_assign(st: SimState):
     if cutter:
         cutter.add_request(pending)
 
-    # Info sobre bucket assignment REAL
-    epoch = st.epoch_mgr.epoch
-    assignment = st.epoch_mgr.bucket_assignment
     group = st.groups[req.group_id] if req.group_id < len(st.groups) else st.groups[1]
+    next_sn = st.epoch_mgr.next_sn_for(req.group_id)
 
     st.phase = Phase.BUCKET_ASSIGN
     st.log_event(Phase.BUCKET_ASSIGN, "Bucket Assignment",
                  f"Request -> Bucket {bucket_id}\n"
                  f"  Formula request->bucket: (clID={req.client_id} + clSN={req.client_sn}) % {st.num_buckets}\n"
-                 f"  Formula bucket->lider (epoch {epoch}):\n"
-                 f"    Passo 1: round-robin com offset epoch entre todos os nos\n"
-                 f"    Passo 2: buckets de nao-lideres redistribuidos\n"
-                 f"  Bucket {bucket_id} -> Lider Node {leader}\n"
-                 f"  Assignment completo: {assignment}",
+                 f"  Bucket pertence sempre ao grupo G{req.group_id} (fixo, de groups.yml)\n"
+                 f"  Lider da proxima posicao (SN={next_sn}) do log de G{req.group_id}: Node {leader}\n"
+                 f"  (members[sn % n] — roda por SN, nao muda com epoca)",
                  "gold")
 
     st.info_text = (
         f"🪣 Classificando o pedido numa 'caixa de entrada'\n\n"
-        f"O sistema tem {st.num_buckets} caixas (buckets).\n"
-        f"Cada caixa tem um responsável (líder).\n\n"
+        f"O sistema tem {st.num_buckets} caixas (buckets) POR GRUPO.\n"
+        f"Um bucket pertence sempre ao mesmo grupo: a caixa em si\n"
+        f"nunca muda de dono, só serve para agrupar pedidos antes\n"
+        f"de cortar o batch.\n\n"
         f"📡 O proxy envia a request para TODOS os membros\n"
         f"do grupo G{req.group_id}: {group.members}\n"
         f"(via sendToGroup/GsnReqForward — garante que todos\n"
@@ -156,8 +150,9 @@ def phase_bucket_assign(st: SimState):
         f"─── Como a fila é escolhida? ───\n"
         f"Fórmula: (cliente + nº do pedido) mod {st.num_buckets}\n"
         f"= ({req.client_id} + {req.client_sn}) mod {st.num_buckets} = fila {bucket_id}\n\n"
-        f"─── Quem atende cada fila (epoch {epoch})? ───\n"
-        + "\n".join(f"  Node {l}: filas {bs}" for l, bs in sorted(assignment.items()))
+        f"─── Quem lidera a próxima posição do log deste grupo? ───\n"
+        f"Node {leader} (SN={next_sn} mod {len(group.members)} membros = "
+        f"posição {next_sn % len(group.members)} da lista {group.members})"
     )
 
     # Mensagem visual: proxy encaminha para TODOS os membros do grupo
@@ -188,7 +183,7 @@ def phase_batch_cut(st: SimState):
     fill = st.batch_fill.get(req.bucket_id, 1)
 
     batch_digest = hashlib.sha256(
-        f"{req.payload_hash}:{req.bucket_id}:{st.epoch_mgr.epoch}".encode()
+        f"{req.payload_hash}:{req.bucket_id}:{req.group_id}".encode()
     ).hexdigest()[:12]
     req.batch_digest = batch_digest
     req.batch_requests = fill  # batch real: todas as requests acumuladas
@@ -214,13 +209,11 @@ def phase_batch_cut(st: SimState):
     if cutter:
         cutter.force_cut()
 
-    # Atribui SN do segmento
-    seg = st.epoch_mgr.get_segment_for_leader(req.leader)
-    if seg and seg.sns:
-        # Usa o próximo SN disponível no segmento
-        req.sn = seg.sns[min(st.committed % seg.sn_length, seg.sn_length - 1)]
-    else:
-        req.sn = st.committed
+    # Consome a proxima posicao do log deste grupo — e so aqui, no corte real
+    # do batch, que o SN e de fato usado (leader_for_group ja tinha "espiado"
+    # este mesmo SN antes, em phase_client_send, sem consumi-lo).
+    req.sn = st.epoch_mgr.next_sn_for(req.group_id)
+    st.epoch_mgr.advance(req.group_id)
 
     cut_reason = "cross_op_immediate" if req.is_cross_group else "size/timeout"
 
@@ -230,8 +223,7 @@ def phase_batch_cut(st: SimState):
                  f"Motivo: {cut_reason}\n"
                  f"Requests no batch: {req.batch_requests}\n"
                  f"Batch digest: {batch_digest}\n"
-                 f"SN atribuido: {req.sn} (do segmento {req.segment_id})\n"
-                 f"Segmento SNs: {seg.sns if seg else '?'}",
+                 f"SN atribuido: {req.sn} (log do grupo G{req.group_id})",
                  "gold")
 
     st.info_text = (
@@ -243,7 +235,7 @@ def phase_batch_cut(st: SimState):
         f"e vai para votação no grupo.\n\n"
         f"─── Detalhes técnicos ───\n"
         f"Batch: {req.batch_requests} reqs | Digest: {batch_digest}\n"
-        f"Segmento {req.segment_id} | Distance={seg.sn_distance if seg else '?'}"
+        f"Grupo G{req.group_id} | Log contíguo (sem segmentos intercalados)"
     )
 
     st.messages = [Message(
@@ -266,6 +258,15 @@ def phase_gsn_assign(st: SimState):
     })
     if len(st.meta_stream) > 20:
         st.meta_stream = st.meta_stream[-20:]
+
+    # Anuncia a existencia do GSN a cada grupo tocado JA AQUI, antes do
+    # commit em si — espelha RegisterMetadata/groupGSNQueue reais, que
+    # populam a fila de um grupo assim que o META chega, independente de
+    # quando aquele grupo especifico termina seu proprio consenso. E isso
+    # que faz o ADeliver poder de fato bloquear em ordem, sem depender de
+    # que os GSNs sejam inteiros consecutivos por grupo.
+    for gid in req.touched_groups:
+        st.delivery.register_touch(req.gsn, gid)
 
     st.phase = Phase.GSN_ASSIGN
     st.log_event(Phase.GSN_ASSIGN, "GSN Atribuido",
@@ -486,11 +487,10 @@ def phase_commit_notify(st: SimState):
     st.commit_history.append({
         "sn": req.sn,
         "leader": req.leader,
-        "epoch": st.epoch_mgr.epoch,
+        "checkpoint_idx": st.checkpoints_done,
         "hash": req.payload_hash[:6],
         "is_cross": req.is_cross_group,
         "gsn": req.gsn,
-        "segment": req.segment_id,
         "group": req.group_id,
         "color": req.color,
     })
@@ -527,22 +527,40 @@ def phase_commit_notify(st: SimState):
 
 
 def phase_adeliver(st: SimState):
-    """ADeliver — verifica se cross-op pode ser entregue (ordem GSN)."""
+    """ADeliver — verifica se cross-op pode ser entregue (ordem GSN).
+
+    No sistema real, cada grupo tocado por uma cross-op roda seu proprio
+    MultiPaxos e chama ADeliver separadamente para aquele mesmo GSN — por
+    isso registramos uma entrada de entrega POR GRUPO tocado, nao so no
+    grupo "de origem" desta request simulada; caso contrario a fila de
+    entrega do outro grupo nunca fecharia a lacuna de ordem e ficaria
+    bloqueada para sempre.
+    """
     req = st.current_request
-    entry = DeliveryEntry(
-        sn=req.sn, gsn=req.gsn, group_id=req.group_id, batch_digest=req.batch_digest,
-    )
-    delivered = st.delivery.register_commit(entry)
-    blocked = st.delivery.get_blocked_entries(req.group_id)
+    groups = req.touched_groups if req.touched_groups else [req.group_id]
+    entries = [
+        DeliveryEntry(sn=req.sn, gsn=req.gsn, group_id=gid, batch_digest=req.batch_digest)
+        for gid in groups
+    ]
+    # Guardado na request: se ficar bloqueado agora, tick.py precisa checar
+    # depois (quando outro commit de qualquer grupo tocado rodar
+    # _try_deliver de novo) se todas essas entradas (entry.delivered) foram
+    # liberadas nesse meio tempo — espelha o BufferCommit/drainBuffer real.
+    req._delivery_entries = entries
+    delivered_any = False
+    for entry in entries:
+        if st.delivery.register_commit(entry):
+            delivered_any = True
     next_expected = st.delivery.get_next_expected_gsn(req.group_id)
+    blocked = st.delivery.get_blocked_entries(req.group_id)
 
     # Enriquece historico com touched_groups
-    if delivered and st.delivery.delivery_history:
+    if delivered_any and st.delivery.delivery_history:
         last = st.delivery.delivery_history[-1]
         if last["sn"] == req.sn:
-            last["groups"] = list(req.touched_groups) if req.touched_groups else [req.group_id]
+            last["groups"] = list(groups)
 
-    is_blocked = not delivered and req.gsn > 0
+    is_blocked = not all(e.delivered for e in entries) and req.gsn > 0
 
     st.phase = Phase.ADELIVER
     if is_blocked:
@@ -582,14 +600,21 @@ def phase_adeliver(st: SimState):
 
 
 def phase_checkpoint(st: SimState):
-    """Checkpoint — broadcast entre todos os nós."""
+    """Checkpoint — broadcast entre todos os nós.
+
+    No MultiPaxosMulticastOrderer, um checkpoint só permite truncar o log
+    (descartar entradas antigas); ao contrário do ISS clássico, ele NÃO troca
+    líderes nem redistribui buckets — os grupos de dados são estáticos.
+    """
     req = st.current_request
     st.last_checkpoint_sn = req.sn
+    st.checkpoints_done += 1
 
     st.phase = Phase.CHECKPOINT
     st.log_event(Phase.CHECKPOINT, "CHECKPOINT",
                  f"SN={req.sn} | Intervalo: {st.checkpoint_interval}\n"
-                 f"Broadcast CHECKPOINT -> quorum estabiliza",
+                 f"Broadcast CHECKPOINT -> log pode ser truncado\n"
+                 f"(grupos e lideres continuam os mesmos)",
                  "purple")
 
     st.info_text = (
@@ -600,8 +625,11 @@ def phase_checkpoint(st: SimState):
         f"Isso permite descartar dados antigos e\n"
         f"ajuda nós que ficaram para trás a se\n"
         f"atualizarem rapidamente.\n\n"
+        f"Diferente do ISS clássico: aqui o checkpoint NÃO\n"
+        f"troca líderes nem redistribui buckets — os grupos\n"
+        f"de dados são fixos.\n\n"
         f"─── Detalhes ───\n"
-        f"Epoch: {st.epoch_mgr.epoch} | Intervalo: a cada {st.checkpoint_interval} decisões"
+        f"Checkpoint nº {st.checkpoints_done} | Intervalo: a cada {st.checkpoint_interval} decisões"
     )
 
     st.messages = []
@@ -613,40 +641,6 @@ def phase_checkpoint(st: SimState):
                     label="CKPT",
                     detail=f"sn={req.sn}",
                 ))
-
-
-def phase_epoch_transition(st: SimState):
-    """Transição de epoch — leader policy + redistribuição de buckets."""
-    info = st.epoch_mgr.advance_epoch()
-
-    st.phase = Phase.EPOCH_TRANSITION
-    st.log_event(Phase.EPOCH_TRANSITION, "EPOCH TRANSITION",
-                 f"Epoch {info['old_epoch']} -> {info['new_epoch']}\n"
-                 f"Lideres: {info['old_leaders']} -> {info['new_leaders']}\n"
-                 f"Buckets redistribuidos",
-                 "purple")
-
-    old_assign = info['old_bucket_assignment']
-    new_assign = info['new_bucket_assignment']
-
-    st.info_text = (
-        f"🔄 Troca de turno! (Epoch {info['old_epoch']} → {info['new_epoch']})\n\n"
-        f"Periodicamente o sistema redistribui\n"
-        f"responsabilidades entre os nós.\n\n"
-        f"É como uma troca de turno num hospital:\n"
-        f"novos médicos assumem os guichês.\n\n"
-        f"Líderes antes: {info['old_leaders']}\n"
-        f"Líderes agora: {info['new_leaders']}\n\n"
-        f"As filas (buckets) foram redistribuídas\n"
-        f"entre os novos responsáveis."
-    )
-
-    # Mensagem visual: broadcast de novo assignment
-    st.messages = [Message(
-        MsgType.CHECKPOINT, st.nodes[0].id, st.nodes[0].id,
-        label=f"NEW EPOCH {info['new_epoch']}",
-        detail="segments issued",
-    )]
 
 
 def phase_view_change(st: SimState, old_leader: int, new_leader: int, new_ballot: int):
@@ -723,16 +717,14 @@ def phase_done(st: SimState):
     req = st.current_request
     st.phase = Phase.DONE
     st.log_event(Phase.DONE, "Request completa",
-                 f"SN={req.sn} | Epoch {st.epoch_mgr.epoch} | Committed: {st.committed}",
+                 f"SN={req.sn} | G{req.group_id} | Committed: {st.committed}",
                  "green")
 
-    seg = st.epoch_mgr.get_segment_for_leader(req.leader)
     st.info_text = (
         f"✨ Pedido processado com sucesso!\n\n"
         f"O ciclo completo terminou:\n"
         f"  Envio → Classificação → Empacotamento →\n"
         f"  Votação → Aprovação → Confirmação ✓\n\n"
-        f"Total de decisões: {st.committed}\n"
-        f"Época atual: {st.epoch_mgr.epoch}\n\n"
+        f"Total de decisões: {st.committed}\n\n"
         f"{'Próximo pedido será processado automaticamente...' if not st.step_mode else 'Pressione ⏭ para o próximo pedido.'}"
     )

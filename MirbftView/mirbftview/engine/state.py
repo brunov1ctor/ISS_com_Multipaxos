@@ -1,7 +1,7 @@
 """Estado global da simulação — topologia, counters, controle."""
 
 from mirbftview.protocol.types import (
-    Node, Client, Group, Message, RequestInfo, EventLog, Phase, SegmentInfo,
+    Node, Client, Group, Message, RequestInfo, EventLog, Phase,
 )
 from mirbftview.protocol.epoch import EpochManager
 from mirbftview.protocol.batch import BatchCutter
@@ -41,13 +41,16 @@ class SimState:
             Group(3, "Dados G3", [0, 4, 1]),
             Group(4, "Dados G4", [1, 3, 4]),
         ]
-        # bucketsPerLeader=16, numBuckets = max(bucketsPerLeader * numPeers, minBuckets)
-        self.num_buckets = max(16 * num_peers, 16)  # = 80 (real), mas para visualização usamos 16
-        self.num_buckets = 16  # Visualização: 16 buckets (minBuckets)
+        # bucketsPerLeader=16, numBuckets real = bucketsPerLeader * numPeers = 80;
+        # aqui usamos 16 (minBuckets) só para caber na tela.
+        self.num_buckets = 16
         self.segment_length = 16  # segmentLengths=16
         self.batch_size = 4096  # batchsizes=4096
         self.batch_timeout_ticks = 62  # minBatchTimeout=1000ms / 16ms per tick ≈ 62
-        self.checkpoint_interval = 16 * num_peers  # epoch = segmentLength * numPeers = 80
+        # Intervalo de checkpoint (a cada N commits), independente de época/líder:
+        # o MultiPaxosMulticastOrderer não redistribui buckets nem troca líder
+        # em checkpoints, só permite truncar o log.
+        self.checkpoint_interval = 16 * num_peers
         self.cross_op_pct = 0.3  # workload param (não no generate-config)
         self.view_change_timeout = 3750  # 60000ms / 16ms per tick ≈ 3750
 
@@ -56,6 +59,7 @@ class SimState:
         self.gsn = 0
         self.committed = 0
         self.last_checkpoint_sn = -1
+        self.checkpoints_done = 0
         # META stream: historico de publicacoes GSN -> grupos
         self.meta_stream: list[dict] = []  # [{gsn, groups, published_by}]
 
@@ -77,9 +81,19 @@ class SimState:
         self.scenarios: dict[str, bool] = {}
         # Pipeline: multiplas requests em paralelo
         self.active_requests: list[RequestInfo] = []
+        # Requests genuinamente bloqueadas pelo ADeliver (BufferCommit real):
+        # group_id -> lista de RequestInfo aguardando o GSN anterior daquele
+        # grupo ser entregue. Não fazem parte de active_requests enquanto
+        # bloqueadas — o tick.py as libera quando outro commit do mesmo
+        # grupo roda _try_deliver de novo e desbloqueia a fila.
+        self.blocked_requests: dict[int, list[RequestInfo]] = {}
         self.pipeline_size: int = 3
         # Steady-state: após primeiro PREPARE/PROMISE, pula direto para ACCEPT
         self.prepared: bool = False
+        # Contador sequencial POR CLIENTE (seqNr), fiel ao cliente real
+        # (createPayload usa isso para a chave K{seqNr:08d} e para decidir
+        # TX/GET por seqNr%100<CrossOpRatio) — cada cliente tem o seu.
+        self.client_seq: dict[int, int] = {}
         # Batch visual: quantas requests acumular antes de cortar
         self.batch_visual_size: int = 3
         # Batch fill level per bucket (for visual progress bar)
@@ -99,12 +113,14 @@ class SimState:
     def rebuild_managers(self):
         """(Re)cria os managers do protocolo com base na topologia atual."""
         all_node_ids = [n.id for n in self.nodes]
+        # Só os grupos de dados (id != 0) têm log próprio; o grupo 0
+        # (sequenciador) não roda MultiPaxos, é tratado à parte (phase_gsn_assign).
+        data_groups = {g.id: g.members for g in self.groups if g.id != 0}
         self.epoch_mgr = EpochManager(
-            all_nodes=all_node_ids,
+            groups=data_groups,
             num_buckets=self.num_buckets,
             segment_length=self.segment_length,
-            batch_size=self.batch_size,
-            leader_policy="Simple",
+            num_nodes=len(all_node_ids),
         )
         # Um BatchCutter por bucket
         self.batch_cutters: dict[int, BatchCutter] = {
@@ -116,9 +132,15 @@ class SimState:
         self.view_change_mgr = ViewChangeManager(all_node_ids, self.view_change_timeout)
 
     def reset(self):
-        """Reset completo."""
+        """Reset completo.
+
+        Preserva os cenários (checkboxes) ativados pelo usuário — Reset
+        reinicia o estado da simulação, não a configuração de depuração.
+        """
+        kept_scenarios = dict(self.scenarios)
         self._init_counters()
         self._init_control()
+        self.scenarios = kept_scenarios
         self.bucket_contents = [[] for _ in range(self.num_buckets)]
         self.commit_history = []
         self.meta_stream = []

@@ -171,27 +171,28 @@ class CommitChainPanel(QWidget):
         p.setPen(QColor(C["text2"]))
         p.setFont(QFont("Segoe UI", 7))
         p.drawText(QRectF(w - 100, 4, 90, 16), Qt.AlignRight,
-                   f"Total: {len(history)} | E{history[-1]['epoch']}")
+                   f"Total: {len(history)} | C{history[-1]['checkpoint_idx']}")
 
-        # Detecta mudanças de epoch para separadores
-        prev_epoch = -1
+        # Detecta mudanças de checkpoint para separadores (não muda líder/buckets,
+        # só marca onde o log poderia ser truncado)
+        prev_ckpt = -1
 
         for i, entry in enumerate(history):
             x = start_x + i * cell_w
             if x + block_w < -10 or x > w + 10:
-                prev_epoch = entry["epoch"]
+                prev_ckpt = entry["checkpoint_idx"]
                 continue
 
-            # Separador de epoch
-            if entry["epoch"] != prev_epoch and prev_epoch >= 0 and x > 0:
+            # Separador de checkpoint
+            if entry["checkpoint_idx"] != prev_ckpt and prev_ckpt >= 0 and x > 0:
                 sep_x = x - gap / 2 - arrow_w / 2
                 p.setPen(QPen(QColor(C["gold"]), 1, Qt.DashLine))
                 p.drawLine(QPointF(sep_x, top_y - 2), QPointF(sep_x, top_y + block_h + 2))
                 p.setPen(QColor(C["gold"]))
                 p.setFont(QFont("Segoe UI", 5, QFont.Bold))
                 p.drawText(QRectF(sep_x - 15, top_y - 10, 30, 9), Qt.AlignCenter,
-                           f"E{entry['epoch']}")
-            prev_epoch = entry["epoch"]
+                           f"C{entry['checkpoint_idx']}")
+            prev_ckpt = entry["checkpoint_idx"]
 
             # Cor do bloco
             lc = QColor(entry.get("color", "#FFFFFF")) if entry.get("color") else QColor(C["text2"])
@@ -310,11 +311,11 @@ class CommitChainPanel(QWidget):
             p.drawText(QRectF(x, cy, bw, 9), Qt.AlignCenter, "\u2713 quorum")
             cy += 10
 
-        # Epoch
+        # Checkpoint
         if bh > 68:
             p.setPen(QColor(C["text3"]))
             p.setFont(QFont("Segoe UI", 5))
-            p.drawText(QRectF(x, bh + y - 10, bw, 9), Qt.AlignCenter, f"E{entry['epoch']}")
+            p.drawText(QRectF(x, bh + y - 10, bw, 9), Qt.AlignCenter, f"C{entry['checkpoint_idx']}")
 
     def _draw_arrow(self, p, ax, ay, arrow_w, prev_hash, max_w):
         """Seta de encadeamento com mini hash."""
@@ -348,8 +349,7 @@ class CommitChainPanel(QWidget):
             f"Commit SN={entry['sn']}",
             f"Grupo: G{entry['group']}",
             f"Lider: Node {entry['leader']}",
-            f"Epoch: {entry['epoch']}",
-            f"Segmento: {entry['segment']}",
+            f"Checkpoint: {entry['checkpoint_idx']}",
             f"Digest: {entry['hash']}",
             f"Cross-group: {'Sim (GSN=' + str(entry['gsn']) + ')' if entry['is_cross'] else 'Nao'}",
             f"Quorum: atingido \u2713",

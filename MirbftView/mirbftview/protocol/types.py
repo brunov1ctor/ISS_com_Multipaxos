@@ -21,10 +21,10 @@ class Phase(Enum):
     COMMIT_NOTIFY = auto()
     ADELIVER = auto()
     CHECKPOINT = auto()
-    EPOCH_TRANSITION = auto()
     VIEW_CHANGE = auto()
     RETRANSMIT = auto()         # NOVO: retransmissão após timeout
     DONE = auto()
+    SCENARIO = auto()           # NOVO: evento de log de ligar/desligar cenário (não é fase da simulação)
 
 
 # ─── Tipos de mensagem ────────────────────────────────────────────────────────
@@ -85,39 +85,10 @@ class Message:
     ballot: int = -1                # NOVO: ballot associado
     batch_digest: str = ""          # NOVO: digest do batch
     color: str = ""                 # Cor fixa atribuída na criação
-
-
-# ─── Segment (SNs intercalados) ──────────────────────────────────────────────
-
-@dataclass
-class SegmentInfo:
-    """Um segmento do log — conforme mirmanager.go/skippingsegment.go.
-
-    Cada líder recebe um segmento com SNs intercalados:
-      snOffset, snOffset+distance, snOffset+2*distance, ...
-    onde distance = número de líderes (parallelism).
-    """
-    seg_id: int
-    leader: int
-    sn_offset: int              # primeiro SN deste segmento
-    sn_distance: int            # distância entre SNs (= nº de líderes)
-    sn_length: int              # quantos SNs neste segmento
-    followers: list[int] = field(default_factory=list)
-    bucket_ids: list[int] = field(default_factory=list)
-    batch_size: int = 4
-
-    @property
-    def sns(self) -> list[int]:
-        """Lista de SNs deste segmento (skipping)."""
-        return [self.sn_offset + i * self.sn_distance for i in range(self.sn_length)]
-
-    @property
-    def first_sn(self) -> int:
-        return self.sn_offset
-
-    @property
-    def last_sn(self) -> int:
-        return self.sn_offset + (self.sn_length - 1) * self.sn_distance
+    # Snapshot dos campos do ClientRequest real (protobuf) no instante em que
+    # esta mensagem foi emitida — permite o popup mostrar a evolução da
+    # struct como um teste de mesa visual dinâmico.
+    req_snapshot: Optional[dict] = None
 
 
 # ─── Request ─────────────────────────────────────────────────────────────────
@@ -133,7 +104,6 @@ class RequestInfo:
     group_id: int = 0
     gsn: int = 0
     sn: int = 0
-    segment_id: int = -1        # NOVO: segmento que processa esta request
     leader: int = -1
     ballot: int = 0
     quorum: int = 2
@@ -148,6 +118,42 @@ class RequestInfo:
     color: str = ""              # cor unica desta request (para barra de progresso)
     _retransmit_done: bool = False  # controle de retransmissão (pipeline)
     _failure_done: bool = False     # controle de falha simulada (pipeline)
+
+
+def key_to_group(key: str, num_data_groups: int) -> int:
+    """Mesmo algoritmo de keyToGroup em request.go:357-371:
+    1 + (CRC32(key) % numDataGroups) — grupos numerados 1..numDataGroups,
+    excluindo o grupo 0 (sequenciador). zlib.crc32 usa o mesmo polinômio
+    IEEE 802.3 que crc32.ChecksumIEEE do Go, então o resultado é idêntico
+    byte a byte para a mesma chave."""
+    import zlib
+    if not key or num_data_groups < 1:
+        return 1
+    return 1 + (zlib.crc32(key.encode()) % num_data_groups)
+
+
+def snapshot_client_request(req: "RequestInfo") -> dict:
+    """Espelha os 7 campos reais de protobufs.ClientRequest (request.pb.go)
+    no instante atual desta request, para o popup de mensagem mostrar a
+    struct evoluindo como um teste de mesa visual dinâmico.
+
+    Pubkey/Signature não são criptografia real (o simulador não assina nada);
+    são derivadas de forma determinística só para preencher os campos e
+    deixar claro, no rótulo, que são ilustrativas.
+    """
+    import hashlib
+    pk = hashlib.sha256(f"pubkey:{req.client_id}".encode()).hexdigest()[:16]
+    sig = hashlib.sha256(f"sig:{req.client_id}:{req.client_sn}:{req.payload}".encode()).hexdigest()[:16]
+    return {
+        "client_id": req.client_id,
+        "client_sn": req.client_sn,
+        "payload": req.payload,
+        "pubkey": pk,
+        "signature": sig,
+        "group_id": req.group_id,
+        "touched_groups": list(req.touched_groups),
+        "gsn": req.gsn,
+    }
 
 
 # ─── Event Log ────────────────────────────────────────────────────────────────
