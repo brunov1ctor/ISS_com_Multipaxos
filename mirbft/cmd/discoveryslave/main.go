@@ -90,6 +90,13 @@ func main() {
 	var cmdID int32 = initResp.CmdId
 	var execCmd *exec.Cmd
 	var execOutFile *os.File
+	// execDone e execWaitErr sao preenchidos por um unico goroutine "reaper" criado logo
+	// apos ExecStart, que chama execCmd.Wait() exatamente uma vez pela vida do processo.
+	// ExecWait e ExecSignal apenas consomem execDone, nunca chamam Wait() diretamente —
+	// assim um exec-signal SIGINT que nao mate o processo a tempo NAO zera o rastreamento,
+	// permitindo que um exec-signal SIGKILL seguinte ainda encontre e mate o processo real.
+	var execDone chan struct{}
+	var execWaitErr error
 	var exitStatus int32
 	var exitMessage string
 
@@ -218,6 +225,20 @@ cmdLoop:
 					exitMessage = "Failed to start command: " + err.Error()
 					exitStatus = 127
 				} else {
+					// Reaper unico: chama Wait() exatamente uma vez pela vida do processo.
+					// ExecWait e ExecSignal so consomem execDone/execWaitErr, nunca Wait().
+					execDone = make(chan struct{})
+					go func(c *exec.Cmd, of *os.File, done chan struct{}) {
+						err := c.Wait()
+						if of != nil {
+							if cerr := of.Close(); cerr != nil {
+								logger.Error().Err(cerr).Msg("Could not close output file.")
+							}
+						}
+						execWaitErr = err
+						close(done)
+					}(execCmd, execOutFile, execDone)
+
 					exitMessage = "OK"
 					exitStatus = 0
 				}
@@ -243,13 +264,15 @@ cmdLoop:
 					_ = execCmd.Process.Signal(syscall.SIGKILL)
 				})
 
-				// Wait for started program to terminate.
-				if err := execCmd.Wait(); err != nil {
+				// Wait for the shared reaper to confirm the process terminated.
+				<-execDone
+				cmdPath := execCmd.Path
+				if err := execWaitErr; err != nil {
 					// Some commands intentionally use non-zero exit codes for benign outcomes.
 					// Example: pkill returns 1 when no matching process exists.
 					if exitErr, ok := err.(*exec.ExitError); ok {
 						code := exitErr.ProcessState.ExitCode()
-						cmdBase := filepath.Base(execCmd.Path)
+						cmdBase := filepath.Base(cmdPath)
 						if isAcceptableExitCode(cmdBase, code) {
 							logger.Info().Int("exitCode", code).Str("cmd", cmdBase).Msg("Process exited with acceptable non-zero exit code")
 							exitMessage = fmt.Sprintf("OK (exit=%d)", code)
@@ -272,16 +295,10 @@ cmdLoop:
 				timerInt.Stop()
 				timerKill.Stop()
 
-				if execOutFile != nil {
-					if err := execOutFile.Close(); err != nil {
-						logger.Error().Err(err).Msg("Could not close output file.")
-						exitMessage = "Could not close output file."
-						exitStatus = 3
-					}
-				}
-
-				// Clear execCmd so that next ExecStart is accepted
+				// Clear tracking so next ExecStart is accepted
 				execCmd = nil
+				execOutFile = nil
+				execDone = nil
 			}
 
 		// Send signal to program running in the background.
@@ -312,26 +329,18 @@ cmdLoop:
 						exitStatus = 2
 					} else {
 						// Espera de verdade o processo morrer (com timeout de seguranca) antes de
-						// responder "OK" ao master. Sem isso, o master avanca para o proximo
-						// exec-start apos um "wait for" de tempo fixo, sem confirmacao real —
-						// sob carga alta o processo pode demorar mais que esse tempo fixo para
-						// liberar a porta, causando "address already in use" no proximo experimento.
-						cmdToReap := execCmd
-						outFileToClose := execOutFile
-						execCmd = nil
-						execOutFile = nil
-						done := make(chan struct{})
-						go func() {
-							_ = cmdToReap.Wait()
-							if outFileToClose != nil {
-								_ = outFileToClose.Close()
-							}
-							close(done)
-						}()
+						// responder "OK" ao master. Se o processo nao morrer a tempo (ex.: SIGINT
+						// sob carga alta), NAO zeramos o rastreamento — assim um exec-signal SIGKILL
+						// seguinte (escalada de seguranca do master) ainda encontra o processo real
+						// e consegue mata-lo, em vez de responder "No program to signal" sem efeito
+						// nenhum (bug que deixava peers travados/orfaos segurando a porta indefinidamente).
 						select {
-						case <-done:
+						case <-execDone:
+							execCmd = nil
+							execOutFile = nil
+							execDone = nil
 						case <-time.After(4 * time.Second):
-							logger.Warn().Str("signal", sig.String()).Msg("Timed out waiting for process to exit after signal; continuing in background.")
+							logger.Warn().Str("signal", sig.String()).Msg("Timed out waiting for process to exit after signal; keeping it tracked for a stronger signal.")
 						}
 						exitMessage = "OK"
 					}
