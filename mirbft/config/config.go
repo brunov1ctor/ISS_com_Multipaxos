@@ -19,7 +19,11 @@ import (
 	logger "github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
 
+	"fmt"
+	"hash/crc32"
 	"io/ioutil"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -108,6 +112,7 @@ type configuration struct {
 	ClientPrivKeyFile    string `yaml:"ClientPrivKeyFile"`   // Key for client request verification.
 	PrecomputeRequests   bool   `yaml:"PrecomputeRequests"`  // Pre-compute (and sign, if applicable) all requests at a client before starting to submit.
 	CrossOpRatio         int    `yaml:"CrossOpRatio"`        // Percentage (0-100) of client requests that are cross-group (TX K1,K2) instead of single-group (GET K).
+	CrossOpGroupWeights  string `yaml:"CrossOpGroupWeights"` // Weights "groups:weight,groups:weight,..." for how many distinct groups a cross-op touches (e.g. "2:70,3:25,4:5"). Empty/unset defaults to "2:100" (always 2 groups, current behavior).
 
 	// System parameters
 	RequestHandlerThreads     int    `yaml:"RequestHandlerThreads"` // Number of threads that write incoming requests to request Buffers.
@@ -195,6 +200,7 @@ func LoadFile(configFileName string) {
 	logger.Debug().Int("SequencerHeartbeatMs", Config.SequencerHeartbeatMs).Msg("Config")
 	logger.Debug().Int("SequencerElectionTimeoutMs", Config.SequencerElectionTimeoutMs).Msg("Config")
 	logger.Debug().Int("CrossOpRatio", Config.CrossOpRatio).Msg("Config")
+	logger.Debug().Str("CrossOpGroupWeights", Config.CrossOpGroupWeights).Msg("Config")
 
 	Config.LoggingLevel = setLoggingLevel(Config.LoggingLevelStr)
 
@@ -214,6 +220,8 @@ func LoadFile(configFileName string) {
 		Config.SequencerElectionTimeoutMs = 500
 	}
 	Config.SequencerElectionTimeout = time.Duration(Config.SequencerElectionTimeoutMs) * time.Millisecond
+
+	parseCrossOpGroupWeights(Config.CrossOpGroupWeights)
 }
 
 func setLoggingLevel(level string) zerolog.Level {
@@ -232,4 +240,64 @@ func setLoggingLevel(level string) zerolog.Level {
 		logger.Fatal().Msg("Unsupported logging level")
 	}
 	return zerolog.NoLevel
+}
+
+// crossOpGroupWeight is one "N groups : weight" entry of CrossOpGroupWeights, with
+// threshold holding the cumulative weight up to and including this entry.
+type crossOpGroupWeight struct {
+	groups    int
+	threshold uint32
+}
+
+var crossOpGroupCumulative []crossOpGroupWeight
+var crossOpGroupTotalWeight uint32
+
+// parseCrossOpGroupWeights parses a spec like "2:70,3:25,4:5" into cumulative weight
+// ranges used by PickCrossOpGroupCount. An empty spec (or one with no valid entries)
+// falls back to "2:100", matching the pre-existing behavior of every cross-op always
+// touching exactly 2 groups. Entries with fewer than 2 groups or non-positive weight
+// are ignored, since touching fewer than 2 groups would not be a cross-op at all.
+func parseCrossOpGroupWeights(spec string) {
+	var cumulative uint32
+	var parsed []crossOpGroupWeight
+	for _, part := range strings.Split(spec, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		groups, errG := strconv.Atoi(strings.TrimSpace(kv[0]))
+		weight, errW := strconv.Atoi(strings.TrimSpace(kv[1]))
+		if errG != nil || errW != nil || groups < 2 || weight <= 0 {
+			continue
+		}
+		cumulative += uint32(weight)
+		parsed = append(parsed, crossOpGroupWeight{groups: groups, threshold: cumulative})
+	}
+	if len(parsed) == 0 {
+		parsed = []crossOpGroupWeight{{groups: 2, threshold: 1}}
+		cumulative = 1
+	}
+	crossOpGroupCumulative = parsed
+	crossOpGroupTotalWeight = cumulative
+}
+
+// PickCrossOpGroupCount deterministically picks how many distinct groups the cross-op
+// with the given client sequence number should touch, according to CrossOpGroupWeights.
+// Deterministic (hash of seqNr, not real randomness) so that, like CrossOpRatio itself,
+// the same configuration always reproduces the same distribution across repeated
+// experiments, and the choice here doesn't correlate with the CrossOpRatio check
+// (which uses seqNr directly, not a hash of it).
+func PickCrossOpGroupCount(seqNr int32) int {
+	h := crc32.ChecksumIEEE([]byte(fmt.Sprintf("crossopgroups-%d", seqNr)))
+	pick := h % crossOpGroupTotalWeight
+	for _, w := range crossOpGroupCumulative {
+		if pick < w.threshold {
+			return w.groups
+		}
+	}
+	return crossOpGroupCumulative[len(crossOpGroupCumulative)-1].groups
 }
