@@ -86,11 +86,6 @@ func NewBucketGroup(bucketIDs []int) *BucketGroup {
 // Blocks until the Buckets contain at least size requests, but at most for the duration of timeout.
 // On timeout, returns a batch with all requests in the Buckets, even if all the Buckets are empty.
 func (bg *BucketGroup) CutBatch(size int, timeout time.Duration) *Batch {
-	return bg.CutBatchWithMode(size, timeout, false)
-}
-
-// CutBatchWithMode cuts a batch with explicit cross-op/single-group mode.
-func (bg *BucketGroup) CutBatchWithMode(size int, timeout time.Duration, isCrossOpRound bool) *Batch {
 	alreadyWaited := bg.waitMinimum()
 	bg.lockBuckets()
 	defer bg.unlockBuckets()
@@ -129,66 +124,81 @@ func (bg *BucketGroup) CutBatchWithMode(size int, timeout time.Duration, isCross
 		fmt.Printf("[CutBatch] Group 0: No SYSTEM messages found in any bucket\n")
 	}
 
-	// ========== CSMR BATCH SCHEDULER (alternating via shared counter) ==========
-	// Even counter = cross-op round (batch of 1, immediate).
-	// Odd counter = single-group round (batch up to size, with timeout).
-	// Counter is shared across instances via parent orderer's batchCounter.
+	// ========== CSMR BATCH SCHEDULER (demand-aware, no fixed ratio) ==========
+	// Every round packs whatever is actually ready of both kinds instead of picking
+	// one kind per round: cross-ops are collected first (never delayed waiting on
+	// single-group), then any remaining batch capacity is topped up with single-group
+	// requests already sitting in the buckets (no additional wait). Only when there is
+	// no cross-op ready at all does the round fall back to the original behaviour of
+	// waiting (with timeout) for single-group requests to accumulate.
 	if groupMembersGetter != nil {
-		if isCrossOpRound {
-			// CROSS-OP ROUND: collect ALL available cross-ops, sorted by GSN.
-			// Batching multiple cross-ops per proposal reduces ADeliver serialization points.
-			type crossEntry struct {
-				req    *Request
-				bucket *Bucket
+		// Collect ALL available cross-ops, sorted by GSN, capped by byte budget.
+		// Batching multiple cross-ops per proposal reduces ADeliver serialization points.
+		type crossEntry struct {
+			req    *Request
+			bucket *Bucket
+		}
+		var allCross []crossEntry
+		for _, b := range bg.buckets {
+			for _, cop := range b.FindAllCrossOps() {
+				allCross = append(allCross, crossEntry{req: cop, bucket: b})
 			}
-			var allCross []crossEntry
+		}
+		if len(allCross) > 0 {
+			// Sort by GSN to maintain ordering
+			sort.Slice(allCross, func(i, j int) bool {
+				return allCross[i].req.Msg.GSN < allCross[j].req.Msg.GSN
+			})
+			// Adaptive cap: limit by total payload size to avoid
+			// oversized ACCEPT messages that exceed gRPC buffers.
+			// ~600 bytes per cross-op, cap at ~32KB total.
+			maxBatchBytes := config.Config.CrossOpBatchMaxBytes
+			totalBytes := 0
+			for _, entry := range allCross {
+				reqBytes := len(entry.req.Msg.Payload) + 128 // payload + protobuf overhead
+				if totalBytes+reqBytes > maxBatchBytes && len(newBatch.Requests) > 0 {
+					break
+				}
+				entry.bucket.RemoveNoLock(entry.req)
+				newBatch.Requests = append(newBatch.Requests, entry.req)
+				totalBytes += reqBytes
+			}
+		}
+
+		if len(newBatch.Requests) > 0 {
+			// We already have cross-ops: top up with single-group requests that are
+			// immediately available, WITHOUT waiting -- so this round doesn't discard
+			// capacity that single-group backlog could have used, but a cross-op is
+			// also never held up waiting for single-group to accumulate.
+			bg.totalRequests = int32(bg.CountRequests())
+			remaining := size - len(newBatch.Requests)
 			for _, b := range bg.buckets {
-				for _, cop := range b.FindAllCrossOps() {
-					allCross = append(allCross, crossEntry{req: cop, bucket: b})
+				if remaining <= 0 {
+					break
 				}
+				before := len(newBatch.Requests)
+				newBatch.Requests = b.RemoveFirstSingleGroup(remaining, newBatch.Requests)
+				remaining -= len(newBatch.Requests) - before
 			}
-			if len(allCross) > 0 {
-				// Sort by GSN to maintain ordering
-				sort.Slice(allCross, func(i, j int) bool {
-					return allCross[i].req.Msg.GSN < allCross[j].req.Msg.GSN
-				})
-				// Adaptive cap: limit by total payload size to avoid
-				// oversized ACCEPT messages that exceed gRPC buffers.
-				// ~600 bytes per cross-op, cap at ~32KB total.
-				maxBatchBytes := config.Config.CrossOpBatchMaxBytes
-				totalBytes := 0
-				for _, entry := range allCross {
-					reqBytes := len(entry.req.Msg.Payload) + 128 // payload + protobuf overhead
-					if totalBytes+reqBytes > maxBatchBytes && len(newBatch.Requests) > 0 {
-						break
-					}
-					entry.bucket.RemoveNoLock(entry.req)
-					newBatch.Requests = append(newBatch.Requests, entry.req)
-					totalBytes += reqBytes
-				}
-				return &newBatch
-			}
-			// No cross-op available: fall through to single-group
-		}
-
-		// SINGLE-GROUP: wait for requests, then cut single-group only
-		bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
-
-		// Cut single-group batch (skip cross-ops)
-		var initCut = 0
-		if size <= int(bg.totalRequests) {
-			initCut = size / len(bg.buckets)
 		} else {
-			initCut = int(bg.totalRequests) / len(bg.buckets)
-		}
-		for _, b := range bg.buckets {
-			newBatch.Requests = b.RemoveFirstSingleGroup(initCut, newBatch.Requests)
-		}
-		for _, b := range bg.buckets {
-			if len(newBatch.Requests) < size {
-				newBatch.Requests = b.RemoveFirstSingleGroup(size-len(newBatch.Requests), newBatch.Requests)
+			// No cross-op ready: wait for single-group requests (original behaviour).
+			bg.waitForRequestsLocked(size, timeout-time.Duration(alreadyWaited)*time.Nanosecond)
+
+			var initCut = 0
+			if size <= int(bg.totalRequests) {
+				initCut = size / len(bg.buckets)
 			} else {
-				break
+				initCut = int(bg.totalRequests) / len(bg.buckets)
+			}
+			for _, b := range bg.buckets {
+				newBatch.Requests = b.RemoveFirstSingleGroup(initCut, newBatch.Requests)
+			}
+			for _, b := range bg.buckets {
+				if len(newBatch.Requests) < size {
+					newBatch.Requests = b.RemoveFirstSingleGroup(size-len(newBatch.Requests), newBatch.Requests)
+				} else {
+					break
+				}
 			}
 		}
 	} else {

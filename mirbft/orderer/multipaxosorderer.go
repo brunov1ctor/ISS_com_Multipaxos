@@ -45,7 +45,6 @@ type MultiPaxosOrderer struct {
 	ownedGroupID   uint32                        // grupo de dados administrado por este orderer (0 = broadcast/standalone)
 	skipHandlerRegistration bool                 // true quando este orderer é filho de um MultiPaxosMulticastOrderer
 	commitNotifyCh chan struct{} // shared channel from parent multicast orderer
-	batchCounter   int32         // shared alternating counter for CutBatch (cross-op vs single-group)
 }
 
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {

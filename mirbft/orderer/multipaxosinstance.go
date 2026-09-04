@@ -5,7 +5,6 @@ package orderer
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/manager"
@@ -474,8 +473,7 @@ func (i *mpxInstance) ProposeIfDue() {
 			}
 			return
 		}
-		rb := i.groupBucketGroup.CutBatchWithMode(i.parent.maxBatchSize, i.proposeEvery,
-			(atomic.AddInt32(&i.parent.batchCounter, 1)%2) == 0)
+		rb := i.groupBucketGroup.CutBatch(i.parent.maxBatchSize, i.proposeEvery)
 		if rb == nil || rb.Message() == nil || len(rb.Message().Requests) == 0 {
 			emptyBatch := &pb.Batch{Requests: nil}
 			val = &pb.MPxValue{Id: &pb.MPxInstanceId{Sn: i.sn, Lead: uint64(membership.OwnID)}, Batch: emptyBatch}
@@ -485,21 +483,13 @@ func (i *mpxInstance) ProposeIfDue() {
 		} else {
 			if !i.validateBatchHomogeneity(rb) { return }
 			batchMsg := rb.Message()
-			// Cross-op validation: all cross-ops must have GSN assigned.
-			// A batch can contain multiple cross-ops (batched by GSN order)
-			// or only single-group requests, but not a mix.
-			hasCrossOp := false
-			hasSingleGroup := false
+			// Cross-op validation: every cross-op in the batch must already have a
+			// GSN assigned. A batch may now freely mix cross-ops with single-group
+			// requests (bucketgroup.go packs both opportunistically per round).
 			for _, req := range rb.Requests {
-				if len(req.Msg.TouchedGroups) > 1 {
-					if req.Msg.GSN == 0 { rb.Resurrect(); return }
-					hasCrossOp = true
-				} else {
-					hasSingleGroup = true
+				if len(req.Msg.TouchedGroups) > 1 && req.Msg.GSN == 0 {
+					rb.Resurrect(); return
 				}
-			}
-			if hasCrossOp && hasSingleGroup {
-				rb.Resurrect(); return
 			}
 			i.lastReqBatch = rb
 			reqs = len(batchMsg.Requests)
