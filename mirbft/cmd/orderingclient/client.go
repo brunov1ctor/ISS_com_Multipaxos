@@ -242,7 +242,12 @@ func (c *client) discoverPeers(dServAddr string) {
 func (c *client) createPayload(seqNr int32) []byte {
 	var basePayload string
 	if int(seqNr)%100 < config.Config.CrossOpRatio {
-		basePayload = fmt.Sprintf("TX K%08d,K%08d", seqNr, seqNr+1000)
+		numGroups := config.PickCrossOpGroupCount(seqNr)
+		keys := make([]string, numGroups)
+		for i := 0; i < numGroups; i++ {
+			keys[i] = fmt.Sprintf("K%08d", seqNr+int32(i)*1000)
+		}
+		basePayload = "TX " + strings.Join(keys, ",")
 	} else {
 		basePayload = fmt.Sprintf("GET K%08d", seqNr)
 	}

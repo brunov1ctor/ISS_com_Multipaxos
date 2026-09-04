@@ -129,5 +129,6 @@ SequencerElectionTimeoutMs: 500 # Min follower election timeout (randomized [min
 
 # Workload configuration
 CrossOpRatio: CROSSOPRATIO # Percentage (0-100) of client requests that are cross-group (TX) instead of single-group (GET).
+CrossOpGroupWeights: "2:100" # Weights "groups:weight,groups:weight,..." for how many distinct groups a cross-op touches. Default: always 2 groups.
 CrossOpProxyNodeID: -1 # Node ID to use as proxy for cross-group operations. Set to -1 for no fixed proxy.
 
