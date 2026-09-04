@@ -245,7 +245,7 @@ func SetRequestPreprocessor(fn func(*pb.ClientRequest) bool) {
 func AddDirectToBucket(reqMsg *pb.ClientRequest) {
 	bucketNr := GetBucketNr(reqMsg)
 	if bucketNr < 0 || bucketNr >= len(Buckets) {
-		fmt.Printf("[AddDirectToBucket] INVALID bucket=%d groupId=%d\n", bucketNr, reqMsg.GetGroupId())
+		logger.Error().Int("bucket", bucketNr).Uint32("groupId", reqMsg.GetGroupId()).Msg("AddDirectToBucket: invalid bucket.")
 		return
 	}
 	bucket := Buckets[bucketNr]
@@ -283,22 +283,17 @@ func AddDirectToBucket(reqMsg *pb.ClientRequest) {
 		}
 	}
 	bucket.Unlock()
-	rid := reqMsg.GetRequestId()
-	fmt.Printf("[AddDirectToBucket] bucket=%d group=%d client=%d sn=%d gsn=%d\n",
-		bucketNr, reqMsg.GetGroupId(), rid.GetClientId(), rid.GetClientSn(), reqMsg.GSN)
 }
 
 // AddSystemMessage adds a SYSTEM message directly to bucket, bypassing Buffer/Watermark.
 // Uses a dedicated linked list append (no index check) to avoid reqID collisions with client requests.
 func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
-	fmt.Printf("[AddSystemMessage] Called for bucket calculation\n")
 	bucketNr := GetBucketNr(reqMsg)
 	if bucketNr < 0 || bucketNr >= len(Buckets) {
-		fmt.Printf("[AddSystemMessage] Invalid bucket %d\n", bucketNr)
+		logger.Error().Int("bucket", bucketNr).Msg("AddSystemMessage: invalid bucket.")
 		return false
 	}
 
-	fmt.Printf("[AddSystemMessage] Adding to bucket %d\n", bucketNr)
 	bucket := Buckets[bucketNr]
 	req := &Request{
 		Msg:      reqMsg,
@@ -320,7 +315,6 @@ func AddSystemMessage(reqMsg *pb.ClientRequest) bool {
 	}
 	bucket.Unlock()
 
-	fmt.Printf("[AddSystemMessage] Result: true\n")
 	return true
 }
 
