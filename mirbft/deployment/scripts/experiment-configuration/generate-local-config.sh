@@ -108,11 +108,17 @@ crossOpRatios="5 10 20 50 75"  # [%] Percentage of client requests that are cros
                                 # each generated config-$exp.yml's CrossOpRatio field. Space-separated list to sweep.
                                 # "20" is the baseline used for orderers the sweep doesn't apply to -- see
                                 # crossOpRatioOrderers/skip() below.
-                                # The actual payload pattern is hardcoded in createPayload() (client.go), not
-                                # configurable here: single-group -> "GET K{seqNr:08d}", cross-group ->
-                                # "TX K{seqNr:08d},K{seqNr+1000:08d}".
+                                # The payload pattern itself is built in createPayload() (client.go):
+                                # single-group -> "GET K{seqNr:08d}", cross-group -> "TX K{key1},K{key2},...",
+                                # with the number of keys (= groups touched) picked per crossOpGroupWeightsList below.
                                 # Example, request number 5: "GET K00000005" (single-group) or
-                                # "TX K00000005,K00001005" (cross-group, touches key 1000 requests ahead).
+                                # "TX K00000005,K00001005" (cross-group touching 2 groups, keys 1000 apart).
+crossOpGroupWeightsList="2:100"  # "groups:weight,groups:weight,..." entries, space-separated list to sweep.
+                                # Controls how many distinct groups a cross-op touches (CrossOpGroupWeights field):
+                                # e.g. "2:70,3:25,4:5" means 70% of cross-ops touch 2 groups, 25% touch 3, 5% touch 4.
+                                # Default "2:100" keeps every cross-op at exactly 2 groups (pre-existing behavior);
+                                # this list is not currently varied by the main sweep -- reserved for isolated
+                                # follow-up experiments mixing group counts.
 
 # batctimeout = minBatchTimeout, if maxLeaders/batchrate < minBatchTimeout
 #               maxBatchTimeout, if maxLeaders/batchrate > maxBatchTimeout
@@ -379,6 +385,7 @@ config() {
   # outros geradores que não fazem esse sweep).
   sed -i "s#CrossOpBatchMaxBytes: 32768#CrossOpBatchMaxBytes: $crossOpBatchBytes#" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
   sed -i "s#CrossOpRatio: CROSSOPRATIO#CrossOpRatio: $crossOpRatio#" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
+  sed -i "s#CrossOpGroupWeights: \"2:100\"#CrossOpGroupWeights: \"$crossOpGroupWeights\"#" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
 }
 
 csvLine() {
@@ -493,6 +500,7 @@ function generateCombinations() {
                                     for requestHandlers in $requestHandlerThreadNums; do
                                       for requestBufferSize in $requestBufferSizes; do
                                         for crossOpBatchBytes in $crossOpBatchBytesList; do
+                                        for crossOpGroupWeights in $crossOpGroupWeightsList; do
                                         for crossOpRatio in $crossOpRatios; do
                                         for orderer in $orderers; do
                                           for cpt in $checkpointers; do
@@ -610,6 +618,7 @@ function generateCombinations() {
                                                 exit 2
                                               fi
                                           done
+                                        done
                                         done
                                       done
                                     done
