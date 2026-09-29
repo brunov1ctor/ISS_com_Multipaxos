@@ -8,6 +8,12 @@ from mirbftview.qt.theme import C
 from mirbftview.qt.simulation import Phase
 
 
+def gsn_panels_active(sim) -> bool:
+    """O Sequenciador (GSN/META) e o ADeliver só existem para pedidos cross-group:
+    sem nenhum GSN distribuído os painéis ficam ocultos (ex.: CrossOpRatio = 0)."""
+    return sim.gsn > 0 or bool(sim.meta_stream)
+
+
 def draw_gsn_meta_panel(p, sim):
     """Painel visual do Sequenciador Global.
 
@@ -16,6 +22,8 @@ def draw_gsn_meta_panel(p, sim):
     - Senhas sendo distribuidas (GSN)
     - Quais grupos estao envolvidos (bolinhas coloridas)
     """
+    if not gsn_panels_active(sim):
+        return
     meta = sim.meta_stream
     gsn_val = sim.gsn
     box_w, box_x, box_y, line_h = 220, 10, 10, 16
@@ -121,7 +129,7 @@ def draw_adeliver_panel(p, sim):
     - Barra visual de progresso por grupo
     """
     dlv = sim.delivery
-    if not dlv:
+    if not dlv or not gsn_panels_active(sim):
         return
     groups_with_data = sorted(dlv._last_delivered_gsn.keys())
     if not groups_with_data:

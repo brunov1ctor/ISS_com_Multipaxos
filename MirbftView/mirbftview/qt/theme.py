@@ -59,6 +59,12 @@ QScrollBar::handle:vertical { background: rgba(28,46,74,0.60); min-height: 30px;
 QScrollBar::handle:vertical:hover { background: #6C63FF; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QScrollBar:horizontal { background: rgba(10,16,30,0.30); height: 8px; border-radius: 4px; }
+QScrollBar::handle:horizontal { background: rgba(28,46,74,0.60); min-width: 30px; border-radius: 4px; }
+QScrollBar::handle:horizontal:hover { background: #6C63FF; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
+QAbstractScrollArea::corner { background: transparent; }
 QGraphicsView { background-color: transparent; border: none; }
 QToolTip { background-color: rgba(20,32,55,0.92); color: #A9B4C8; border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; padding: 8px 12px; }
 """

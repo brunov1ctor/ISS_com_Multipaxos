@@ -289,7 +289,8 @@ class CommitChainPanel(QWidget):
         # Grupo
         p.setPen(lc)
         p.setFont(QFont("Segoe UI", 7, QFont.Bold))
-        p.drawText(QRectF(x, cy, bw, 11), Qt.AlignCenter, f"G{entry['group']}")
+        p.drawText(QRectF(x, cy, bw, 11), Qt.AlignCenter,
+                   f"G{entry['group']}" + (f" \u00d7{entry['n']}" if entry.get("n", 0) > 0 else ""))
         cy += 11
 
         # Líder
@@ -351,6 +352,7 @@ class CommitChainPanel(QWidget):
             f"Lider: Node {entry['leader']}",
             f"Checkpoint: {entry['checkpoint_idx']}",
             f"Digest: {entry['hash']}",
+            f"Pedidos no batch: {entry.get('n', '?')}",
             f"Cross-group: {'Sim (GSN=' + str(entry['gsn']) + ')' if entry['is_cross'] else 'Nao'}",
             f"Quorum: atingido \u2713",
         ]

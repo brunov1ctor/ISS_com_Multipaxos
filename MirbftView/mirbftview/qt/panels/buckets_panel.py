@@ -1,13 +1,15 @@
 """BucketsPanel — visualização gráfica dos buckets."""
 
 import math
-from PySide6.QtWidgets import QWidget, QSizePolicy
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer
+from PySide6.QtWidgets import QWidget, QSizePolicy, QTextEdit, QComboBox
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSize
 from PySide6.QtGui import (
-    QPainter, QPainterPath, QColor, QLinearGradient, QPen, QBrush, QFont
+    QPainter, QPainterPath, QColor, QLinearGradient, QPen, QBrush, QFont, QFontMetrics
 )
 
 from mirbftview.qt.theme import C
+from mirbftview.qt.canvas._constants import GROUP_COLORS
+from mirbftview.engine.phases import BUCKET_ENTER_TICKS, BUCKET_LEAVE_TICKS
 from mirbftview.qt.simulation import Simulation
 
 
@@ -18,15 +20,89 @@ class BucketsPanel(QWidget):
         super().__init__(parent)
         self.sim = sim
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
         self._bucket_rects: list[QRectF] = []
         self._selected_bucket: int = -1
         self._timer = QTimer(self)
         self._timer.setInterval(100)
-        self._timer.timeout.connect(self.update)
+        self._timer.timeout.connect(self._on_timer)
         self._timer.start()
+
+        # Detalhe do bucket: widget real (texto selecionável e copiável com Ctrl+C),
+        # ao contrário do popup pintado com QPainter, que não permitia copiar.
+        self._detail_text = ""
+        self._detail = QTextEdit(self)
+        self._detail.setReadOnly(True)
+        self._detail.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self._detail.setFont(QFont("Consolas", 9))
+        self._detail.setLineWrapMode(QTextEdit.WidgetWidth)
+        self._detail.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._detail.setStyleSheet(
+            "QTextEdit { background: rgba(10,18,32,245); color: #D4D4D4; "
+            f"border: 1px solid {C['gold']}; border-radius: 6px; padding: 4px; "
+            "selection-background-color: rgba(88,216,255,0.35); }"
+        )
+        self._detail.hide()
+
+        # Dropdown de NÓ: cada nó tem os SEUS buckets (fila local de pedidos pendentes), e
+        # eles podem diferir entre membros do mesmo grupo (ordem de chegada, o líder esvazia
+        # no corte do batch e os seguidores só no commit). Aqui se escolhe de qual nó ver.
+        self._node_id = 0
+        self._node_ids: list[int] = []
+        self._node_combo = QComboBox(self)
+        self._node_combo.setFixedHeight(20)
+        self._node_combo.setStyleSheet(
+            "QComboBox { background: rgba(10,16,30,0.75); color: #E6EDF7; font-size: 8pt; "
+            "font-weight: bold; padding: 1px 6px; border: 1px solid rgba(255,255,255,0.25); "
+            "border-radius: 5px; }"
+            "QComboBox QAbstractItemView { background: rgb(14,22,40); color: #E6EDF7; "
+            "selection-background-color: rgba(108,99,255,0.55); }"
+        )
+        self._node_combo.currentIndexChanged.connect(self._on_node_changed)
+        self._sync_nodes()
+
+    _TITLE = "\U0001faa3 Buckets do n\u00f3:"
+
+    def _sync_nodes(self):
+        ids = [n.id for n in self.sim.nodes]
+        if ids == self._node_ids:
+            return
+        self._node_ids = ids
+        self._node_combo.blockSignals(True)
+        self._node_combo.clear()
+        for n in self.sim.nodes:
+            self._node_combo.addItem(n.name, n.id)
+        if self._node_id not in ids:
+            self._node_id = ids[0] if ids else 0
+        self._node_combo.setCurrentIndex(ids.index(self._node_id) if ids else -1)
+        self._node_combo.blockSignals(False)
+        self._layout_combo()
+
+    def _on_node_changed(self, idx):
+        nid = self._node_combo.itemData(idx)
+        if nid is not None:
+            self._node_id = nid
+            self._detail_text = ""
+            self._refresh_detail()
+            self.update()
+
+    def _layout_combo(self):
+        """Dropdown logo depois do título."""
+        tw = QFontMetrics(QFont("Segoe UI", 10, QFont.Bold)).horizontalAdvance(self._TITLE)
+        self._node_combo.setGeometry(10 + tw + 8, 3, 92, 20)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._layout_combo()
+
+    def _node(self):
+        return next((n for n in self.sim.nodes if n.id == self._node_id), None)
+
+    def _on_timer(self):
+        self._sync_nodes()
+        self._refresh_detail()
+        self.update()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -40,6 +116,8 @@ class BucketsPanel(QWidget):
                 self._selected_bucket = -1
             else:
                 self._selected_bucket = clicked
+            self._detail_text = ""
+            self._refresh_detail()
             self.update()
         super().mousePressEvent(event)
 
@@ -48,6 +126,27 @@ class BucketsPanel(QWidget):
         hovering = any(r.contains(pos) for r in self._bucket_rects)
         self.setCursor(Qt.PointingHandCursor if hovering else Qt.ArrowCursor)
         super().mouseMoveEvent(event)
+
+    # Layout em grade: UMA LINHA POR GRUPO, com os buckets que ele possui
+    # (g, g+nGrupos, ...). A linha e a cor já dizem quem é o dono; com muitos
+    # buckets a grade cresce em colunas e o painel rola.
+    _LABEL_W = 34
+    _MARGIN_X = 10
+    _GAP = 4
+    _MIN_CELL_W = 36
+    _MIN_CELL_H = 26
+
+    def _grid_shape(self):
+        em = self.sim.epoch_mgr
+        rows = em.sn_stride
+        cols = max(len(em.buckets_of_group(0)), 1)  # G0 é o que tem mais buckets
+        return rows, cols
+
+    def minimumSizeHint(self):
+        rows, cols = self._grid_shape()
+        w = self._MARGIN_X * 2 + self._LABEL_W + cols * (self._MIN_CELL_W + self._GAP)
+        h = 26 + 22 + rows * (self._MIN_CELL_H + self._GAP) + 4
+        return QSize(w, h)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -58,117 +157,176 @@ class BucketsPanel(QWidget):
             p.end()
             return
 
+        self._sync_nodes()
+        node = self._node()
+        if node is None:
+            p.end()
+            return
+        lists = self.sim.bucket_lists(node.id)
+
         p.setPen(QColor(C["gold"]))
         p.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        p.drawText(QRectF(10, 4, w, 18), Qt.AlignLeft, "\U0001faa3 Buckets (clique para detalhes)")
+        p.drawText(QRectF(10, 4, w, 18), Qt.AlignLeft, self._TITLE)
 
         p.setPen(QColor(C["text3"]))
         p.setFont(QFont("Segoe UI", 7))
         p.drawText(QRectF(10, h - 16, w - 20, 14), Qt.AlignLeft,
-                   f"Regra: bucket = (clientID + clientSN) mod {num} (buckets sao POR GRUPO)")
+                   "Linha = grupo dono | b = grupo + nGrupos*((cliente+sn) mod buckets do grupo)")
 
+        em = self.sim.epoch_mgr
+        rows, cols = self._grid_shape()
+        gap = self._GAP
         top_y = 26
-        bot_y = h - 22
-        available_h = bot_y - top_y
-        margin_x = 14
-        available_w = w - margin_x * 2
-        bucket_w = max(28, min(70, available_w / num - 4))
-        total_w = bucket_w * num
-        spacing = (available_w - total_w) / max(num - 1, 1) if num > 1 else 0
-        spacing = max(2, min(spacing, 12))
-        total_w = bucket_w * num + spacing * (num - 1)
-        start_x = margin_x + (available_w - total_w) / 2
+        avail_w = w - self._MARGIN_X * 2 - self._LABEL_W
+        avail_h = (h - 22) - top_y
+        cw = max(self._MIN_CELL_W, min(84, (avail_w - gap * (cols - 1)) / cols))
+        ch = max(self._MIN_CELL_H, min(46, (avail_h - gap * (rows - 1)) / rows))
 
-        # Nota: este painel mostra um pool compartilhado de indices de bucket
-        # (0..num-1) por simplicidade visual. Na implementacao real, cada
-        # grupo de dados tem seu PROPRIO conjunto de buckets (a formula
-        # (clientID+clientSN) mod numBuckets e aplicada dentro do grupo para
-        # onde a chave da requisicao ja foi roteada) — o grupo de cada
-        # requisicao aparece no seu proprio evento/bolha, nao no indice do
-        # bucket em si, que nao tem "dono" fixo aqui.
-        bucket_color = QColor(C["accent"])
-        self._bucket_rects = []
+        self._bucket_rects = [QRectF() for _ in range(num)]
+        bubbles = []
+        for g in range(rows):
+            y = top_y + g * (ch + gap)
+            gcolor = QColor(GROUP_COLORS[g % len(GROUP_COLORS)])
 
-        for i in range(num):
-            contents = self.sim.bucket_contents[i] if i < len(self.sim.bucket_contents) else []
-            x = start_x + i * (bucket_w + spacing)
-            gc = bucket_color
+            p.setPen(gcolor)
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.drawText(QRectF(self._MARGIN_X, y, self._LABEL_W, ch), Qt.AlignVCenter | Qt.AlignLeft, f"G{g}")
 
-            bucket_h = available_h - 20
-            bx, by = x, top_y + 14
-            taper = 4
+            for col, b in enumerate(em.buckets_of_group(g)):
+                rect = QRectF(self._MARGIN_X + self._LABEL_W + col * (cw + gap), y, cw, ch)
+                self._bucket_rects[b] = rect
+                self._draw_bucket_cell(p, rect, b, gcolor, lists, node)
+                bubble = self.sim.bucket_bubbles.get(b)
+                # O balão (CutBatch/waitForRequests) é do LÍDER: só aparece na visão dele.
+                if bubble and bubble["ttl"] > 0 and bubble.get("node", node.id) == node.id:
+                    bubbles.append((rect, bubble))
 
-            self._bucket_rects.append(QRectF(bx, by, bucket_w, bucket_h))
-            is_selected = (i == self._selected_bucket)
-
-            path = QPainterPath()
-            path.moveTo(bx, by)
-            path.lineTo(bx + bucket_w, by)
-            path.lineTo(bx + bucket_w - taper, by + bucket_h)
-            path.lineTo(bx + taper, by + bucket_h)
-            path.closeSubpath()
-
-            grad = QLinearGradient(bx, by, bx, by + bucket_h)
-            base = QColor(gc)
-            base.setAlpha(60 if is_selected else 30)
-            grad.setColorAt(0.0, QColor(gc.red(), gc.green(), gc.blue(), 30 if is_selected else 15))
-            grad.setColorAt(1.0, base)
-            p.fillPath(path, QBrush(grad))
-
-            border = QColor(gc)
-            border.setAlpha(220 if is_selected else 120)
-            p.setPen(QPen(border, 2.5 if is_selected else 1.5))
-            p.setBrush(Qt.NoBrush)
-            p.drawPath(path)
-
-            max_visible = 5
-            block_h = max(10, min(18, (bucket_h - 8) / max(max_visible, 1)))
-            visible = contents[-max_visible:]
-            for j, req_label in enumerate(reversed(visible)):
-                ry = by + bucket_h - 4 - (j + 1) * (block_h + 2)
-                rx = bx + taper + 2
-                rw = bucket_w - taper * 2 - 4
-                if ry < by + 2:
-                    break
-                req_path = QPainterPath()
-                req_path.addRoundedRect(QRectF(rx, ry, rw, block_h), 3, 3)
-                req_color = QColor(gc)
-                req_color.setAlpha(160)
-                p.fillPath(req_path, req_color)
-                p.setPen(QColor(0, 0, 0, 200))
-                p.setFont(QFont("Consolas", 6))
-                p.drawText(QRectF(rx, ry, rw, block_h), Qt.AlignCenter, req_label[:10])
-
-            if len(contents) > max_visible:
-                p.setPen(QColor(255, 255, 255, 140))
-                p.setFont(QFont("Segoe UI", 6))
-                p.drawText(QRectF(bx, by + 2, bucket_w, 10), Qt.AlignCenter, f"+{len(contents) - max_visible}")
-
-            self._draw_bucket_labels(p, bx, by, bucket_w, bucket_h, i, gc, is_selected, contents)
-
-            # Glow on bucket_in event
-            for ev in (self.sim.visual_events if hasattr(self.sim, 'visual_events') else []):
-                if ev.get("bucket") != i:
-                    continue
-                alpha = min(200, ev["ttl"] * 7)
-                if ev["type"] == "bucket_in":
-                    glow_c = QColor(C["gold"])
-                    glow_c.setAlpha(alpha)
-                    glow_path = QPainterPath()
-                    glow_path.addRoundedRect(QRectF(bx - 2, by - 2, bucket_w + 4, bucket_h + 4), 6, 6)
-                    p.setPen(QPen(glow_c, 2))
-                    p.setBrush(Qt.NoBrush)
-                    p.drawPath(glow_path)
-
-            # Thought bubble para este bucket (waitForRequests / CutBatch)
-            bubble = self.sim.bucket_bubbles.get(i) if hasattr(self.sim, 'bucket_bubbles') else None
-            if bubble and bubble["ttl"] > 0:
-                self._draw_bucket_bubble(p, bx, by, bucket_w, bucket_h, bubble)
-
-        if 0 <= self._selected_bucket < num:
-            self._draw_bucket_detail(p, w, h)
+        # Balões por cima de todas as células (uma linha de cima não cobre o de baixo).
+        for rect, bubble in bubbles:
+            self._draw_bucket_bubble(p, rect.x(), rect.y(), rect.width(), rect.height(), bubble)
 
         p.end()
+
+    def _draw_bucket_cell(self, p, rect, i, gc, lists, node):
+        contents = lists[i] if i < len(lists) else []
+        selected = (i == self._selected_bucket)
+        now = self.sim.tick_count
+        nid = node.id
+        owner = self.sim.epoch_mgr.bucket_owner(i)
+        # O nó tem TODOS os buckets na memória, mas só recebe pedidos dos grupos dele.
+        member = owner == 0 or (owner < len(self.sim.groups) and nid in self.sim.groups[owner].members)
+
+        p.save()
+        if not member:
+            p.setOpacity(0.28)
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, 6, 6)
+        fill = QColor(gc)
+        fill.setAlpha(70 if selected else 34)
+        p.fillPath(path, fill)
+        border = QColor(gc)
+        border.setAlpha(230 if selected else 130)
+        pen = QPen(border, 2.5 if selected else 1.3)
+        if not member:
+            pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+
+        # Nome do bucket
+        p.setPen(QColor(C["text"] if selected else C["text2"]))
+        p.setFont(QFont("Segoe UI", 7, QFont.Bold))
+        p.drawText(QRectF(rect.x() + 5, rect.y() + 2, rect.width() - 20, 12),
+                   Qt.AlignLeft | Qt.AlignVCenter, f"B{i}")
+
+        chip_w, chip_h, chip_gap = 9, 8, 2
+        max_chips = max(int((rect.width() - 10) // (chip_w + chip_gap)), 1)
+        x0 = rect.x() + 5
+        y0 = rect.bottom() - chip_h - 6
+        born = self.sim.bucket_born
+
+        # Pulso do contador quando entra um pedido novo (dura a animação de entrada)
+        pulse = 0.0
+        for label in contents[-max_chips:]:
+            t = (now - born.get((nid, i, label), -9999)) / BUCKET_ENTER_TICKS
+            if 0 <= t < 1:
+                pulse = max(pulse, 1 - t)
+
+        # Quantos pedidos na fila DESTE nó
+        if contents:
+            r = 7 + 2.5 * pulse
+            cx, cy = rect.right() - 10, rect.y() + 9
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(gc))
+            p.drawEllipse(QPointF(cx, cy), r, r)
+            p.setPen(QColor(0, 0, 0))
+            p.setFont(QFont("Segoe UI", 6, QFont.Bold))
+            p.drawText(QRectF(cx - r, cy - r, r * 2, r * 2), Qt.AlignCenter, str(len(contents)))
+
+            # Pedidos como pastilhas, na ordem em que CHEGARAM A ESTE NÓ, na cor do pedido.
+            # Ao entrar, a pastilha cai de cima, cresce e ganha um anel.
+            shown = contents[-max_chips:]
+            for k, label in enumerate(shown):
+                meta = self.sim.bucket_meta.get(label, {})
+                col = QColor(meta.get("color") or gc)
+                t = min(max((now - born.get((nid, i, label), -9999)) / BUCKET_ENTER_TICKS, 0.0), 1.0)
+                e = 1 - (1 - t) ** 3                      # ease-out
+                ccx = x0 + k * (chip_w + chip_gap) + chip_w / 2
+                ccy = y0 + chip_h / 2 - (1 - e) * 16      # cai de cima até o lugar
+                sc = 0.4 + 0.6 * e
+                rc = QRectF(ccx - chip_w * sc / 2, ccy - chip_h * sc / 2, chip_w * sc, chip_h * sc)
+                col.setAlpha(int(90 + 130 * e))
+                p.setPen(Qt.NoPen)
+                p.setBrush(col)
+                p.drawRoundedRect(rc, 2, 2)
+                if t < 1:
+                    ring = QColor(col)
+                    ring.setAlpha(int(200 * (1 - t)))
+                    p.setPen(QPen(ring, 1.2))
+                    p.setBrush(Qt.NoBrush)
+                    rr = 4 + 10 * t
+                    p.drawEllipse(QPointF(ccx, y0 + chip_h / 2), rr, rr)
+            if len(contents) > max_chips:
+                p.setPen(QColor(255, 255, 255, 170))
+                p.setFont(QFont("Segoe UI", 6))
+                p.drawText(QRectF(rect.x(), rect.bottom() - 13, rect.width() - 4, 11),
+                           Qt.AlignRight | Qt.AlignVCenter, f"+{len(contents) - max_chips}")
+
+        # Saída: pedidos que ESTE nó acabou de tirar do bucket (líder: no corte do batch;
+        # seguidor: no commit) ficam dourados, sobem, crescem e somem.
+        for ev in self.sim.bucket_leaving:
+            if ev["bucket"] != i or ev.get("node") != nid:
+                continue
+            t = min((now - ev["born"]) / BUCKET_LEAVE_TICKS, 1.0)
+            col = QColor(C["gold"] if t < 0.35 else (ev["color"] or gc))
+            col.setAlpha(int(230 * (1 - t)))
+            sc = 1 + 0.6 * t
+            ccx = x0 + min(ev["slot"], max_chips - 1) * (chip_w + chip_gap) + chip_w / 2
+            ccy = y0 + chip_h / 2 - 26 * t
+            p.setPen(Qt.NoPen)
+            p.setBrush(col)
+            p.drawRoundedRect(QRectF(ccx - chip_w * sc / 2, ccy - chip_h * sc / 2,
+                                     chip_w * sc, chip_h * sc), 2, 2)
+
+        # Brilho da célula: dourado quando entra pedido NESTE nó, verde quando ele corta o batch
+        for ev in self.sim.visual_events:
+            if ev.get("bucket") != i or ev.get("node") != nid:
+                continue
+            if ev["type"] == "bucket_in":
+                glow, grow = QColor(C["gold"]), 2
+                glow.setAlpha(min(200, ev["ttl"] * 10))
+            elif ev["type"] == "batch_cut":
+                glow, grow = QColor(C["green"]), 3
+                glow.setAlpha(min(230, ev["ttl"] * 12))
+            else:
+                continue
+            gp = QPainterPath()
+            gp.addRoundedRect(rect.adjusted(-grow, -grow, grow, grow), 7, 7)
+            p.setPen(QPen(glow, 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(gp)
+        p.restore()
 
     def _draw_bucket_bubble(self, p, bx, by, bucket_w, bucket_h, bubble):
         """Desenha thought bubble estilo balão de pensamento acima do bucket."""
@@ -190,7 +348,7 @@ class BucketsPanel(QWidget):
 
         # Posiciona acima do bucket
         bbx = bx + bucket_w / 2 - bubble_w / 2
-        bby = by - bubble_h - 16
+        bby = max(by - bubble_h - 6, 2)
 
         # Clamp dentro do widget
         if bbx < 2:
@@ -240,70 +398,68 @@ class BucketsPanel(QWidget):
                        Qt.AlignLeft | Qt.AlignVCenter, line)
             ty += line_h
 
-    def _draw_bucket_labels(self, p, bx, by, bucket_w, bucket_h, i, gc, is_selected, contents):
-        p.setPen(QColor(C["text"] if is_selected else C["text2"]))
-        p.setFont(QFont("Segoe UI", 7, QFont.Bold))
-        p.drawText(QRectF(bx, by + bucket_h + 2, bucket_w, 12), Qt.AlignCenter, f"B{i}")
+    def _detail_lines(self, bid: int) -> list[str]:
+        sim = self.sim
+        em = sim.epoch_mgr
+        node = self._node()
+        nid = node.id if node else self._node_id
+        lists = sim.bucket_lists(nid)
+        contents = lists[bid] if bid < len(lists) else []
+        owner = em.bucket_owner(bid)
+        ng = em.sn_stride
+        mine = em.buckets_of_group(owner)
+        member = owner == 0 or (owner < len(sim.groups) and nid in sim.groups[owner].members)
 
-        if contents:
-            badge_r = 8
-            badge_x = bx + bucket_w - badge_r
-            badge_y = by - badge_r + 2
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(gc))
-            p.drawEllipse(QPointF(badge_x, badge_y), badge_r, badge_r)
-            p.setPen(QColor(0, 0, 0))
-            p.setFont(QFont("Segoe UI", 6, QFont.Bold))
-            p.drawText(QRectF(badge_x - badge_r, badge_y - badge_r, badge_r * 2, badge_r * 2),
-                       Qt.AlignCenter, str(len(contents)))
-
-    def _draw_bucket_detail(self, p, w, h):
-        bid = self._selected_bucket
-        contents = self.sim.bucket_contents[bid] if bid < len(self.sim.bucket_contents) else []
-
-        fill_count = self.sim.batch_fill.get(bid, 0) if hasattr(self.sim, 'batch_fill') else 0
-        batch_size = self.sim.batch_visual_size if hasattr(self.sim, 'batch_visual_size') else 3
-
-        lines = [
-            f"Bucket {bid}",
-            f"Pedidos na fila: {len(contents)}",
-            f"Batch fill: {fill_count}/{batch_size}",
-            f"Formula: (clientID + clientSN) mod {self.sim.num_buckets} = {bid}",
-            f"(cada grupo tem seu proprio conjunto de buckets;",
-            f" o grupo de cada pedido aparece no evento dele)",
+        lines = [f"Bucket {bid} no {node.name if node else nid} - dono: G{owner}"]
+        if owner == 0:
+            lines.append("G0 = Sequenciador: mensagens SYSTEM (GSN/META), nao pedidos de cliente.")
+        elif not member:
+            lines.append(f"Este no NAO pertence ao G{owner}: tem o bucket na memoria, mas nunca")
+            lines.append("recebe pedidos dele (o proxy so envia aos membros do grupo).")
+        lines += [
+            f"Buckets do G{owner}: {mine}",
+            f"Pedidos neste no: {len(contents)}",
+            "",
+            "Cada no tem os SEUS buckets. O LIDER tira o pedido do bucket ao CORTAR o",
+            "batch (CutBatch); os seguidores so removem no COMMIT. Entre o corte e o",
+            "commit o bucket do lider fica mais vazio que o dos seguidores. O que e",
+            "igual em todos e o log decidido pelo Paxos.",
+            "",
+            "Formula real (GetBucketNr):",
+            "  b = grupo + nGrupos * ((clienteId + clienteSn) mod nBucketsDoGrupo)",
+            f"  b = {owner} + {ng} * ((clienteId + clienteSn) mod {len(mine)})",
+            "",
+            "Fila (na ordem de chegada a este no):",
         ]
-        for item in contents[:6]:
+        for item in contents[:12]:
             lines.append(f"  {item}")
-        if len(contents) > 6:
-            lines.append(f"  ... +{len(contents) - 6} mais")
+        if len(contents) > 12:
+            lines.append(f"  ... +{len(contents) - 12} mais")
         if not contents:
-            lines.append("  (vazio - aguardando requests)")
+            lines.append("  (vazio - aguardando pedidos)")
+        return lines
 
-        p.setFont(QFont("Segoe UI", 8))
-        fm = p.fontMetrics()
-        line_h = fm.height() + 2
-        popup_w = min(220, w - 10)
-        popup_h = line_h * len(lines) + 14
-        px = w - popup_w - 6
-        py = 24
+    def _refresh_detail(self):
+        """Mostra/atualiza o detalhe do bucket selecionado (texto selecionável).
+        O texto só é reescrito quando muda, para não perder a seleção do usuário."""
+        bid = self._selected_bucket
+        if not (0 <= bid < self.sim.num_buckets):
+            self._detail.hide()
+            return
+        text = "\n".join(self._detail_lines(bid))
+        if text != self._detail_text:
+            self._detail_text = text
+            self._detail.setPlainText(text)
 
-        rect = QRectF(px, py, popup_w, popup_h)
-        bg = QPainterPath()
-        bg.addRoundedRect(rect, 8, 8)
-        p.fillPath(bg, QColor(10, 18, 32, 245))
-        p.setPen(QPen(QColor(C["gold"]), 1.5))
-        p.drawPath(bg)
-
-        y = py + 8
-        for i, line in enumerate(lines):
-            if i == 0:
-                p.setPen(QColor(C["gold"]))
-                p.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            elif line.startswith("  "):
-                p.setPen(QColor(C["accent"]))
-                p.setFont(QFont("Consolas", 7))
-            else:
-                p.setPen(QColor(C["text"]))
-                p.setFont(QFont("Segoe UI", 8))
-            p.drawText(QRectF(px + 10, y, popup_w - 20, line_h), Qt.AlignLeft | Qt.AlignVCenter, line)
-            y += line_h
+        w, h = self.width(), self.height()
+        doc = self._detail.document()
+        doc.setTextWidth(-1)
+        # No máximo ~60% da largura: deixa a grade visível ao lado (linhas longas quebram).
+        popup_w = int(min(doc.idealWidth() + 28, max(w * 0.6, 220), w - 12))
+        doc.setTextWidth(popup_w - 14)
+        popup_h = int(min(doc.size().height() + 14, max(h - 30, 60)))
+        self._detail.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff if popup_h >= doc.size().height() + 14 else Qt.ScrollBarAsNeeded)
+        self._detail.setGeometry(w - popup_w - 6, 24, popup_w, popup_h)
+        self._detail.show()
+        self._detail.raise_()
