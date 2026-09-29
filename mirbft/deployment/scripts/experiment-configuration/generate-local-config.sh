@@ -40,7 +40,7 @@ faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 da
 clients1="4"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
-systemSizes="11" #"4 16 64 128"  Must be sorted in ascending order! (single pass only -- leaderPolicies
+systemSizes="5" #"4 16 64 128"  Must be sorted in ascending order! (single pass only -- leaderPolicies
                   # is restricted to "Single" below, and the fault-injection 2nd pass would be skipped
                   # entirely anyway since skip() drops Single whenever numFailures>0)
 failureCounts=(0) # For each system size, the corresponding failure count.
