@@ -12,6 +12,240 @@ from mirbftview.protocol.delivery import DeliveryEntry
 from mirbftview.engine.state import SimState
 
 
+BUCKET_ENTER_TICKS = 20   # animação de entrada de um pedido no bucket
+BUCKET_LEAVE_TICKS = 34   # animação de saída (corte do batch)
+
+
+def bubble_ttl(st, n_phases: float) -> int:
+    """Vida de um balão em ticks, proporcional à duração de uma fase (na velocidade
+    atual uma fase leva ~1/(velocidade*0.02) ticks): some depois de ~n fases, e não
+    fica na tela por dezenas de fases."""
+    return max(40, min(300, int(n_phases / max(st.speed * 0.02, 1e-3))))
+
+
+def node_buckets(st, node_id):
+    """Buckets do nó: lista por bucket com os labels dos pedidos, na ORDEM EM QUE
+    CHEGARAM A ESSE NÓ (cada nó guarda os seus; podem diferir entre membros)."""
+    lists = st.node_buckets.get(node_id)
+    if lists is None or len(lists) != st.num_buckets:
+        lists = [[] for _ in range(st.num_buckets)]
+        st.node_buckets[node_id] = lists
+    return lists
+
+
+def bucket_add(st, node_id, bucket_id, label, meta):
+    """AddDirectToBucket neste nó: a cópia do pedido entra no bucket LOCAL dele."""
+    lists = node_buckets(st, node_id)
+    if not (0 <= bucket_id < len(lists)) or label in lists[bucket_id]:
+        return  # já existe (dedup por ClientId/ClientSn, como reqIndex no Go)
+    lists[bucket_id].append(label)
+    st.bucket_born[(node_id, bucket_id, label)] = st.tick_count
+    st.bucket_meta.setdefault(label, dict(meta))
+    st.visual_events.append({"type": "bucket_in", "bucket": bucket_id, "node": node_id, "ttl": 18})
+
+
+def bucket_remove(st, node_id, items):
+    """deliverCommit neste nó: RemoveCommittedFromBuckets (seguidor, se tiver a cópia).
+    No líder o pedido já saiu no corte, então RemoveBatch não acha mais nada (no-op).
+    items = [(bucket_id, label)]. Anima a saída de quem ainda tinha a cópia."""
+    lists = node_buckets(st, node_id)
+    for j, (bucket_id, label) in enumerate(items):
+        if not (0 <= bucket_id < len(lists)):
+            continue
+        if label in lists[bucket_id]:
+            lists[bucket_id].remove(label)
+            meta = st.bucket_meta.get(label, {})
+            st.bucket_leaving.append({"node": node_id, "bucket": bucket_id, "slot": j,
+                                      "color": meta.get("color", ""), "born": st.tick_count})
+        st.bucket_born.pop((node_id, bucket_id, label), None)
+        if not any(label in c for cs in st.node_buckets.values() for c in cs):
+            st.bucket_meta.pop(label, None)
+
+
+def _take_singles(st, bucket, n):
+    """RemoveFirstSingleGroup: tira até n pedidos single-group do início do bucket."""
+    taken = []
+    i = 0
+    while i < len(bucket) and len(taken) < n:
+        if st.bucket_meta.get(bucket[i], {}).get("cross"):
+            i += 1
+            continue
+        taken.append(bucket.pop(i))
+    return taken
+
+
+def _cut_items(st, leader, gid):
+    """CutBatch (bucketgroup.go) sobre os buckets DO LÍDER, sem timeout: corta o que houver.
+
+    1) cross-ops de TODOS os buckets do grupo, por GSN, vêm primeiro; se há alguma, o
+       batch é completado com single-group que já estão nos buckets (sem esperar);
+    2) sem cross-op: initCut = tamanho/nº de buckets (ou total/nº de buckets se há menos
+       pedidos que o tamanho) de cada bucket, e depois completa em ordem de bucket.
+    Os pedidos saem da lista do bucket do líder agora (removeNoLock)."""
+    lists = node_buckets(st, leader)
+    bids = st.epoch_mgr.buckets_of_group(gid)
+    size = max(int(st.batch_size), 1)
+    meta = st.bucket_meta
+    batch = []
+    cross = sorted((meta.get(l, {}).get("gsn", 0), b, l)
+                   for b in bids for l in lists[b] if meta.get(l, {}).get("cross"))
+    for _gsn, b, l in cross:
+        if len(batch) >= size:
+            break
+        lists[b].remove(l)
+        batch.append((b, l))
+    if batch:
+        remaining = size - len(batch)
+        for b in bids:
+            if remaining <= 0:
+                break
+            taken = _take_singles(st, lists[b], remaining)
+            batch += [(b, l) for l in taken]
+            remaining -= len(taken)
+    else:
+        total = sum(len(lists[b]) for b in bids)
+        if total == 0:
+            return []
+        init = size // len(bids) if size <= total else total // len(bids)
+        for b in bids:
+            batch += [(b, l) for l in _take_singles(st, lists[b], init)]
+        for b in bids:
+            if len(batch) >= size:
+                break
+            batch += [(b, l) for l in _take_singles(st, lists[b], size - len(batch))]
+    return batch
+
+
+def request_label(req):
+    """Identificador único do pedido nos buckets: (ClientId, ClientSn)."""
+    return f"c{req.client_id}#{req.client_sn}"
+
+
+def new_instance(st, gid):
+    """Nasce a instância seguinte do grupo: SN = próximo do grupo (g, g+nGrupos, ...),
+    líder pela política (members[sn % n] ou members[0]); começa pelo PREPARE."""
+    from mirbftview.qt.canvas._constants import MSG_COLOR_POOL
+    group = st.groups[gid]
+    sn = st.epoch_mgr.next_sn_for(gid)
+    st.epoch_mgr.advance(gid)
+    leader = st.epoch_mgr.leader_for_group(gid, sn)
+    data_ids = [g.id for g in st.groups if g.id != 0]
+    color = MSG_COLOR_POOL[data_ids.index(gid) % len(MSG_COLOR_POOL)]
+    inst = RequestInfo(kind="instance", group_id=gid, sn=sn, leader=leader, ballot=0,
+                       quorum=len(group.members) // 2 + 1, phase=Phase.PREPARE,
+                       color=color, touched_groups=[gid], batch_requests=0)
+    inst._waiting = False
+    inst._batch_items = []
+    st.instances[gid] = inst
+    st.active_requests.append(inst)
+    hist = st.sn_history.setdefault(gid, [])
+    hist.append({"sn": sn, "leader": leader, "born": st.tick_count, "inst": inst})
+    if len(hist) > 60:
+        del hist[:-60]
+    return inst
+
+
+def try_cut(st, inst):
+    """ProposeIfDue: com a instância preparada (quórum de PROMISE), o líder chama o
+    CutBatch dos buckets do grupo. Sem pedidos, espera (waitForRequests, aqui sem
+    timeout); com pelo menos um, corta na hora tudo o que houver. Devolve True se cortou."""
+    gid = inst.group_id
+    bids = st.epoch_mgr.buckets_of_group(gid)
+    items = _cut_items(st, inst.leader, gid)
+    if not items:
+        anchor = bids[0] if bids else 0
+        st.bucket_bubbles[anchor] = {
+            "text": f"waitForRequests()\nG{gid} SN {inst.sn}: buckets vazios",
+            "color": "gold", "ttl": bubble_ttl(st, 1.1), "node": inst.leader}
+        st.messages = []
+        return False
+
+    inst._waiting = False
+    inst._batch_items = items
+    members = []
+    for j, (b, l) in enumerate(items):
+        m = dict(st.bucket_meta.get(l, {}))
+        m["label"] = l
+        m["bucket"] = b
+        members.append(m)
+        st.bucket_leaving.append({"node": inst.leader, "bucket": b, "slot": j,
+                                  "color": m.get("color", ""), "born": st.tick_count})
+        st.bucket_born.pop((inst.leader, b, l), None)
+    inst.members = members
+    inst.batch_requests = len(members)
+    crosses = sorted((m for m in members if m.get("cross")), key=lambda m: m.get("gsn", 0))
+    inst.is_cross_group = bool(crosses)
+    inst.gsn = crosses[0]["gsn"] if crosses else 0
+    inst.touched_groups = list(crosses[0].get("touched", [gid])) if crosses else [gid]
+    inst.batch_digest = hashlib.sha256(
+        (f"{inst.sn}:{gid}:" + ",".join(l for _, l in items)).encode()).hexdigest()[:12]
+
+    for b in sorted({b for b, _ in items}):
+        st.visual_events.append({"type": "batch_cut", "bucket": b, "node": inst.leader, "ttl": 20})
+    anchor = items[0][0]
+    n_cross = len(crosses)
+    st.bucket_bubbles[anchor] = {
+        "text": (f"CutBatch()\n{len(items)} pedido(s)"
+                 + (f" ({n_cross} cross)" if n_cross else "")
+                 + f"\ndigest={inst.batch_digest[:6]}"),
+        "color": "green", "ttl": bubble_ttl(st, 1.5), "node": inst.leader}
+
+    st.phase = Phase.BATCH_CUT
+    st.log_event(Phase.BATCH_CUT, "CutBatch",
+                 f"G{gid} | Lider Node {inst.leader} | SN={inst.sn}\n"
+                 f"Batch: {len(items)} pedido(s), {n_cross} cross-op\n"
+                 f"Buckets usados: {sorted({b for b, _ in items})}\n"
+                 f"Pedidos: {', '.join(l for _, l in items)}\n"
+                 f"Digest: {inst.batch_digest}",
+                 "gold")
+    st.info_text = (
+        f"✂️ CutBatch — o líder junta os pedidos\n\n"
+        f"Node {inst.leader} (líder de G{gid}, SN={inst.sn}) cortou\n"
+        f"{len(items)} pedido(s) dos buckets {bids} do grupo:\n"
+        + ("• cross-ops primeiro, ordenadas por GSN\n" if n_cross else "")
+        + "• depois os single-group, em ordem de bucket\n\n"
+        f"Os pedidos saíram dos buckets do líder agora; nos\n"
+        f"seguidores a cópia só sai quando o COMMIT chegar.\n\n"
+        f"Sem timeout aqui: corta assim que a instância está\n"
+        f"preparada e há ao menos 1 pedido nos buckets."
+    )
+    st.messages = [Message(
+        MsgType.CLIENT_REQUEST, inst.leader, inst.leader,
+        label=f"CutBatch n={len(items)} d={inst.batch_digest[:6]}",
+        detail=f"size={len(items)} cross={n_cross}",
+    )]
+    return True
+
+
+def resurrect_batch(st, inst, why):
+    """Batch.Resurrect: os pedidos cortados voltam ao INÍCIO dos buckets do líder e a
+    instância segue com um batch vazio (NOP); serão cortados pela instância seguinte."""
+    lists = node_buckets(st, inst.leader)
+    for b, l in reversed(inst._batch_items):
+        if l not in lists[b]:
+            lists[b].insert(0, l)
+            st.bucket_born[(inst.leader, b, l)] = st.tick_count
+        if l not in st.bucket_meta:
+            st.bucket_meta[l] = next((dict(m) for m in inst.members if m.get("label") == l), {})
+    n = len(inst._batch_items)
+    inst._batch_items = []
+    inst.members = []
+    inst.batch_requests = 0
+    inst.is_cross_group = False
+    inst.gsn = 0
+    st.log_event(Phase.ACCEPT, "Batch RESURRECT",
+                 f"G{inst.group_id} SN={inst.sn}: {why}\n"
+                 f"{n} pedido(s) voltam ao inicio dos buckets do lider\n"
+                 f"A instancia segue com batch vazio (NOP)", "orange")
+    st.info_text = (
+        f"♻️ RESURRECT — {why}\n\n"
+        f"Os {n} pedido(s) cortados voltam ao INÍCIO dos\n"
+        f"buckets do líder (Batch.Resurrect) e serão\n"
+        f"propostos por outra instância. Esta posição do log\n"
+        f"é preenchida com um valor vazio (NOP)."
+    )
+
+
 def phase_client_send(st: SimState):
     """Gera nova request e envia ao proxy."""
     client = random.choice(st.clients)
@@ -39,10 +273,11 @@ def phase_client_send(st: SimState):
     leader = st.epoch_mgr.leader_for_group(group_id)
 
     # Bucket assignment (interno, para visualizacao do painel de buckets)
-    bucket_id = st.epoch_mgr.get_request_bucket(client.id, st.client_sn)
+    bucket_id = st.epoch_mgr.get_request_bucket(client.id, st.client_sn, group_id)
 
-    # Proxy = qualquer no que recebe do cliente (no real, e o no gRPC)
-    proxy_node = random.choice(group.members)
+    # Proxy = no que recebe do cliente: rodizio por ClientSn entre TODOS os nos
+    # (guessTargetOrderers real), pode ser de fora do grupo.
+    proxy_node = st.proxy.pick_proxy(st.client_sn, [n.id for n in st.nodes])
 
     st.current_request = RequestInfo(
         client_id=client.id,
@@ -96,153 +331,70 @@ def phase_client_send(st: SimState):
 
 
 def phase_bucket_assign(st: SimState):
-    """Request chega ao proxy → atribuída ao bucket → encaminhada a TODOS os membros."""
+    """O proxy encaminha o pedido a TODOS os membros de cada grupo tocado; cada membro faz
+    AddDirectToBucket no SEU bucket quando a cópia chega. Depois o pedido só espera nos
+    buckets: quem o leva para um batch é a instância do grupo (try_cut)."""
     req = st.current_request
-    bucket_id = req.bucket_id
-    leader = req.leader
+    label = request_label(req)
+    src = req.proxy_node
+    dest_groups = req.touched_groups if len(req.touched_groups) > 1 else [req.group_id]
+    bucket_of = {gid: st.epoch_mgr.get_request_bucket(req.client_id, req.client_sn, gid)
+                 for gid in dest_groups}
+    meta = {"color": req.color, "client_id": req.client_id, "client_sn": req.client_sn,
+            "proxy": src, "gsn": req.gsn, "cross": bool(req.is_cross_group and req.gsn > 0),
+            "touched": list(req.touched_groups), "payload": req.payload}
 
-    # Adiciona ao bucket visual
-    label = f"sn={req.client_sn} h={req.payload_hash[:8]}"
-    if bucket_id < len(st.bucket_contents):
-        st.bucket_contents[bucket_id].append(label)
-
-    # Incrementa batch fill counter
-    st.batch_fill[bucket_id] = st.batch_fill.get(bucket_id, 0) + 1
-
-    # Emite evento visual: request entrou no bucket
-    st.visual_events.append({"type": "bucket_in", "bucket": bucket_id, "leader": leader, "ttl": 18})
-
-    # Adiciona ao BatchCutter
-    pending = PendingRequest(
-        client_id=req.client_id,
-        client_sn=req.client_sn,
-        payload_hash=req.payload_hash,
-        is_cross_group=req.is_cross_group,
-        gsn=req.gsn,
-        touched_groups=req.touched_groups,
-    )
-    cutter = st.batch_cutters.get(bucket_id)
-    if cutter:
-        cutter.add_request(pending)
-
-    group = st.groups[req.group_id] if req.group_id < len(st.groups) else st.groups[1]
-    next_sn = st.epoch_mgr.next_sn_for(req.group_id)
-
+    group = st.groups[req.group_id]
+    inst = st.instances.get(req.group_id)
     st.phase = Phase.BUCKET_ASSIGN
     st.log_event(Phase.BUCKET_ASSIGN, "Bucket Assignment",
-                 f"Request -> Bucket {bucket_id}\n"
-                 f"  Formula request->bucket: (clID={req.client_id} + clSN={req.client_sn}) % {st.num_buckets}\n"
-                 f"  Bucket pertence sempre ao grupo G{req.group_id} (fixo, de groups.yml)\n"
-                 f"  Lider da proxima posicao (SN={next_sn}) do log de G{req.group_id}: Node {leader}\n"
-                 f"  (members[sn % n] — roda por SN, nao muda com epoca)",
+                 f"{label} -> " + ", ".join(f"G{g}:B{bucket_of[g]}" for g in dest_groups) + "\n"
+                 f"  b = grupo + nGrupos*((clienteId + clienteSn) mod nBucketsDoGrupo)\n"
+                 f"  Cada membro coloca a copia no SEU bucket ao receber a mensagem\n"
+                 + (f"  Instancia atual de G{req.group_id}: SN={inst.sn} lider Node {inst.leader}\n"
+                    if inst else ""),
                  "gold")
-
     st.info_text = (
-        f"🪣 Classificando o pedido numa 'caixa de entrada'\n\n"
-        f"O sistema tem {st.num_buckets} caixas (buckets) POR GRUPO.\n"
-        f"Um bucket pertence sempre ao mesmo grupo: a caixa em si\n"
-        f"nunca muda de dono, só serve para agrupar pedidos antes\n"
-        f"de cortar o batch.\n\n"
-        f"📡 O proxy envia a request para TODOS os membros\n"
-        f"do grupo G{req.group_id}: {group.members}\n"
-        f"(via sendToGroup/GsnReqForward — garante que todos\n"
-        f"tenham a request no bucket local antes do ACCEPT)\n\n"
-        f"─── Como a fila é escolhida? ───\n"
-        f"Fórmula: (cliente + nº do pedido) mod {st.num_buckets}\n"
-        f"= ({req.client_id} + {req.client_sn}) mod {st.num_buckets} = fila {bucket_id}\n\n"
-        f"─── Quem lidera a próxima posição do log deste grupo? ───\n"
-        f"Node {leader} (SN={next_sn} mod {len(group.members)} membros = "
-        f"posição {next_sn % len(group.members)} da lista {group.members})"
+        f"🪣 O pedido entra nos buckets\n\n"
+        f"O proxy (Node {src}) envia a cópia a TODOS os membros do\n"
+        f"grupo G{req.group_id}: {group.members}\n"
+        f"(sendToGroup/GsnReqForward). Cada um faz AddDirectToBucket\n"
+        f"no SEU bucket local quando a mensagem chega.\n\n"
+        f"─── Qual bucket? ───\n"
+        f"b = grupo + nGrupos × ((clienteId + clienteSn) mod nB)\n"
+        f"= G{req.group_id} → B{bucket_of[req.group_id]}\n\n"
+        f"Depois disso o pedido só ESPERA no bucket. Quem o leva para\n"
+        f"um batch é o líder da instância do grupo, quando ela estiver\n"
+        f"preparada (PREPARE/PROMISE) e cortar (CutBatch)."
     )
+    if len(dest_groups) > 1:
+        st.info_text += (
+            f"\n\n─── Cross-group: uma cópia por grupo ───\n"
+            f"Toca {['G' + str(g) for g in dest_groups]}: cada grupo guarda a cópia no seu\n"
+            f"bucket e a leva para o batch da sua própria instância."
+        )
 
-    # Mensagem visual: proxy encaminha para TODOS os membros do grupo
-    # (conforme sendToGroup em multipaxosmulticastorderer.go)
-    # Cada membro faz AddDirectToBucket localmente.
     st.messages = []
-    src = req.proxy_node
-    for nid in group.members:
-        if nid == src:
-            continue
-        st.messages.append(Message(
-            MsgType.CLIENT_REQUEST, src, nid,
-            label=f"FWD req h={req.payload_hash[:6]}",
-            detail=f"GsnReqForward group=G{req.group_id}",
-        ))
+    for gid in dest_groups:
+        gmembers = st.groups[gid].members
+        b = bucket_of[gid]
+        for nid in gmembers:
+            if nid == src:
+                # O proxy que também é membro do grupo insere localmente (sem mensagem).
+                bucket_add(st, nid, b, label, meta)
+                continue
+            st.messages.append(Message(
+                MsgType.CLIENT_REQUEST, src, nid,
+                label=f"FWD G{gid} h={req.payload_hash[:6]}",
+                detail=f"GsnReqForward group=G{gid}",
+                on_arrive=(lambda st_, n=nid, bb=b, l=label, m=meta: bucket_add(st_, n, bb, l, m)),
+            ))
     if not st.messages:
         st.messages = [Message(
-            MsgType.CLIENT_REQUEST, leader, leader,
-            label=f"AddDirectToBucket B{bucket_id}",
-            detail=f"local insert",
+            MsgType.CLIENT_REQUEST, src, src,
+            label=f"AddDirectToBucket B{bucket_of[req.group_id]}",
+            detail="local insert",
         )]
-
-
-def phase_batch_cut(st: SimState):
-    """Líder corta o batch (CutBatch) — acumula até batch_visual_size."""
-    req = st.current_request
-    cutter = st.batch_cutters.get(req.bucket_id)
-    fill = st.batch_fill.get(req.bucket_id, 1)
-
-    batch_digest = hashlib.sha256(
-        f"{req.payload_hash}:{req.bucket_id}:{req.group_id}".encode()
-    ).hexdigest()[:12]
-    req.batch_digest = batch_digest
-    req.batch_requests = fill  # batch real: todas as requests acumuladas
-
-    # Remove todas as requests do bucket visual
-    if req.bucket_id < len(st.bucket_contents):
-        bucket = st.bucket_contents[req.bucket_id]
-        for _ in range(min(fill, len(bucket))):
-            bucket.pop(0)
-
-    # Reset batch fill (batch cortado)
-    st.batch_fill[req.bucket_id] = 0
-
-    # Emite evento visual: batch cortado + thought bubble
-    st.visual_events.append({"type": "batch_cut", "bucket": req.bucket_id, "ttl": 20})
-    cut_reason_label = "cross_op" if req.is_cross_group else "size/timeout"
-    st.bucket_bubbles[req.bucket_id] = {
-        "text": f"CutBatch()\nreason={cut_reason_label}\nreqs={fill} digest={batch_digest[:6]}",
-        "color": "green", "ttl": 30,
-    }
-
-    # Remove do cutter
-    if cutter:
-        cutter.force_cut()
-
-    # Consome a proxima posicao do log deste grupo — e so aqui, no corte real
-    # do batch, que o SN e de fato usado (leader_for_group ja tinha "espiado"
-    # este mesmo SN antes, em phase_client_send, sem consumi-lo).
-    req.sn = st.epoch_mgr.next_sn_for(req.group_id)
-    st.epoch_mgr.advance(req.group_id)
-
-    cut_reason = "cross_op_immediate" if req.is_cross_group else "size/timeout"
-
-    st.phase = Phase.BATCH_CUT
-    st.log_event(Phase.BATCH_CUT, "CutBatch",
-                 f"Lider Node {req.leader} corta batch do Bucket {req.bucket_id}\n"
-                 f"Motivo: {cut_reason}\n"
-                 f"Requests no batch: {req.batch_requests}\n"
-                 f"Batch digest: {batch_digest}\n"
-                 f"SN atribuido: {req.sn} (log do grupo G{req.group_id})",
-                 "gold")
-
-    st.info_text = (
-        f"✂️ Empacotando pedidos para votação\n\n"
-        f"O líder (Node {req.leader}) junta pedidos num 'pacote'\n"
-        f"(batch) antes de pedir aprovação ao grupo.\n\n"
-        f"{'⚡ Como envolve múltiplos grupos, empacotou IMEDIATAMENTE.' if req.is_cross_group else '📦 Empacotou quando acumulou pedidos suficientes (ou deu timeout).'}\n\n"
-        f"Agora o pacote recebe um número de ordem (SN={req.sn})\n"
-        f"e vai para votação no grupo.\n\n"
-        f"─── Detalhes técnicos ───\n"
-        f"Batch: {req.batch_requests} reqs | Digest: {batch_digest}\n"
-        f"Grupo G{req.group_id} | Log contíguo (sem segmentos intercalados)"
-    )
-
-    st.messages = [Message(
-        MsgType.CLIENT_REQUEST, req.leader, req.leader,
-        label=f"CutBatch d={batch_digest[:6]}",
-        detail=f"size={req.batch_requests} reason={cut_reason}",
-    )]
 
 
 def phase_gsn_assign(st: SimState):
@@ -315,10 +467,9 @@ def phase_prepare(st: SimState):
         f"com ballot={req.ballot}\"\n\n"
         f"Precisa que a MAIORIA concorde ({req.quorum} de\n"
         f"{len(group.members)} membros) — isso é o 'quorum'.\n\n"
-        f"⚡ No MultiPaxos steady-state, esta fase só\n"
-        f"acontece UMA VEZ (em SetMembers). Depois, o líder\n"
-        f"pula direto para ACCEPT (ProposeIfDue).\n"
-        f"Só repete PREPARE se houver timeout (novo ballot).\n\n"
+        f"⚡ No código real, TODA instância (cada SN) tem o seu\n"
+        f"PREPARE: o líder o envia ao criar a instância\n"
+        f"(SetMembers), e só depois pode cortar o batch.\n\n"
         f"─── Detalhes (MPxPrepare) ───\n"
         f"Ballot={req.ballot} | GroupId={req.group_id} | Membros: {group.members}"
     )
@@ -351,7 +502,7 @@ def phase_promise(st: SimState):
         f"\"Prometemos não aceitar ballot < {req.ballot}.\"\n\n"
         f"Respostas: {req.promises_received} de {req.quorum} necessárias ✓\n\n"
         f"Quando quorum atingido, líder marca prepared=true\n"
-        f"e chama ProposeIfDue() → envia ACCEPT.\n\n"
+        f"e chama ProposeIfDue() → CutBatch → ACCEPT.\n\n"
         f"─── Detalhes (MPxPromise) ───\n"
         f"Ballot={req.ballot} | Ok=true | GroupId={req.group_id}\n"
         f"Members={group.members}"
@@ -382,9 +533,8 @@ def phase_accept(st: SimState):
         f"Node {req.leader} envia MPxAccept com o batch:\n"
         f"\"Registrem o pacote '{req.batch_digest[:6]}...'\n"
         f"na posição SN={req.sn} com ballot={req.ballot}.\"\n\n"
-        f"No código real (ProposeIfDue), o líder faz\n"
-        f"CutBatch do BucketGroup e envia ACCEPT direto\n"
-        f"(sem PREPARE repetido — steady state).\n\n"
+        f"O ACCEPT leva o batch cortado do BucketGroup\n"
+        f"({req.batch_requests} pedido(s), digest {req.batch_digest[:6]}).\n\n"
         f"─── Detalhes (MPxAccept) ───\n"
         f"Ballot={req.ballot} | Batch.digest={req.batch_digest}\n"
         f"GroupId={req.group_id} | SN={req.sn}"
@@ -440,12 +590,11 @@ def phase_commit(st: SimState):
     req = st.current_request
     group = st.groups[req.group_id] if req.group_id < len(st.groups) else st.groups[1]
 
-    # Emite evento visual: commit
     st.visual_events.append({"type": "commit", "sn": req.sn, "leader": req.leader, "ttl": 22})
 
     st.phase = Phase.COMMIT
     st.log_event(Phase.COMMIT, "COMMIT",
-                 f"SN={req.sn} committed em G{req.group_id}\n"
+                 f"G{req.group_id} SN={req.sn} committed ({req.batch_requests} pedido(s))\n"
                  f"Total: {st.committed}",
                  "phase_commit")
 
@@ -453,15 +602,17 @@ def phase_commit(st: SimState):
         f"🎉 COMMIT — Decisão final!\n\n"
         f"Líder emite MPxCommit com digest do batch.\n"
         f"Cada membro chama onCommit → deliverCommit:\n"
-        f"• Remove batch do bucket (RemoveBatch)\n"
+        f"• Seguidores tiram o batch do bucket (RemoveCommittedFromBuckets);\n"
+        f"  no líder os pedidos já saíram no corte\n"
         f"• Anuncia ao announcer (log.Entry)\n"
         f"• Se cross-op: verifica ADeliver (GSN order)\n\n"
         f"Total de decisões: {st.committed}\n\n"
         f"─── Detalhes (MPxCommit) ───\n"
         f"Digest={req.batch_digest[:8]} | GroupId={req.group_id}\n"
-        f"SN={req.sn}"
+        f"SN={req.sn} | {req.batch_requests} pedido(s)"
     )
 
+    items = list(getattr(req, "_batch_items", []))
     st.messages = [Message(
         MsgType.COMMIT, req.leader, nid,
         label=f"COMMIT d={req.batch_digest[:6]}",
@@ -469,129 +620,141 @@ def phase_commit(st: SimState):
         sn=req.sn,
         ballot=req.ballot,
         batch_digest=req.batch_digest,
+        # deliverCommit em cada membro: sai do bucket local dele quando o COMMIT chega
+        on_arrive=(lambda st_, n=nid, its=items: bucket_remove(st_, n, its)),
     ) for nid in group.members]
 
 
 def phase_commit_notify(st: SimState):
-    """COMMIT_NOTIFY — proxy recebe notificação e responde ao cliente."""
+    """COMMIT_NOTIFY — o líder avisa o proxy de cada pedido do batch; o proxy responde ao
+    cliente na PRIMEIRA confirmação (LoadAndDelete em proxyPending)."""
     req = st.current_request
-    st.committed += 1
-    proxy = req.proxy_node
-    client_idx = req.client_id if req.client_id < len(st.clients) else 0
-    client = st.clients[client_idx]
+    leader = req.leader
+    members = list(req.members)
+    if members:
+        st.committed += 1
 
-    # Proxy notifica cliente
-    st.proxy.notify_commit(req.client_id, req.client_sn)
+    answered = []      # pedidos que ESTA instância respondeu
+    for m in members:
+        first = st.proxy.notify_commit(m["client_id"], m["client_sn"]) is not None
+        if first:
+            answered.append(m)
+            st.pending_info.pop((m["client_id"], m["client_sn"]), None)
 
-    # Registra no histórico visual (mensagens COMMIT já chegaram ao destino)
+    first_cross = next((m for m in members if m.get("cross")), None)
     st.commit_history.append({
         "sn": req.sn,
-        "leader": req.leader,
+        "leader": leader,
         "checkpoint_idx": st.checkpoints_done,
-        "hash": req.payload_hash[:6],
+        "hash": req.batch_digest[:6],
         "is_cross": req.is_cross_group,
         "gsn": req.gsn,
         "group": req.group_id,
-        "color": req.color,
+        "color": (members[0].get("color") if members else req.color) or req.color,
+        "n": len(members),
     })
     if len(st.commit_history) > 60:
         st.commit_history = st.commit_history[-60:]
 
     st.phase = Phase.COMMIT_NOTIFY
-    st.log_event(Phase.COMMIT_NOTIFY, "COMMIT_NOTIFY -> Cliente",
-                 f"Proxy Node {proxy} responde a {client.name}\n"
-                 f"SN={req.sn} confirmado | Request entregue",
+    names = {m["label"]: (st.clients[m["client_id"]].name if m["client_id"] < len(st.clients)
+                          else f"Client {m['client_id']}") for m in members}
+    st.log_event(Phase.COMMIT_NOTIFY, "COMMIT_NOTIFY",
+                 f"G{req.group_id} SN={req.sn}: lider Node {leader} avisa os proxies\n"
+                 f"{len(members)} pedido(s): {', '.join(m['label'] for m in members) or '(NOP)'}\n"
+                 f"Respondidos agora: {len(answered)} | ja respondidos por outro grupo: "
+                 f"{len(members) - len(answered)}",
                  "green")
-
     st.info_text = (
-        f"📬 COMMIT_NOTIFY — Proxy responde ao cliente\n\n"
-        f"No código real (NotifyProxy), o líder envia\n"
-        f"SYSTEM:COMMIT_NOTIFY_BATCH ao proxy original.\n"
-        f"O proxy então chama RespondToClient.\n\n"
-        f"Node {proxy} → {client.name}: \"Confirmado!\"\n\n"
-        f"─── Fluxo CSMR completo ───\n"
-        f"Cliente → Proxy → sendToGroup → Bucket →\n"
-        f"CutBatch → ACCEPT → ACCEPTED → COMMIT →\n"
-        f"NotifyProxy → RespondToClient ✓"
+        f"📬 COMMIT_NOTIFY — proxies respondem aos clientes\n\n"
+        f"No código real (NotifyProxy), só o LÍDER do SN avisa,\n"
+        f"UMA mensagem COMMIT_NOTIFY_BATCH com todos os pedidos do\n"
+        f"batch. O proxy de cada pedido chama RespondToClient na\n"
+        f"primeira confirmação (num cross-group, o outro grupo\n"
+        f"chega depois e não gera 2ª resposta).\n\n"
+        f"Batch de G{req.group_id} SN={req.sn}: {len(members)} pedido(s)\n"
+        f"respondidos agora: {len(answered)}"
     )
 
-    st.messages = [Message(
-        MsgType.COMMIT_NOTIFY, proxy, req.client_id,
-        from_is_client=False,
-        to_is_client=True,
-        label=f"RESPONSE sn={req.sn} ok",
-        detail=f"sn={req.sn} committed",
-        sn=req.sn,
-        batch_digest=req.batch_digest,
-    )]
+    # Uma NOTIFY_BATCH por proxy; as respostas ao cliente voam depois que ela chega.
+    by_proxy = {}
+    for m in members:
+        by_proxy.setdefault(m["proxy"], []).append(m)
+    st.messages = []
+    for proxy, ms in by_proxy.items():
+        responses = [Message(
+            MsgType.COMMIT_NOTIFY, proxy, m["client_id"],
+            from_is_client=False, to_is_client=True,
+            label=f"RESPONSE {m['label']} sn={req.sn}",
+            detail=f"sn={req.sn} committed",
+            sn=req.sn, batch_digest=req.batch_digest,
+            color=m.get("color", ""),
+        ) for m in ms if m in answered]
+        if proxy == leader:
+            st.messages.extend(responses)
+        else:
+            st.messages.append(Message(
+                MsgType.COMMIT_NOTIFY, leader, proxy,
+                label=f"NOTIFY_BATCH n={len(ms)} sn={req.sn}",
+                detail="COMMIT_NOTIFY_BATCH orderSn=%d (%s)" % (req.sn, ", ".join(m["label"] for m in ms)),
+                sn=req.sn, batch_digest=req.batch_digest,
+                then=(responses or None),
+            ))
 
 
 def phase_adeliver(st: SimState):
-    """ADeliver — verifica se cross-op pode ser entregue (ordem GSN).
-
-    No sistema real, cada grupo tocado por uma cross-op roda seu proprio
-    MultiPaxos e chama ADeliver separadamente para aquele mesmo GSN — por
-    isso registramos uma entrada de entrega POR GRUPO tocado, nao so no
-    grupo "de origem" desta request simulada; caso contrario a fila de
-    entrega do outro grupo nunca fecharia a lacuna de ordem e ficaria
-    bloqueada para sempre.
-    """
+    """ADeliver — para cada cross-op do batch (em ordem de GSN) o grupo só entrega depois de
+    entregar todo GSN anterior que também o toca; se alguma bloqueia, o batch INTEIRO fica
+    em BufferCommit (inclusive os single-group que estão nele)."""
     req = st.current_request
-    groups = req.touched_groups if req.touched_groups else [req.group_id]
-    entries = [
-        DeliveryEntry(sn=req.sn, gsn=req.gsn, group_id=gid, batch_digest=req.batch_digest)
-        for gid in groups
-    ]
-    # Guardado na request: se ficar bloqueado agora, tick.py precisa checar
-    # depois (quando outro commit de qualquer grupo tocado rodar
-    # _try_deliver de novo) se todas essas entradas (entry.delivered) foram
-    # liberadas nesse meio tempo — espelha o BufferCommit/drainBuffer real.
+    crosses = sorted((m for m in req.members if m.get("cross")), key=lambda m: m.get("gsn", 0))
+    if crosses:
+        entries = [DeliveryEntry(sn=req.sn, gsn=m["gsn"], group_id=req.group_id,
+                                 batch_digest=req.batch_digest) for m in crosses]
+    elif req.members:
+        entries = [DeliveryEntry(sn=req.sn, gsn=0, group_id=req.group_id,
+                                 batch_digest=req.batch_digest)]
+    else:
+        entries = []
+    # Guardado no item: se ficar bloqueado agora, tick.py checa depois (quando outro commit
+    # do grupo rodar _try_deliver de novo) se todas as entradas foram liberadas — espelha o
+    # BufferCommit/drainBuffer real.
     req._delivery_entries = entries
-    delivered_any = False
     for entry in entries:
-        if st.delivery.register_commit(entry):
-            delivered_any = True
+        st.delivery.register_commit(entry)
     next_expected = st.delivery.get_next_expected_gsn(req.group_id)
     blocked = st.delivery.get_blocked_entries(req.group_id)
-
-    # Enriquece historico com touched_groups
-    if delivered_any and st.delivery.delivery_history:
-        last = st.delivery.delivery_history[-1]
-        if last["sn"] == req.sn:
-            last["groups"] = list(groups)
-
-    is_blocked = not all(e.delivered for e in entries) and req.gsn > 0
+    is_blocked = any(e.gsn > 0 and not e.delivered for e in entries)
 
     st.phase = Phase.ADELIVER
     if is_blocked:
         st.log_event(Phase.ADELIVER, "ADeliver BLOQUEADO",
-                     f"GSN={req.gsn} bloqueado em G{req.group_id}\n"
+                     f"G{req.group_id} SN={req.sn}: GSN {[e.gsn for e in entries]} no batch\n"
                      f"Esperando GSN={next_expected} ser entregue primeiro\n"
                      f"Bloqueados: {[e.gsn for e in blocked]}",
                      "red")
         st.info_text = (
             f"🔒 Entrega BLOQUEADA — esperando a vez\n\n"
-            f"Este pedido (nº global {req.gsn}) não pode ser\n"
-            f"entregue ainda porque o pedido nº {next_expected}\n"
-            f"ainda não foi processado.\n\n"
-            f"É como uma fila: mesmo que seu pedido\n"
-            f"fique pronto antes, ele espera a vez\n"
-            f"para manter a ordem correta."
+            f"Este batch tem uma cross-op (GSN {[e.gsn for e in entries if e.gsn]}) que não\n"
+            f"pode ser entregue ainda: o GSN {next_expected} anterior ainda\n"
+            f"não foi processado neste grupo.\n\n"
+            f"O batch INTEIRO espera (BufferCommit), inclusive os\n"
+            f"pedidos single-group que estão nele."
         )
     else:
         st.log_event(Phase.ADELIVER, "ADeliver OK",
-                     f"{'GSN=' + str(req.gsn) + ' entregue' if req.gsn > 0 else 'Single-group -> entrega imediata'}\n"
-                     f"Proximo GSN esperado: {next_expected}",
+                     f"G{req.group_id} SN={req.sn}: "
+                     + (f"GSN {[e.gsn for e in entries if e.gsn]} entregue(s)" if crosses
+                        else "single-group -> entrega imediata")
+                     + f"\nProximo GSN esperado: {next_expected}",
                      "green")
         st.info_text = (
             f"🔓 Entrega confirmada!\n\n"
-            f"{'Pedido multi-grupo nº ' + str(req.gsn) + ' entregue na ordem correta!' if req.gsn > 0 else 'Pedido simples (1 grupo) → entregue imediatamente.'}\n\n"
-            f"O sistema garante que pedidos que afetam\n"
-            f"múltiplos grupos sejam entregues na mesma\n"
-            f"ordem em todos os grupos."
+            f"{'Cross-op(s) entregue(s) na ordem global correta.' if crosses else 'Pedidos simples (1 grupo) → entregues imediatamente.'}\n\n"
+            f"O sistema garante que pedidos que afetam múltiplos\n"
+            f"grupos sejam entregues na mesma ordem em todos os grupos."
         )
 
-    # Mensagem visual (entrega interna)
     st.messages = [Message(
         MsgType.COMMIT, req.leader, req.leader,
         label="ADeliver" + (" ✓" if not is_blocked else " 🔒"),
@@ -713,18 +876,18 @@ def phase_retransmit(st: SimState):
 
 
 def phase_done(st: SimState):
-    """Request completa."""
+    """Instância completa (o próximo SN do grupo nasce em seguida)."""
     req = st.current_request
     st.phase = Phase.DONE
-    st.log_event(Phase.DONE, "Request completa",
-                 f"SN={req.sn} | G{req.group_id} | Committed: {st.committed}",
+    st.log_event(Phase.DONE, "Instância completa",
+                 f"G{req.group_id} SN={req.sn} | {req.batch_requests} pedido(s) | Committed: {st.committed}",
                  "green")
-
     st.info_text = (
-        f"✨ Pedido processado com sucesso!\n\n"
-        f"O ciclo completo terminou:\n"
-        f"  Envio → Classificação → Empacotamento →\n"
-        f"  Votação → Aprovação → Confirmação ✓\n\n"
-        f"Total de decisões: {st.committed}\n\n"
-        f"{'Próximo pedido será processado automaticamente...' if not st.step_mode else 'Pressione ⏭ para o próximo pedido.'}"
+        f"✨ Instância G{req.group_id} SN={req.sn} concluída\n\n"
+        f"O grupo abre a próxima posição do log (SN "
+        f"{st.epoch_mgr.next_sn_for(req.group_id)}) e refaz\n"
+        f"PREPARE → PROMISE antes de cortar o próximo batch.\n\n"
+        f"Total de decisões: {st.committed}"
     )
+
+

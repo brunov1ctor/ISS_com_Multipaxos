@@ -147,6 +147,13 @@ class ProxyState:
     # request_key (client_id, client_sn) → proxy_node_id
     pending_responses: dict[tuple[int, int], int] = field(default_factory=dict)
 
+    @staticmethod
+    def pick_proxy(client_sn: int, node_ids: list[int]) -> int:
+        """Proxy da requisição: rodízio pelo ClientSn entre TODOS os nós
+        (guessTargetOrderers em cmd/orderingclient/client.go, com
+        CrossOpProxyNodeID=-1). O proxy pode ser um nó de fora do grupo."""
+        return node_ids[client_sn % len(node_ids)]
+
     def register_request(self, client_id: int, client_sn: int, proxy_node: int):
         """Registra que o proxy está aguardando COMMIT_NOTIFY."""
         self.pending_responses[(client_id, client_sn)] = proxy_node

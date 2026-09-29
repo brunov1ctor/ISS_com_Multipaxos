@@ -195,6 +195,8 @@ class NetworkCanvas(QWidget):
     def _gsn_panel_rect(self) -> QRectF:
         """Retângulo do painel 'GSN Sequencer' (mesma fórmula de draw_hud.py
         draw_gsn_meta_panel), usado para hit-test do clique."""
+        if self.sim.gsn <= 0 and not self.sim.meta_stream:
+            return QRectF()  # painel oculto (sem pedidos cross-group)
         meta = self.sim.meta_stream
         visible_meta = meta[-5:] if meta else []
         n_entries = max(len(visible_meta), 1)
@@ -206,7 +208,8 @@ class NetworkCanvas(QWidget):
         """Retângulo do painel 'ADeliver (por grupo)' (mesma fórmula de
         draw_hud.py draw_adeliver_panel), usado para hit-test do clique."""
         dlv = self.sim.delivery
-        if not dlv or not dlv._last_delivered_gsn:
+        if (not dlv or not dlv._last_delivered_gsn
+                or (self.sim.gsn <= 0 and not self.sim.meta_stream)):
             return QRectF()
         groups_with_data = sorted(dlv._last_delivered_gsn.keys())
 
@@ -406,15 +409,19 @@ class NetworkCanvas(QWidget):
         # Buckets pertencem ao GRUPO (todos os membros veem os mesmos buckets),
         # não a um nó específico — o líder de cada SN roda por rodízio dentro
         # do grupo, então não há "buckets deste nó" fixos para mostrar aqui.
-        req = self.sim.current_request
-        role = "Ocioso"
-        if req:
-            if req.leader == node_id:
-                role = "\u2605 L\u00cdDER (coordenando vota\u00e7\u00e3o)"
-            elif req.proxy_node == node_id:
-                role = "\U0001f4ec PROXY (carteiro do cliente)"
-            elif req.group_id in [g.id for g in self.sim.groups if node_id in g.members]:
-                role = "\U0001f465 PARTICIPANTE (votando)"
+        roles = []
+        for inst in self.sim.instances.values():
+            if inst.leader == node_id:
+                n = len(inst.members)
+                roles.append(f"\u2605 L\u00cdDER G{inst.group_id} \u00b7 SN {inst.sn}"
+                             + (f" ({n} ped.)" if n else " (esperando pedidos)"))
+        for (cid, csn), info in self.sim.pending_info.items():
+            if info["proxy"] == node_id:
+                roles.append(f"\U0001f4ec PROXY de {info['name']} #{csn}")
+        member_of = [g.id for g in self.sim.groups if g.id != 0 and node_id in g.members]
+        if member_of and not roles:
+            roles.append("\U0001f465 PARTICIPANTE dos grupos " + ", ".join(f"G{g}" for g in member_of))
+        role = "; ".join(roles) if roles else "Ocioso"
         lines = [
             f"\u2500\u2500 {node.name} \u2500\u2500",
             f"Estado: {'\U0001f7e2 Ativo' if node.is_alive else '\U0001f534 Falhou'}",
@@ -531,7 +538,7 @@ class NetworkCanvas(QWidget):
         msg_color = get_active_msg_color(self.sim)
         draw_nodes(p, self.sim, self._node_pos, msg_color)
         draw_sequencer_glow(p, self.sim, self._node_pos)
-        draw_thought_bubbles(p, self._thought_bubbles, self._node_pos)
+        draw_thought_bubbles(p, self._thought_bubbles, self._node_pos, self._client_pos)
         draw_clients(p, self.sim, self._client_pos)
         p.restore()
 
