@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Callable, Optional
 
 
 # ─── Fases da simulação ───────────────────────────────────────────────────────
@@ -89,6 +89,14 @@ class Message:
     # esta mensagem foi emitida — permite o popup mostrar a evolução da
     # struct como um teste de mesa visual dinâmico.
     req_snapshot: Optional[dict] = None
+    # Mensagem que só começa a voar depois que esta (e todas as demais em
+    # trânsito) chegarem: encadeia dois saltos, ex.: líder -> proxy e depois
+    # proxy -> cliente (COMMIT_NOTIFY_BATCH seguido de RespondToClient).
+    then: object = None   # Message ou lista de Message (segundo salto encadeado)
+    # Chamado UMA vez quando a mensagem chega ao destino (tick.py): é assim que cada nó
+    # recebe a sua cópia do pedido no bucket local só na chegada da mensagem dele.
+    on_arrive: Optional[Callable] = None
+    fired: bool = False
 
 
 # ─── Request ─────────────────────────────────────────────────────────────────
@@ -118,6 +126,14 @@ class RequestInfo:
     color: str = ""              # cor unica desta request (para barra de progresso)
     _retransmit_done: bool = False  # controle de retransmissão (pipeline)
     _failure_done: bool = False     # controle de falha simulada (pipeline)
+    # "request": pedido de cliente (CLIENT_SEND -> GSN -> BUCKET_ASSIGN; depois espera nos
+    #            buckets até algum líder cortá-lo num batch).
+    # "instance": UMA instância de Paxos de um grupo (um SN): PREPARE -> PROMISE -> corte do
+    #            batch -> ACCEPT -> ... -> NOTIFY. Cada grupo roda uma instância por vez.
+    kind: str = "request"
+    # Só em instâncias: os pedidos que entraram no batch (dicts com client_id, client_sn,
+    # proxy, color, gsn, cross, label, payload).
+    members: list = field(default_factory=list)
 
 
 def key_to_group(key: str, num_data_groups: int) -> int:
@@ -130,6 +146,40 @@ def key_to_group(key: str, num_data_groups: int) -> int:
     if not key or num_data_groups < 1:
         return 1
     return 1 + (zlib.crc32(key.encode()) % num_data_groups)
+
+
+def parse_cross_op_group_weights(spec: str) -> list[tuple[int, int]]:
+    """Espelha parseCrossOpGroupWeights (config.go): "2:70,3:25,4:5" -> lista de
+    (nº de grupos, limiar acumulado). Entradas com < 2 grupos ou peso <= 0 são
+    ignoradas; spec vazia/inválida cai em "2:100" (todo cross-op toca 2 grupos)."""
+    parsed: list[tuple[int, int]] = []
+    cumulative = 0
+    for part in (spec or "").split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        g_s, w_s = part.split(":", 1)
+        try:
+            groups, weight = int(g_s.strip()), int(w_s.strip())
+        except ValueError:
+            continue
+        if groups < 2 or weight <= 0:
+            continue
+        cumulative += weight
+        parsed.append((groups, cumulative))
+    return parsed or [(2, 1)]
+
+
+def pick_cross_op_group_count(seq_nr: int, cumulative: list[tuple[int, int]]) -> int:
+    """Espelha PickCrossOpGroupCount (config.go): escolha determinística de quantos
+    grupos o cross-op de número `seq_nr` toca, por CRC32("crossopgroups-<seqNr>")."""
+    import zlib
+    h = zlib.crc32(f"crossopgroups-{seq_nr}".encode())
+    pick = h % cumulative[-1][1]
+    for groups, threshold in cumulative:
+        if pick < threshold:
+            return groups
+    return cumulative[-1][0]
 
 
 def snapshot_client_request(req: "RequestInfo") -> dict:

@@ -128,13 +128,13 @@ class ControlBar(QWidget):
         )
         scenarios = [
             ("single_request", "Uma mensagem por vez (didatico)",
-             "Restringe o regime estacionario a 1 grupo de dados por vez,\n"
-             "em rodizio, em vez dos N grupos em paralelo. So afeta o\n"
-             "trafego apos o bootstrap inicial (que sempre prepara todos\n"
-             "os grupos de uma vez, como no Start() real). Tambem alterna\n"
-             "cross-group e single-group a cada novo envio, em vez de\n"
-             "sortear pela taxa configurada, para mostrar sempre os dois\n"
-             "fluxos em sequencia."),
+             "Envia UM pedido por vez: o proximo so sai depois que o\n"
+             "cliente recebeu a resposta do anterior. Assim cada batch\n"
+             "tem 1 pedido (como o Go com pouca carga). Sem este modo,\n"
+             "pedidos chegam enquanto a instancia do grupo ainda esta em\n"
+             "consenso e saem JUNTOS no proximo batch. O tipo de cada\n"
+             "pedido (single-group GET ou cross-group TX) vem do\n"
+             "CrossOpRatio e do CrossOpGroupWeights da Configuracao."),
             ("timeout", "Timeout / Retransmissao",
              "Com chance aleatoria, simula o lider nao recebendo quorum\n"
              "de ACCEPTED a tempo e retransmitindo o ACCEPT (acceptRtxEvery\n"

@@ -3,7 +3,7 @@
 import sys
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QSizePolicy, QScrollArea,
+    QSplitter, QSizePolicy, QScrollArea, QFrame,
 )
 from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QResizeEvent
@@ -11,7 +11,7 @@ from PySide6.QtGui import QResizeEvent
 from mirbftview.qt.theme import STYLESHEET, C
 from mirbftview.qt.widgets import GlassPanel, AmbientBackground
 from mirbftview.qt.canvas import NetworkCanvas
-from mirbftview.qt.panels import InfoPanel, BucketsPanel, ExecutionPanel, CommitChainPanel, EventLogPanel, GlobalOrderPanel
+from mirbftview.qt.panels import InfoPanel, BucketsPanel, ExecutionPanel, CommitChainPanel, EventLogPanel, GlobalOrderPanel, SnTablePanel
 from mirbftview.qt.config_panel import ConfigPanel
 from mirbftview.qt.control_bar import ControlBar
 from mirbftview.qt.simulation import Simulation
@@ -100,8 +100,8 @@ class MirBFTViewWindow(QMainWindow):
         right_splitter.setMinimumWidth(240)
 
         right_splitter.addWidget(self._wrap(InfoPanel(self.sim)))
-        right_splitter.addWidget(self._wrap(ExecutionPanel(self.sim)))
-        right_splitter.addWidget(self._wrap(BucketsPanel(self.sim)))
+        right_splitter.addWidget(self._wrap(ExecutionPanel(self.sim), scrollable=True))
+        right_splitter.addWidget(self._wrap(BucketsPanel(self.sim), scrollable=True))
         right_splitter.setSizes([200, 200, 150])
         right_splitter.setStretchFactor(0, 2)
         right_splitter.setStretchFactor(1, 2)
@@ -133,7 +133,9 @@ class MirBFTViewWindow(QMainWindow):
         bottom_splitter.setStyleSheet("QSplitter{background:transparent;} QSplitter::handle{background:rgba(255,255,255,20); border-radius:2px;}")
         bottom_splitter.addWidget(self._commit_chain)
         bottom_splitter.addWidget(self._global_order)
-        bottom_splitter.setSizes([500, 400])
+        self._sn_table = SnTablePanel(self.sim)
+        bottom_splitter.addWidget(self._sn_table)
+        bottom_splitter.setSizes([460, 380, 300])
 
         v_splitter.addWidget(bottom_splitter)
 
@@ -148,11 +150,24 @@ class MirBFTViewWindow(QMainWindow):
         self._tl_timer.timeout.connect(self._commit_chain.update)
         self._tl_timer.start()
 
-    def _wrap(self, panel: QWidget) -> GlassPanel:
+    def _wrap(self, panel: QWidget, scrollable: bool = False) -> GlassPanel:
         shell = GlassPanel(radius=12, border_opacity=30)
         layout = QVBoxLayout(shell)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(panel)
+        if scrollable:
+            # Painéis desenhados à mão (Execução, Buckets) informam seu tamanho
+            # mínimo via minimumSizeHint; em janelas menores aparece a rolagem.
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+            scroll.viewport().setAutoFillBackground(False)
+            scroll.setWidget(panel)
+            layout.addWidget(scroll)
+        else:
+            layout.addWidget(panel)
         return shell
 
     def _toggle_config(self):
@@ -190,6 +205,11 @@ class MirBFTViewWindow(QMainWindow):
             self._position_log()
 
     def _on_config_applied(self):
+        # Aplicar reinicia a simulação: sem isso sobram GSN/META e requisições em
+        # voo da configuração anterior (ex.: painel do Sequenciador com senhas antigas).
+        info = self.sim.info_text
+        self._control_bar._reset()
+        self.sim.info_text = info
         # Force canvas to recompute positions for new topology
         self._canvas._node_pos.clear()
         self._canvas._client_pos.clear()
@@ -198,6 +218,9 @@ class MirBFTViewWindow(QMainWindow):
         self._canvas._inspect_popup = None
         self._canvas._compute_positions()
         self._canvas.update()
+        # Config aplicada com sucesso: fecha o painel para liberar o canvas. Em caso de
+        # erro de validação o sinal não é emitido, então o painel fica aberto com a mensagem.
+        self._config_shell.setVisible(False)
 
     def _on_reset(self):
         # Reset canvas zoom/pan/positions

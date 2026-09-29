@@ -1,34 +1,34 @@
 """ExecutionPanel — métricas + barra de progresso com nós participantes."""
 
 from PySide6.QtWidgets import QWidget, QSizePolicy
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSize
 from PySide6.QtGui import (
     QPainter, QPainterPath, QColor, QRadialGradient, QPen, QBrush, QFont
 )
 
 from mirbftview.qt.theme import C
 from mirbftview.qt.simulation import Simulation, Phase
+from mirbftview.qt.canvas._constants import GROUP_COLORS
 
 
-_PROGRESS_STEPS_SETUP = [
-    (Phase.PREPARE,       "Prepare",   C["phase_prepare"]),
-    (Phase.PROMISE,       "Promise",   C["phase_promise"]),
-    (Phase.CLIENT_SEND,   "Request",   C["orange"]),
-    (Phase.BUCKET_ASSIGN, "Bucket",    C["gold"]),
-    (Phase.ACCEPT,        "Accept",    C["phase_accept"]),
-    (Phase.ACCEPTED,      "Accepted",  C["phase_accepted"]),
-    (Phase.COMMIT,        "Commit",    C["phase_commit"]),
-    (Phase.COMMIT_NOTIFY, "Notify",    C["green"]),
+# Linha do tempo única. Um PEDIDO de cliente ocupa as 3 primeiras colunas (chega ao proxy,
+# ganha GSN se for cross-group e cai nos buckets); depois disso ele só espera no bucket. Uma
+# INSTÂNCIA de Paxos de um grupo ocupa as demais: PREPARE, PROMISE, corte do batch, ACCEPT...
+_STEPS = [
+    (Phase.CLIENT_SEND,   "Pedido",   C["orange"]),
+    (Phase.GSN_ASSIGN,    "GSN",      C["phase_prepare"]),
+    (Phase.BUCKET_ASSIGN, "Bucket",   C["gold"]),
+    (Phase.PREPARE,       "Prepare",  C["phase_prepare"]),
+    (Phase.PROMISE,       "Promise",  C["phase_promise"]),
+    (Phase.BATCH_CUT,     "Corte",    C["gold"]),
+    (Phase.ACCEPT,        "Accept",   C["phase_accept"]),
+    (Phase.ACCEPTED,      "Accepted", C["phase_accepted"]),
+    (Phase.COMMIT,        "Commit",   C["phase_commit"]),
+    (Phase.ADELIVER,      "Deliver",  C["accent"]),
+    (Phase.COMMIT_NOTIFY, "Notify",   C["green"]),
 ]
-
-_PROGRESS_STEPS_STEADY = [
-    (Phase.CLIENT_SEND,   "Request",   C["orange"]),
-    (Phase.BUCKET_ASSIGN, "Bucket",    C["gold"]),
-    (Phase.ACCEPT,        "Accept",    C["phase_accept"]),
-    (Phase.ACCEPTED,      "Accepted",  C["phase_accepted"]),
-    (Phase.COMMIT,        "Commit",    C["phase_commit"]),
-    (Phase.COMMIT_NOTIFY, "Notify",    C["green"]),
-]
+_REQUEST_COLS = (0, 3)      # [inicio, fim) das colunas de um pedido
+_INSTANCE_COLS = (3, 11)    # [inicio, fim) das colunas de uma instância
 
 _PHASE_ROLE = {
     Phase.PREPARE:       "send",
@@ -50,11 +50,15 @@ class ExecutionPanel(QWidget):
         self.sim = sim
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setMinimumHeight(120)
         self._timer = QTimer(self)
         self._timer.setInterval(80)
         self._timer.timeout.connect(self.update)
         self._timer.start()
+
+    def minimumSizeHint(self):
+        # Métricas (~70 px) + até 4 barras de 28 px + rótulos das fases; largura
+        # para as bolinhas das fases (até 8) + coluna de fase/grupo à direita.
+        return QSize(560, 390)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -105,55 +109,59 @@ class ExecutionPanel(QWidget):
         p.drawText(QRectF(x, y + h * 0.55, w, h * 0.4), Qt.AlignCenter, label)
 
     def _draw_progress_bars(self, p, panel_w, panel_h, start_y):
-        active = self.sim.active_requests
-        if not active:
+        # Pedidos a caminho primeiro, depois as instâncias (uma por grupo).
+        items = list(self.sim.active_requests)
+        items.sort(key=lambda r: (0 if r.kind == "request" else 1, r.group_id, r.sn))
+        if not items:
             p.setPen(QColor(C["text3"]))
             p.setFont(QFont("Segoe UI", 8))
-            p.drawText(QRectF(10, start_y, panel_w - 20, 20), Qt.AlignCenter, "Aguardando requests...")
+            p.drawText(QRectF(10, start_y, panel_w - 20, 20), Qt.AlignCenter, "Aguardando inicio...")
             return
 
-        is_steady = getattr(self.sim, 'prepared', False)
-        steps = _PROGRESS_STEPS_STEADY if is_steady else _PROGRESS_STEPS_SETUP
+        steps = _STEPS
         n = len(steps)
-
         margin_x = 10
-        right_margin = 50
+        right_margin = 84
         available_w = panel_w - margin_x - right_margin
         step_w = available_w / n
 
-        # Altura responsiva por barra
-        available_h = panel_h - start_y - 18  # espaço para labels embaixo
-        total_bars = min(len(active), 4)
+        available_h = panel_h - start_y - 18  # espaço para os rótulos embaixo
         spacing = 4
-        bar_h_each = max(28, min(44, (available_h - (total_bars - 1) * spacing - 14) / total_bars))
+        max_bars = 10
+        total_bars = min(len(items), max_bars)
+        bar_h_each = max(26, min(44, (available_h - (total_bars - 1) * spacing - 14) / total_bars))
 
-        for bar_idx, req in enumerate(active[:total_bars]):
+        for bar_idx, req in enumerate(items[:total_bars]):
             bar_y = start_y + bar_idx * (bar_h_each + spacing)
             if bar_y + bar_h_each > panel_h - 14:
                 break
-            req_color = req.color if hasattr(req, 'color') and req.color else self._get_color(bar_idx)
+            req_color = req.color if req.color else self._get_color(bar_idx)
+            lo, hi = _REQUEST_COLS if req.kind == "request" else _INSTANCE_COLS
 
             current_idx = -1
-            for i, (step_phase, _, _) in enumerate(steps):
-                if step_phase == req.phase:
+            for i in range(lo, hi):
+                if steps[i][0] == req.phase:
                     current_idx = i
                     break
             if current_idx == -1 and req.phase == Phase.DONE:
-                current_idx = n
+                current_idx = hi
 
-            # Track
+            # Trilho só nas colunas deste tipo de item
             track_y = bar_y + bar_h_each / 2
+            x_lo = margin_x + step_w * lo + step_w / 2
+            x_hi = margin_x + step_w * (hi - 1) + step_w / 2
             p.setPen(QPen(QColor(255, 255, 255, 25), 2))
-            p.drawLine(QPointF(margin_x, track_y), QPointF(margin_x + available_w, track_y))
+            p.drawLine(QPointF(x_lo, track_y), QPointF(x_hi, track_y))
 
             # Progresso preenchido
-            if current_idx > 0:
-                fill_w = step_w * current_idx
+            if current_idx > lo:
+                x_cur = margin_x + step_w * min(current_idx, hi - 1) + step_w / 2
                 p.setPen(QPen(QColor(req_color), 3))
-                p.drawLine(QPointF(margin_x, track_y), QPointF(margin_x + fill_w, track_y))
+                p.drawLine(QPointF(x_lo, track_y), QPointF(x_cur, track_y))
 
             # Bolinhas + participantes
-            for i, (step_phase, label, _) in enumerate(steps):
+            for i in range(lo, hi):
+                step_phase, label, _ = steps[i]
                 cx = margin_x + step_w * i + step_w / 2
                 cy = track_y
                 is_done = i < current_idx
@@ -171,30 +179,33 @@ class ExecutionPanel(QWidget):
                     p.drawEllipse(QPointF(cx, cy), 10, 10)
 
                 p.setPen(Qt.NoPen)
-                if is_done or is_current:
-                    p.setBrush(QColor(req_color))
-                else:
-                    p.setBrush(QColor(C["text3"]))
+                p.setBrush(QColor(req_color) if (is_done or is_current) else QColor(C["text3"]))
                 p.drawEllipse(QPointF(cx, cy), radius, radius)
 
-                if is_current:
+                if is_current and req.kind == "instance":
                     self._draw_participants(p, req, step_phase, cx, track_y, step_w, bar_h_each)
 
-            # Label fase (direita)
-            if 0 <= current_idx < n:
+            # Rótulo à direita: fase atual, e quem é (pedido ou grupo·SN)
+            if lo <= current_idx < hi:
                 phase_label = steps[current_idx][1]
-            elif current_idx >= n:
+                if req.kind == "instance" and current_idx == 5 and getattr(req, "_waiting", False):
+                    phase_label = "Espera"
+            elif current_idx >= hi:
                 phase_label = "Pronto"
             else:
                 phase_label = "?"
+            label_x = margin_x + available_w + 4
+            half_h = bar_h_each / 2
             p.setPen(QColor(req_color))
             p.setFont(QFont("Segoe UI", 7, QFont.Bold))
-            p.drawText(
-                QRectF(margin_x + available_w + 4, bar_y, right_margin - 8, bar_h_each),
-                Qt.AlignLeft | Qt.AlignVCenter, phase_label
-            )
+            p.drawText(QRectF(label_x, bar_y, right_margin - 8, half_h),
+                       Qt.AlignLeft | Qt.AlignBottom, phase_label)
+            p.setPen(QColor(GROUP_COLORS[req.group_id % len(GROUP_COLORS)]))
+            p.setFont(QFont("Segoe UI", 7, QFont.Bold))
+            p.drawText(QRectF(label_x, bar_y + half_h, right_margin - 8, half_h),
+                       Qt.AlignLeft | Qt.AlignTop, self._group_text(req))
 
-        # Labels das fases (embaixo)
+        # Rótulos das fases (embaixo)
         label_y = start_y + total_bars * (bar_h_each + spacing)
         if label_y < panel_h - 4:
             p.setPen(QColor(C["text3"]))
@@ -272,6 +283,18 @@ class ExecutionPanel(QWidget):
         else:
             txt = f"L{leader} \u2192 {len(all_nodes) - 1} nos"
         p.drawText(QRectF(cx - step_w * 0.4, info_y, step_w * 0.8, 10), Qt.AlignCenter, txt)
+
+    @staticmethod
+    def _group_text(req) -> str:
+        # Instância: "G3·SN 8 ×2" (grupo, posição do log e nº de pedidos no batch).
+        # Pedido: "Cliente 1 #0" -> "c1#0", com os grupos que toca se for cross-group.
+        if req.kind == "instance":
+            n = len(req.members)
+            return f"G{req.group_id}\u00b7SN {req.sn}" + (f" \u00d7{n}" if n else "")
+        txt = f"c{req.client_id}#{req.client_sn}"
+        if req.is_cross_group and len(req.touched_groups) > 1:
+            txt += " TX"
+        return txt
 
     @staticmethod
     def _get_color(idx: int) -> str:

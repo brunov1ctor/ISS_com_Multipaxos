@@ -2,18 +2,63 @@
 
 import json
 import os
+import re
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSpinBox, QComboBox, QScrollArea, QFrame, QLineEdit, QSizePolicy,
+    QPlainTextEdit,
 )
 from PySide6.QtCore import Qt, Signal
 
 from mirbftview.qt.theme import C
 from mirbftview.qt.simulation import Simulation, Node, Client, Group
+from mirbftview.protocol.types import parse_cross_op_group_weights
 
 
 _PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "presets")
+
+# groups.yml real do projeto (usado pelo botão "Importar groups.yml").
+_GROUPS_YML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "..", "..", "mirbft", "config", "groups.yml")
+
+# Uma linha por grupo: "1: 0, 1, 2" (também aceita "G1:" e "1: [0, 1, 2]" e comentário no fim).
+_GROUP_LINE = re.compile(r"^\s*G?(\d+)\s*:\s*\[?\s*([\d\s,]+?)\s*\]?\s*(#.*)?$")
+
+
+def parse_groups_text(text: str, num_nodes: int):
+    """Converte o texto do campo de grupos em {id: [nós]}.
+
+    Devolve (groups, erro). Regras espelham o que o código real assume: ids de
+    grupos de dados sequenciais 1..N (keyToGroup usa 1 + crc % N), >= 2 membros
+    por grupo e nós existentes.
+    """
+    groups: dict[int, list[int]] = {}
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = _GROUP_LINE.match(line)
+        if not m:
+            return None, f"Linha {lineno} invalida: use 'id: no, no, no'"
+        gid = int(m.group(1))
+        if gid in groups:
+            return None, f"Grupo {gid} repetido (linha {lineno})"
+        members = []
+        for tok in m.group(2).replace(",", " ").split():
+            nid = int(tok)
+            if nid >= num_nodes:
+                return None, f"G{gid}: no {nid} nao existe (nos: 0..{num_nodes - 1})"
+            if nid not in members:
+                members.append(nid)
+        if len(members) < 2:
+            return None, f"G{gid}: minimo 2 nos por grupo para quorum"
+        groups[gid] = members
+    if not groups:
+        return None, "Nenhum grupo definido"
+    if sorted(groups) != list(range(1, len(groups) + 1)):
+        return None, "Ids de grupo devem ser 1..N sem buracos (0 e o sequenciador)"
+    return groups, ""
 
 _BUILTIN_PRESETS = {
     "Minimal (1 grupo, 3 nos)": {
@@ -35,6 +80,7 @@ _BUILTIN_PRESETS = {
         "num_clients": 4,
         "num_groups": 4,
         "nodes_per_group": 3,
+        "groups": "1: 0, 1, 2\n2: 2, 3, 4\n3: 0, 4, 1\n4: 1, 3, 4",
         "orderer": "MultiPaxosMulticast",
         "batch_size": 4096,
         "batch_timeout": 1000,
@@ -81,7 +127,7 @@ def _row(label_text, widget):
     widget.setMinimumHeight(32)
     widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     widget.setStyleSheet(
-        f"QSpinBox, QComboBox {{"
+        f"QSpinBox, QComboBox, QLineEdit {{"
         f"  min-height: 28px; font-size: 10pt; padding: 2px 6px;"
         f"  background: rgba(10,16,30,0.7); color: {C['text']};"
         f"  border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;"
@@ -151,6 +197,42 @@ class ConfigPanel(QWidget):
         self._nodes_per_group.setValue(3)
         layout.addLayout(_row("Nos por Grupo:", self._nodes_per_group))
 
+        # Distribuicao dos grupos (groups.yml). Se preenchido, substitui a
+        # distribuicao automatica acima.
+        layout.addWidget(_label("Distribuicao dos grupos (groups.yml):"))
+        self._groups_text = QPlainTextEdit()
+        self._groups_text.setPlaceholderText("1: 0, 1, 2\n2: 2, 3, 4\n(vazio = automatico)")
+        self._groups_text.setMinimumHeight(96)
+        self._groups_text.setMaximumHeight(160)
+        self._groups_text.setStyleSheet(
+            f"QPlainTextEdit {{ background: rgba(10,16,30,0.7); color: {C['text']}; "
+            f"font-family: Consolas; font-size: 9pt; padding: 4px 6px; "
+            f"border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; }}"
+        )
+        self._groups_text.setPlainText(self._groups_text_from_sim())
+        layout.addWidget(self._groups_text)
+
+        hint = _label("Um grupo por linha: id: no, no, no. Se preenchido, "
+                      "ignora 'No de Grupos' e 'Nos por Grupo'.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        groups_btns = QHBoxLayout()
+        groups_btns.setSpacing(6)
+        for text, slot in (("Importar groups.yml", self._import_groups_yml),
+                           ("Automatico", lambda: self._groups_text.clear())):
+            b = QPushButton(text)
+            b.setMinimumHeight(26)
+            b.setStyleSheet(
+                f"QPushButton {{ background: rgba(255,255,255,0.06); color: {C['text2']}; "
+                f"font-size: 8pt; border: 1px solid rgba(255,255,255,0.15); "
+                f"border-radius: 6px; padding: 3px 8px; }}"
+                f"QPushButton:hover {{ background: rgba(255,255,255,0.12); color: {C['text']}; }}"
+            )
+            b.clicked.connect(slot)
+            groups_btns.addWidget(b)
+        layout.addLayout(groups_btns)
+
         # Orderer
         layout.addWidget(_section("Orderer / Consenso"))
 
@@ -158,6 +240,16 @@ class ConfigPanel(QWidget):
         self._orderer.addItems(["MultiPaxosMulticast", "MultiPaxos", "Pbft", "HotStuff", "Raft"])
         self._orderer.setCurrentText("MultiPaxosMulticast")
         layout.addLayout(_row("Orderer:", self._orderer))
+
+        self._leader_policy = _NoScrollComboBox()
+        self._leader_policy.addItems(["Single", "Simple"])
+        self._leader_policy.setCurrentText(self.sim._st.leader_policy)
+        layout.addLayout(_row("LeaderPolicy:", self._leader_policy))
+        policy_hint = _label("Simple: o lider roda por SN (members[sn % n]) e a troca de "
+                             "lideres aparece. Single: lider fixo do grupo (members[0]). "
+                             "Clique Aplicar e depois Reset.")
+        policy_hint.setWordWrap(True)
+        layout.addWidget(policy_hint)
 
         self._batch_size = _NoScrollSpinBox()
         self._batch_size.setRange(1, 65536)
@@ -169,6 +261,12 @@ class ConfigPanel(QWidget):
         self._batch_timeout.setValue(1000)
         self._batch_timeout.setSuffix(" ms")
         layout.addLayout(_row("Batch Timeout:", self._batch_timeout))
+        # A animação não usa timeout: o líder corta assim que a instância está preparada e há
+        # pelo menos um pedido nos buckets (o BatchSize acima continua valendo como teto).
+        self._batch_timeout.setEnabled(False)
+        self._batch_timeout.setToolTip(
+            "Nao usado na animacao: o lider corta o batch assim que a instancia esta "
+            "preparada (PREPARE/PROMISE) e ha ao menos 1 pedido nos buckets do grupo.")
 
         self._num_buckets = _NoScrollSpinBox()
         self._num_buckets.setRange(1, 1024)
@@ -195,7 +293,23 @@ class ConfigPanel(QWidget):
         self._cross_op_pct.setRange(0, 100)
         self._cross_op_pct.setValue(30)
         self._cross_op_pct.setSuffix(" %")
-        layout.addLayout(_row("Cross-group ops:", self._cross_op_pct))
+        layout.addLayout(_row("CrossOpRatio (% TX):", self._cross_op_pct))
+        ratio_hint = _label("% de pedidos cross-group (TX K1,K2..). 0 = so single-group "
+                            "(GET). Sweep do script: 5, 10, 20, 50, 75.")
+        ratio_hint.setWordWrap(True)
+        layout.addWidget(ratio_hint)
+
+        self._cross_weights = QLineEdit("2:100")
+        self._cross_weights.setMinimumHeight(28)
+        self._cross_weights.setStyleSheet(
+            f"background: rgba(10,16,30,0.7); color: {C['text']}; font-size: 10pt;"
+            f" border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 2px 6px;"
+        )
+        layout.addLayout(_row("CrossOpGroupWeights:", self._cross_weights))
+        weights_hint = _label("grupos:peso,... = quantas chaves/grupos cada TX tem. "
+                              "Ex.: 2:100 (sempre 2) ou 2:70,3:25,4:5.")
+        weights_hint.setWordWrap(True)
+        layout.addWidget(weights_hint)
 
         # Rede
         layout.addWidget(_section("Rede"))
@@ -267,17 +381,45 @@ class ConfigPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
 
+    def _groups_text_from_sim(self) -> str:
+        """Distribuicao atual dos grupos de dados, no formato do campo de texto."""
+        return "\n".join(f"{g.id}: {', '.join(str(m) for m in g.members)}"
+                         for g in self.sim.groups if g.id != 0)
+
+    def _import_groups_yml(self):
+        path = os.path.normpath(_GROUPS_YML)
+        if not os.path.exists(path):
+            self._status.setText("groups.yml nao encontrado em mirbft/config")
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [ln.rstrip("\n") for ln in f if _GROUP_LINE.match(ln.strip())
+                     and not ln.strip().startswith("#")]
+        cleaned = [l.split("#", 1)[0].strip() for l in lines]
+        self._groups_text.setPlainText("\n".join(cleaned))
+        self._status.setText(f"Importado {len(lines)} grupos de groups.yml "
+                             f"(ajuste 'No de Nos' e clique Aplicar)")
+
     def _apply(self):
         num_nodes = self._num_nodes.value()
         num_clients = self._num_clients.value()
         num_groups = self._num_groups.value()
         nodes_per_group = min(self._nodes_per_group.value(), num_nodes)
 
-        if nodes_per_group < 2:
-            self._status.setText("Minimo 2 nos por grupo para quorum")
-            return
         if num_nodes < 3:
             self._status.setText("Minimo 3 nos para tolerancia a faltas")
+            return
+
+        # Distribuicao explicita (campo de texto) tem prioridade sobre a automatica.
+        custom = None
+        if self._groups_text.toPlainText().strip():
+            custom, err = parse_groups_text(self._groups_text.toPlainText(), num_nodes)
+            if custom is None:
+                self._status.setText(err)
+                return
+            num_groups = len(custom)
+            self._num_groups.setValue(num_groups)
+        elif nodes_per_group < 2:
+            self._status.setText("Minimo 2 nos por grupo para quorum")
             return
 
         self.sim.nodes = [Node(i, f"N{i}", [0]) for i in range(num_nodes)]
@@ -285,19 +427,32 @@ class ConfigPanel(QWidget):
 
         self.sim.groups = [Group(0, "Sequenciador (G0)", list(range(num_nodes)))]
         for g in range(1, num_groups + 1):
-            members = []
-            for j in range(nodes_per_group):
-                nid = ((g - 1) * nodes_per_group + j) % num_nodes
-                members.append(nid)
-            members = list(set(members))
-            if len(members) < 2:
-                members = list(range(min(2, num_nodes)))
+            if custom is not None:
+                members = list(custom[g])
+            else:
+                members = []
+                for j in range(nodes_per_group):
+                    nid = ((g - 1) * nodes_per_group + j) % num_nodes
+                    members.append(nid)
+                members = list(dict.fromkeys(members))
+                if len(members) < 2:
+                    members = list(range(min(2, num_nodes)))
             self.sim.groups.append(Group(g, f"Dados G{g}", members))
             for nid in members:
                 if g not in self.sim.nodes[nid].groups:
                     self.sim.nodes[nid].groups.append(g)
 
+        weights_spec = self._cross_weights.text().strip() or "2:100"
+        # O parser do Go ignora entradas ruins e cai em "2:100" em silêncio; aqui avisamos.
+        entries = [re.fullmatch(r"\s*(\d+)\s*:\s*(\d+)\s*", p) for p in weights_spec.split(",")]
+        if not any(m and int(m.group(1)) >= 2 and int(m.group(2)) > 0 for m in entries):
+            self._status.setText("CrossOpGroupWeights invalido (ex.: 2:70,3:25,4:5; "
+                                 "minimo 2 grupos e peso > 0)")
+            return
+
         self.sim.apply_config(
+            leader_policy=self._leader_policy.currentText(),
+            cross_op_group_weights=weights_spec,
             num_buckets=self._num_buckets.value(),
             segment_length=self._segment_length.value(),
             batch_size=self._batch_size.value(),
@@ -325,13 +480,16 @@ class ConfigPanel(QWidget):
             "num_clients": self._num_clients.value(),
             "num_groups": self._num_groups.value(),
             "nodes_per_group": self._nodes_per_group.value(),
+            "groups": self._groups_text.toPlainText(),
             "orderer": self._orderer.currentText(),
+            "leader_policy": self._leader_policy.currentText(),
             "batch_size": self._batch_size.value(),
             "batch_timeout": self._batch_timeout.value(),
             "num_buckets": self._num_buckets.value(),
             "segment_length": self._segment_length.value(),
             "checkpoint_interval": self._checkpoint_interval.value(),
             "cross_op_pct": self._cross_op_pct.value(),
+            "cross_op_group_weights": self._cross_weights.text(),
             "view_change_timeout": self._view_change_timeout.value(),
         }
 
@@ -340,13 +498,16 @@ class ConfigPanel(QWidget):
         self._num_clients.setValue(cfg.get("num_clients", 4))
         self._num_groups.setValue(cfg.get("num_groups", 4))
         self._nodes_per_group.setValue(cfg.get("nodes_per_group", 3))
+        self._groups_text.setPlainText(cfg.get("groups", ""))
         self._orderer.setCurrentText(cfg.get("orderer", "MultiPaxosMulticast"))
+        self._leader_policy.setCurrentText(cfg.get("leader_policy", "Single"))
         self._batch_size.setValue(cfg.get("batch_size", 4096))
         self._batch_timeout.setValue(cfg.get("batch_timeout", 1000))
         self._num_buckets.setValue(cfg.get("num_buckets", 16))
         self._segment_length.setValue(cfg.get("segment_length", 16))
         self._checkpoint_interval.setValue(cfg.get("checkpoint_interval", 80))
         self._cross_op_pct.setValue(cfg.get("cross_op_pct", 30))
+        self._cross_weights.setText(cfg.get("cross_op_group_weights", "2:100"))
         self._view_change_timeout.setValue(cfg.get("view_change_timeout", 60000))
 
     def _load_preset(self, name: str):
