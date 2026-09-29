@@ -40,13 +40,10 @@ faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 da
 clients1="4"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
-systemSizes="11 11" #"4 16 64 128"  Must be sorted in ascending order! (repeating "11" runs the whole sweep a 2nd time
-                  # at the same base size, this time carving failureCounts[1] failures OUT of those same 11 nodes
-                  # instead of adding extra ones -- see the numFailures check around "numPeers += numFailures" below)
-failureCounts=(0 6) # For each system size, the corresponding failure count.
-                     # 2nd pass: Failures=6 out of 11 total peers, quorum=floor(11/2)+1=6, so only 5 stay alive --
-                     # permanently below quorum. Carved out of the existing 11 physical peers rather than added
-                     # on top, since adding would need extra Emulab nodes the current topology doesn't have.
+systemSizes="5" #"4 16 64 128"  Must be sorted in ascending order! (single pass only -- leaderPolicies
+                  # is restricted to "Single" below, and the fault-injection 2nd pass would be skipped
+                  # entirely anyway since skip() drops Single whenever numFailures>0)
+failureCounts=(0) # For each system size, the corresponding failure count.
 reuseFaulty=true  # If true, both correct and faulty peers will have the same tag and will be launched together, with the same config file.
                   # The failure count is only expressed as a parameter in (every peer's) config file, and even the faulty peers will see
                   # Faulty=false in their config file. They need to derive their behavior from the Failures config field (and potentially
@@ -67,7 +64,7 @@ throughputCap=131072000     # The system will always be proposing requests at a 
                             # Used to prevent view changes when too many batches accumulate in a bucket.
 
 # System composition
-orderers="MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
+orderers="MultiPaxosMulticast MultiPaxos"         # Possible values: MultiPaxosMulticast MultiPaxos Pbft HotStuff Raft Dummy
 checkpointers="Signing"
 
 # Parameters chosen for experiments
@@ -81,7 +78,7 @@ minBuckets="16"
 minEpochLength="256"       # [entries]
 nodeConnections="1"
 minConnections="16"
-leaderPolicies="Simple Single"  # Possible values:
+leaderPolicies="Single"  # Possible values:
                          #     "Single": only one node in the leaderset. Simulates the single leader version of the protocols.
                          #     "Simple": all nodes in the leaderset
                          #     "Blacklist": faulty nodes are blacklisted, at least 2f+1 nodes in the leaderset
