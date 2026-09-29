@@ -40,12 +40,12 @@ faultyMachineLocations="sjc04 osa23 ams03 syd05 lon06 wdc07 che01 tok05 par01 da
 clients1="4"    # deploys 1 client machine which run the specified number of client instances
 clients16=""    # deploys 16 client machine which run the specified number of client instances
 clients32=""    # deploys 32 client machine which run the specified number of client instances
-systemSizes="5 5" #"4 16 64 128"  Must be sorted in ascending order! (repeating "5" runs the whole sweep a 2nd time
-                  # at the same base size, this time carving failureCounts[1] failures OUT of those same 5 nodes
+systemSizes="11 11" #"4 16 64 128"  Must be sorted in ascending order! (repeating "11" runs the whole sweep a 2nd time
+                  # at the same base size, this time carving failureCounts[1] failures OUT of those same 11 nodes
                   # instead of adding extra ones -- see the numFailures check around "numPeers += numFailures" below)
-failureCounts=(0 3) # For each system size, the corresponding failure count.
-                     # 2nd pass: Failures=3 out of 5 total peers, quorum=floor(5/2)+1=3, so only 2 stay alive --
-                     # permanently below quorum. Carved out of the existing 5 physical peers rather than added
+failureCounts=(0 6) # For each system size, the corresponding failure count.
+                     # 2nd pass: Failures=6 out of 11 total peers, quorum=floor(11/2)+1=6, so only 5 stay alive --
+                     # permanently below quorum. Carved out of the existing 11 physical peers rather than added
                      # on top, since adding would need extra Emulab nodes the current topology doesn't have.
 reuseFaulty=true  # If true, both correct and faulty peers will have the same tag and will be launched together, with the same config file.
                   # The failure count is only expressed as a parameter in (every peer's) config file, and even the faulty peers will see
@@ -168,6 +168,7 @@ function skip() {
 throughputsAuthPbft=$()
 throughputsAuthPbft[4]="128 256"
 throughputsAuthPbft[5]="2048 4096 8192 16384 32768 65536"
+throughputsAuthPbft[11]="2048 4096 8192 16384 32768 65536"  # chute inicial p/ piloto de calibração, mesmo perfil do numPeers=5
 throughputsAuthPbft[8]=""
 throughputsAuthPbft[16]="128 256"
 throughputsAuthPbft[32]=""
@@ -185,6 +186,7 @@ throughputsNoAuthPbft[128]=""
 throughputsAuthSinglePbft=$()
 throughputsAuthSinglePbft[4]="128 256"
 throughputsAuthSinglePbft[5]="2048 4096 8192 16384 32768 65536"
+throughputsAuthSinglePbft[11]="2048 4096 8192 16384 32768 65536"  # chute inicial p/ piloto de calibração, mesmo perfil do numPeers=5
 throughputsAuthSinglePbft[8]=""
 throughputsAuthSinglePbft[16]="128 256"
 throughputsAuthSinglePbft[32]=""
@@ -202,6 +204,7 @@ throughputsNoAuthSinglePbft[128]=""
 throughputsAuthHotStuff=$()
 throughputsAuthHotStuff[4]="128 256"
 throughputsAuthHotStuff[5]="2048 4096 8192 16384 32768 65536"
+throughputsAuthHotStuff[11]="2048 4096 8192 16384 32768 65536"  # chute inicial p/ piloto de calibração, mesmo perfil do numPeers=5
 throughputsAuthHotStuff[8]=""
 throughputsAuthHotStuff[16]="128 256"
 throughputsAuthHotStuff[32]=""
@@ -219,6 +222,7 @@ throughputsNoAuthHotStuff[128]=""
 throughputsAuthSingleHotStuff=$()
 throughputsAuthSingleHotStuff[4]="128 256"
 throughputsAuthSingleHotStuff[5]="2048 4096 8192 16384 32768 65536"
+throughputsAuthSingleHotStuff[11]="2048 4096 8192 16384 32768 65536"  # chute inicial p/ piloto de calibração, mesmo perfil do numPeers=5
 throughputsAuthSingleHotStuff[8]=""
 throughputsAuthSingleHotStuff[16]="128 256"
 throughputsAuthSingleHotStuff[32]=""
@@ -236,6 +240,7 @@ throughputsNoAuthSingleHotStuff[128]=""
 throughputsAuthRaft=$()
 throughputsAuthRaft[4]="128 256"
 throughputsAuthRaft[5]="2048 4096 8192 16384 32768 65536"
+throughputsAuthRaft[11]="2048 4096 8192 16384 32768 65536"  # chute inicial p/ piloto de calibração, mesmo perfil do numPeers=5
 throughputsAuthRaft[8]=""
 throughputsAuthRaft[16]="128 256"
 throughputsAuthRaft[32]=""
@@ -253,6 +258,7 @@ throughputsNoAuthRaft[128]=""
 throughputsAuthSingleRaft=$()
 throughputsAuthSingleRaft[4]="128 256"
 throughputsAuthSingleRaft[5]="2048 4096 8192 16384 32768 65536"
+throughputsAuthSingleRaft[11]="2048 4096 8192 16384 32768 65536"  # chute inicial p/ piloto de calibração, mesmo perfil do numPeers=5
 throughputsAuthSingleRaft[8]=""
 throughputsAuthSingleRaft[16]="128 256"
 throughputsAuthSingleRaft[32]=""
@@ -271,6 +277,7 @@ throughputsNoAuthSingleRaft[128]=""
 throughputsAuthMultiPaxos=$()
 throughputsAuthMultiPaxos[4]="128 256"
 throughputsAuthMultiPaxos[5]="2048 4096 8192 16384 32768 65536"
+throughputsAuthMultiPaxos[11]="2048 4096 8192 16384 32768 65536"  # chute inicial p/ piloto de calibração, mesmo perfil do numPeers=5
 throughputsAuthMultiPaxos[8]=""
 throughputsAuthMultiPaxos[16]="128 256"
 throughputsAuthMultiPaxos[32]=""
@@ -288,6 +295,7 @@ throughputsNoAuthMultiPaxos[128]=""
 throughputsAuthSingleMultiPaxos=$()
 throughputsAuthSingleMultiPaxos[4]="128 256"
 throughputsAuthSingleMultiPaxos[5]="2048 4096 8192 16384 32768 65536"
+throughputsAuthSingleMultiPaxos[11]="2048 4096 8192 16384 32768 65536"  # chute inicial p/ piloto de calibração, mesmo perfil do numPeers=5
 throughputsAuthSingleMultiPaxos[8]=""
 throughputsAuthSingleMultiPaxos[16]="128 256"
 throughputsAuthSingleMultiPaxos[32]=""
