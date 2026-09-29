@@ -767,9 +767,15 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 		c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", config.Config.CrossOpProxyNodeID).Msg("Sending to proxy for preprocessing")
 		return []int32{config.Config.CrossOpProxyNodeID}
 	}
-	// Fallback: send to orderer 0 if proxy not configured
-	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Msg("Sending to orderer 0 (default proxy)")
-	return []int32{0}
+	// No fixed proxy configured (CrossOpProxyNodeID=-1): round-robin across all
+	// known nodes, keyed on ClientSn, instead of always defaulting to node 0.
+	// Spreads the entry-point reception load evenly across the cluster; without
+	// this, every client request concentrates on a single node regardless of
+	// cluster size, an asymmetry that worsens as node count grows.
+	nodeIDs := membership.AllNodeIDs()
+	proxyID := nodeIDs[int(req.RequestId.ClientSn)%len(nodeIDs)]
+	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", proxyID).Msg("Sending to round-robin proxy for preprocessing")
+	return []int32{proxyID}
 }
 
 // Creates a string representation of a bucket assignment for the purpose of using it as a map key.
