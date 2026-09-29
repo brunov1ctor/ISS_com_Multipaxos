@@ -589,11 +589,16 @@ func (i *mpxInstance) SetMembers(members []int32) {
 	}
 
 	if i.leader == -1 {
-		// Líder deste SN é escolhido por round-robin determinístico entre os membros do grupo:
-		// todo nó calcula o mesmo dono só a partir do número de sequência, sem troca de
-		// mensagens. Por isso SNs diferentes do mesmo segmento normalmente têm líderes
-		// diferentes, mesmo sem nenhuma eleição explícita ter acontecido.
-		i.leader = i.members[i.sn%n]
+		// Líder deste SN é escolhido de forma determinística, sem troca de mensagens
+		// (todo nó calcula o mesmo valor sozinho). Sob leaderPolicy=Single, fixa em
+		// members[0] pra todo SN do grupo (um único líder de fato, como o nome da
+		// política promete); caso contrário, round-robin por sn%n -- SNs diferentes
+		// do mesmo segmento normalmente têm líderes diferentes.
+		if config.Config.LeaderPolicy == "Single" {
+			i.leader = i.members[0]
+		} else {
+			i.leader = i.members[i.sn%n]
+		}
 		fmt.Printf("[MPX] sn=%d SetMembers members=%v quorum=%d leader=%d\n", i.sn, members, i.quorum, i.leader)
 		i.currentBallot = int64(uint64(0)<<32 | uint64(i.leader))
 		if i.leader == membership.OwnID && !i.prepSent {
