@@ -767,11 +767,7 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 		c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", config.Config.CrossOpProxyNodeID).Msg("Sending to proxy for preprocessing")
 		return []int32{config.Config.CrossOpProxyNodeID}
 	}
-	// No fixed proxy configured (CrossOpProxyNodeID=-1): round-robin across all
-	// known nodes, keyed on ClientSn, instead of always defaulting to node 0.
-	// Spreads the entry-point reception load evenly across the cluster; without
-	// this, every client request concentrates on a single node regardless of
-	// cluster size, an asymmetry that worsens as node count grows.
+	// No fixed proxy: round-robin by ClientSn instead of always node 0.
 	nodeIDs := membership.AllNodeIDs()
 	proxyID := nodeIDs[int(req.RequestId.ClientSn)%len(nodeIDs)]
 	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", proxyID).Msg("Sending to round-robin proxy for preprocessing")
