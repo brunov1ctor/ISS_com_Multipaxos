@@ -21,18 +21,10 @@ class SimState:
         # Defaults from generate-config.sh:
         #   systemSizes=5, clients1=4, bucketsPerLeader=16, minBuckets=16
         #   batchsizes=4096, minBatchTimeout=1000ms, segmentLengths=16
-        #   viewChangeTimeouts=60000ms, leaderPolicies="Simple"
+        #   viewChangeTimeouts=60000ms, leaderPolicies="Single" (generate-local-config.sh)
         #   orderers="MultiPaxosMulticast", nodeToLeaderRatios=1
         num_peers = 5
         self.nodes = [Node(i, f"Node {i}", [0]) for i in range(num_peers)]
-        # From groups.yml: 4 data groups, each with 3 nodes
-        # Node 0: [1, 3], Node 1: [1, 4], Node 2: [1, 2], Node 3: [2, 4], Node 4: [3, 4]
-        self.nodes[0].groups.extend([1, 3])
-        self.nodes[1].groups.extend([1, 4])
-        self.nodes[2].groups.extend([1, 2])
-        self.nodes[3].groups.extend([2, 4])
-        self.nodes[4].groups.extend([3, 4])
-
         self.clients = [Client(i, f"Cliente {i}") for i in range(4)]
         self.groups = [
             Group(0, "Sequenciador (G0)", list(range(num_peers))),
@@ -41,6 +33,12 @@ class SimState:
             Group(3, "Dados G3", [0, 4, 1]),
             Group(4, "Dados G4", [1, 3, 4]),
         ]
+        # Grupos de cada nó DERIVADOS de groups.yml (antes a lista era escrita à mão e
+        # divergia: ex. o Node 1 aparecia sem o G3, embora G3 = [0, 4, 1]).
+        for g in self.groups:
+            for nid in g.members:
+                if g.id != 0 and g.id not in self.nodes[nid].groups:
+                    self.nodes[nid].groups.append(g.id)
         # bucketsPerLeader=16, numBuckets real = bucketsPerLeader * numPeers = 80;
         # aqui usamos 16 (minBuckets) só para caber na tela.
         self.num_buckets = 16
@@ -52,6 +50,12 @@ class SimState:
         # em checkpoints, só permite truncar o log.
         self.checkpoint_interval = 16 * num_peers
         self.cross_op_pct = 0.3  # workload param (não no generate-config)
+        # crossOpGroupWeightsList do generate-local-config.sh ("2:100" = todo cross-op
+        # toca exatamente 2 grupos; ex.: "2:70,3:25,4:5" mistura 2, 3 e 4 grupos).
+        self.cross_op_group_weights = "2:100"
+        # leaderPolicies do generate-local-config.sh: sob "Single", SetMembers fixa o
+        # líder em members[0] para todo SN do grupo; sob "Simple", members[sn % n].
+        self.leader_policy = "Single"
         self.view_change_timeout = 3750  # 60000ms / 16ms per tick ≈ 3750
 
     def _init_counters(self):
@@ -64,6 +68,9 @@ class SimState:
         self.meta_stream: list[dict] = []  # [{gsn, groups, published_by}]
 
     def _init_control(self):
+        # Ticks da simulação que de fato avançaram (não conta enquanto pausada):
+        # os balões de pensamento envelhecem por aqui, e não pelo relógio da tela.
+        self.tick_count: int = 0
         self.messages: list[Message] = []
         self.current_request: RequestInfo | None = None
         self.phase: Phase = Phase.IDLE
@@ -74,13 +81,42 @@ class SimState:
         self.step_mode: bool = True
         self.advance_flag: bool = False
         # Bucket visual contents (for UI)
-        self.bucket_contents: list[list[str]] = [[] for _ in range(self.num_buckets)]
+        # Buckets POR NÓ (cada nó guarda o seu, com todos os num_buckets; só usa os dos
+        # grupos a que pertence): node_buckets[nó][bucket] -> [labels dos pedidos].
+        self.node_buckets: dict[int, list[list[str]]] = {}
+        # (nó, bucket, label) -> tick em que a cópia chegou ao bucket daquele nó
+        self.bucket_born: dict = {}
+        # Animação dos pedidos dentro dos buckets (tempo em ticks da simulação):
+        #   bucket_meta[label]  -> {"color"}: cor do pedido
+        #   bucket_leaving      -> pedidos que acabaram de sair do bucket de um nó (commit)
+        self.bucket_meta: dict[str, dict] = {}
+        self.bucket_leaving: list[dict] = []
         # Commit history for visual chain
         self.commit_history: list[dict] = []  # [{sn, leader, epoch, hash, is_cross, gsn}]
         # Scenarios toggles
         self.scenarios: dict[str, bool] = {}
-        # Pipeline: multiplas requests em paralelo
+        # Pipeline: itens ativos = INSTÂNCIAS de Paxos (uma por grupo, sempre presentes depois
+        # de iniciar) + PEDIDOS ainda a caminho dos buckets.
         self.active_requests: list[RequestInfo] = []
+        # Instância corrente de cada grupo de dados: group_id -> RequestInfo(kind="instance")
+        self.instances: dict[int, RequestInfo] = {}
+        # Rodadas (todas as mensagens chegaram e o pipeline avançou uma fase) e chegada de
+        # pedidos no modo contínuo: `arrival_burst` pedidos a cada `arrival_every` rodadas,
+        # até `max_pending` sem resposta. O batch aparece porque pedidos chegam enquanto a
+        # instância do grupo ainda está em consenso.
+        self.round_count: int = 0
+        self.arrival_every: int = 2
+        self.arrival_burst: int = 2
+        self.max_pending: int = 14
+        # pedidos sem resposta ainda: (client_id, client_sn) -> {"proxy", "color", "name"}
+        self.pending_info: dict = {}
+        self.spawn_counter: int = 0
+        # Mensagens de instâncias que nasceram durante a rodada (PREPARE do sucessor), a serem
+        # somadas às da rodada sem atropelar as mensagens do item que está sendo avançado.
+        self.extra_messages: list = []
+        # Histórico de SNs por grupo (janelinha "SNs por grupo"): group_id -> lista de
+        # {"sn", "leader", "born" (tick de criação), "inst" (a própria instância)}
+        self.sn_history: dict = {}
         # Requests genuinamente bloqueadas pelo ADeliver (BufferCommit real):
         # group_id -> lista de RequestInfo aguardando o GSN anterior daquele
         # grupo ser entregue. Não fazem parte de active_requests enquanto
@@ -121,6 +157,7 @@ class SimState:
             num_buckets=self.num_buckets,
             segment_length=self.segment_length,
             num_nodes=len(all_node_ids),
+            leader_policy=self.leader_policy,
         )
         # Um BatchCutter por bucket
         self.batch_cutters: dict[int, BatchCutter] = {
@@ -141,7 +178,7 @@ class SimState:
         self._init_counters()
         self._init_control()
         self.scenarios = kept_scenarios
-        self.bucket_contents = [[] for _ in range(self.num_buckets)]
+        self.node_buckets = {}
         self.commit_history = []
         self.meta_stream = []
         self.batch_fill = {}

@@ -61,12 +61,30 @@ class Simulation:
     def num_buckets(self, v): self._st.num_buckets = v
 
     @property
-    def bucket_contents(self): return self._st.bucket_contents
-    @bucket_contents.setter
-    def bucket_contents(self, v): self._st.bucket_contents = v
+    def paused(self): return self._st.paused
 
     @property
-    def paused(self): return self._st.paused
+    def tick_count(self): return self._st.tick_count
+
+    @property
+    def bucket_meta(self): return self._st.bucket_meta
+    @property
+    def bucket_born(self): return self._st.bucket_born
+    @property
+    def instances(self): return self._st.instances
+    @property
+    def sn_history(self): return self._st.sn_history
+    @property
+    def pending_info(self): return self._st.pending_info
+    @property
+    def round_count(self): return self._st.round_count
+
+    def bucket_lists(self, node_id: int):
+        """Buckets do nó (lista por bucket com os pedidos na ordem em que chegaram a ELE)."""
+        from mirbftview.engine.phases import node_buckets
+        return node_buckets(self._st, node_id)
+    @property
+    def bucket_leaving(self): return self._st.bucket_leaving
 
     # Counters expostos para painéis
     @property
@@ -204,9 +222,14 @@ class Simulation:
             self._st.checkpoint_interval = kwargs['checkpoint_interval']
         if 'cross_op_pct' in kwargs:
             self._st.cross_op_pct = kwargs['cross_op_pct']
+        if 'leader_policy' in kwargs:
+            self._st.leader_policy = kwargs['leader_policy']
+        if 'cross_op_group_weights' in kwargs:
+            self._st.cross_op_group_weights = kwargs['cross_op_group_weights']
         if 'view_change_timeout' in kwargs:
             self._st.view_change_timeout = kwargs['view_change_timeout']
-        self._st.bucket_contents = [[] for _ in range(self._st.num_buckets)]
+        self._st.node_buckets = {}
+        self._st.bucket_born.clear()
         self._st.rebuild_managers()
 
     # Atributo legado para config_panel

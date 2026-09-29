@@ -139,9 +139,17 @@ class InfoPanel(QWidget):
         group_id = req.group_id
         phase = req.phase
         phase_name = phase.name.replace('_', ' ').title() if phase else "?"
+        if req.kind == "instance" and phase == Phase.BATCH_CUT and getattr(req, "_waiting", False):
+            phase_name = "Esperando pedidos"
         color = req.color if req.color else C["text"]
         cross = " [cross]" if req.is_cross_group else ""
-        is_open = group_id in self._expanded
+        key = group_id if req.kind == "instance" else ("r", req.client_id, req.client_sn)
+        is_open = key in self._expanded
+        if req.kind == "instance":
+            n = len(req.members)
+            title = f"G{group_id} SN{req.sn} | N{req.leader} | {phase_name}{cross}" + (f" | {n} ped." if n else "")
+        else:
+            title = f"Pedido c{req.client_id}#{req.client_sn} | proxy N{req.proxy_node} | {phase_name}{cross}"
 
         widget = QWidget()
         widget.setAttribute(Qt.WA_TranslucentBackground)
@@ -150,7 +158,7 @@ class InfoPanel(QWidget):
         vl.setSpacing(0)
 
         arrow = "\u25bc" if is_open else "\u25b6"
-        btn = QPushButton(f" {arrow}  G{group_id} | N{req.leader} | {phase_name}{cross}")
+        btn = QPushButton(f" {arrow}  {title}")
         btn.setStyleSheet(
             f"QPushButton {{ text-align: left; color: {color}; font-size: 9pt; "
             f"font-family: Consolas; background: rgba(255,255,255,0.04); "
@@ -158,7 +166,7 @@ class InfoPanel(QWidget):
             f"QPushButton:hover {{ background: rgba(255,255,255,0.08); }}"
         )
         btn.setCursor(Qt.PointingHandCursor)
-        btn.clicked.connect(lambda checked, gid=group_id: self._toggle(gid))
+        btn.clicked.connect(lambda checked, k=key: self._toggle(k))
         vl.addWidget(btn)
 
         if is_open:
