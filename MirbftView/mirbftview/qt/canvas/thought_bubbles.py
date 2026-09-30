@@ -75,7 +75,7 @@ _bucket_bubble_seen: dict = {}
 def _bucket_formula_text(em, cid, sn, gid) -> str:
     b = em.get_request_bucket(cid, sn, gid)
     k = len(em.buckets_of_group(gid))
-    ng = em.sn_stride
+    ng = em.bucket_stride
     return (
         f"AddDirectToBucket()  G{gid}\n"
         "b = g + nG*((cliente + sn) mod nB)\n"

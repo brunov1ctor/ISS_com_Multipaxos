@@ -173,16 +173,23 @@ func (o *MultiPaxosOrderer) HandleEntry(e *mirlog.Entry) {
 }
 
 func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
-	allGroupIDs := o.am.GetDefinedGroups()
-	if len(allGroupIDs) == 0 { allGroupIDs = []uint32{0} }
-	numGroups := int32(len(allGroupIDs))
-	if numGroups == 0 { numGroups = 1 }
-	isBroadcast := !o.skipHandlerRegistration
-	// Broadcast: stride = number of parallel segments (leaders)
-	// Multicast: stride = number of groups
-	if isBroadcast { numGroups = int32(len(membership.AllNodeIDs())) }
-
 	groupId := o.ownedGroupID
+	isBroadcast := !o.skipHandlerRegistration
+
+	// snOffset é a posição deste grupo no intercalamento global de SN (stride = numGroups).
+	// Broadcast (MultiPaxos simples, sem grupos): stride = nós/líderes paralelos, offset = ID do nó.
+	// Multicast: stride = só grupos de DADOS -- grupo 0 (Sequencer) nunca comita, então não pode
+	// ocupar posição no stride (ver GetDataGroupIndex) ou aquele SN fica vazio pra sempre.
+	var numGroups, snOffset int32
+	if isBroadcast {
+		numGroups = int32(len(membership.AllNodeIDs()))
+		snOffset = int32(groupId)
+	} else {
+		idx, total := o.am.GetDataGroupIndex(groupId)
+		if idx < 0 { idx, total = 0, 1 } // salvaguarda; não deveria acontecer pra um grupo de dados real
+		numGroups, snOffset = total, idx
+	}
+	if numGroups == 0 { numGroups = 1 }
 
 	// Cada segmento roda em paralelo (um por líder, SNs interleaved)
 	// NÃO cancela segmentos anteriores — múltiplos líderes operam simultaneamente
@@ -198,12 +205,12 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 	fmt.Printf("[MPX] SEGMENT group=%d firstSN=%d lastSN=%d members=%v leader=%d ownID=%d\n",
 		groupId, seg.FirstSN(), seg.LastSN(), members, groupLeader, membership.OwnID)
 
-	go func(gid uint32) {
+	go func(gid uint32, offset int32) {
 		t := time.NewTicker(o.proposeEvery)
 		defer t.Stop()
-		// Start at the correct SN for this group
-		// In interleaved mode: group X starts at firstSN + X (if firstSN+X <= lastSN)
-		currentSN := seg.FirstSN() + int32(gid)
+		// Ponto de partida deste grupo no intercalamento: firstSN + offset (offset denso, ver
+		// snOffset acima -- não é mais o gid literal, senão o stride teria buraco no grupo 0).
+		currentSN := seg.FirstSN() + offset
 		if currentSN > seg.LastSN() { return }
 
 		// commitCh: wakes up loop immediately after a commit (to advance SN and propose next)
@@ -228,7 +235,7 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 				inst.tick(now); inst.ProposeIfDue()
 			}
 		}
-	}(groupId)
+	}(groupId, snOffset)
 }
 
 // getOrCreateInstance retorna a instância MultiPaxos já registrada para o SN informado, ou cria

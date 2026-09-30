@@ -16,10 +16,17 @@ e orderer/multipaxosinstance.go), não no ISS clássico (mirmanager.go):
     multipaxosinstance.go): `members[sn % n]` sob leaderPolicy=Simple (padrão)
     e `members[0]` para todo SN sob leaderPolicy=Single.
   - Os SNs de um grupo NÃO são consecutivos: o grupo `gid` começa em
-    `firstSN + gid` (bootstrap: firstSN=0) e avança de `numGroups` em
+    `firstSN + idx` (bootstrap: firstSN=0) e avança de `numGroups` em
     `numGroups` (multipaxosorderer.go, runSegment: `currentSN += numGroups`),
-    onde numGroups = nº de grupos DEFINIDOS, contando o grupo 0. Os SNs dos
-    grupos ficam assim intercalados no log global.
+    onde `idx` é a posição 0-based de `gid` entre os grupos de DADOS e
+    numGroups = nº de grupos de dados (GetDataGroupIndex; o grupo 0/Sequencer
+    nunca comita, então não entra nesse stride -- do contrário aquele SN
+    ficaria vazio pra sempre e travaria o checkpoint). Os SNs dos grupos
+    ficam assim intercalados no log global, sem buracos.
+  - Atribuição de BUCKET é uma conta separada e continua contando o grupo 0
+    (initGroupBuckets em multipaxosinstance.go: `numGroups =
+    len(GetDefinedGroups())`, sem filtrar); por isso usamos `bucket_stride`
+    (= nº de grupos + 1), distinto do `sn_stride` usado no log.
 """
 
 
@@ -46,12 +53,22 @@ class EpochManager:
         self.leader_policy = leader_policy
         # snLength = SegmentLength * numNodes (multipaxosmulticastorderer.go:94)
         self.sn_length = segment_length * num_nodes
-        # numGroups do runSegment real: grupos definidos INCLUINDO o grupo 0
-        # (o Sequenciador), que não está em `groups` (só tem grupos de dados).
-        self.sn_stride = len(self.groups) + 1
+        # bucket_stride: numGroups usado em initGroupBuckets (multipaxosinstance.go),
+        # que conta o grupo 0 -- essa conta é independente da do log e não muda com o fix.
+        self.bucket_stride = len(self.groups) + 1
+        # sn_stride: numGroups usado em runSegment pra intercalar o log (fix: só grupos
+        # de dados, sem o grupo 0, senão sn%sn_stride==0 nunca é preenchido).
+        self.sn_stride = max(len(self.groups), 1)
+        # Índice 0-based de cada grupo entre os grupos de dados, ordenado por gid
+        # (GetDataGroupIndex em multipaxosgroup.go) -- é o offset inicial de SN do grupo.
+        self._data_group_index: dict[int, int] = {
+            gid: idx for idx, gid in enumerate(sorted(self.groups))
+        }
         # Próxima posição do log (SN) a ser proposta em cada grupo:
-        # firstSN(=0) + gid, depois de sn_stride em sn_stride.
-        self.next_sn: dict[int, int] = {gid: gid for gid in self.groups}
+        # firstSN(=0) + idx, depois de sn_stride em sn_stride.
+        self.next_sn: dict[int, int] = {
+            gid: self._data_group_index[gid] for gid in self.groups
+        }
 
     def leader_for_group(self, group_id: int, sn: int | None = None) -> int:
         """Líder da posição `sn` do grupo (ou da próxima, se `sn` omitido).
@@ -63,12 +80,17 @@ class EpochManager:
         if self.leader_policy == "Single":
             return members[0]
         if sn is None:
-            sn = self.next_sn.get(group_id, group_id)
+            sn = self.next_sn.get(group_id, self._data_group_index.get(group_id, 0))
         return members[sn % len(members)]
+
+    def data_group_ids(self) -> list[int]:
+        """Lista ordenada dos IDs dos grupos de dados (grupo 0 excluído) -- mesma ordem
+        usada pra calcular o índice 0-based de cada grupo no intercalamento de SN."""
+        return sorted(self.groups)
 
     def next_sn_for(self, group_id: int) -> int:
         """Próximo SN ainda não consumido no log deste grupo."""
-        return self.next_sn.get(group_id, group_id)
+        return self.next_sn.get(group_id, self._data_group_index.get(group_id, 0))
 
     def advance(self, group_id: int):
         """Consome a posição atual do log deste grupo (um batch foi cortado)."""
@@ -76,13 +98,14 @@ class EpochManager:
 
     def buckets_of_group(self, group_id: int) -> list[int]:
         """Buckets que pertencem a um grupo: g, g+numGroups, g+2*numGroups, ...
-        (initGroupBuckets em multipaxosinstance.go). numGroups conta o grupo 0,
-        cujos buckets (0, numGroups, ...) ficam com as mensagens de sistema."""
-        return list(range(group_id, self.num_buckets, self.sn_stride))
+        (initGroupBuckets em multipaxosinstance.go). numGroups (=bucket_stride)
+        conta o grupo 0, cujos buckets (0, numGroups, ...) ficam com mensagens
+        de sistema -- essa conta NÃO muda com o fix do buraco de SN."""
+        return list(range(group_id, self.num_buckets, self.bucket_stride))
 
     def bucket_owner(self, bucket_id: int) -> int:
-        """Grupo dono de um bucket: bucket % numGroups."""
-        return bucket_id % self.sn_stride
+        """Grupo dono de um bucket: bucket % numGroups (bucket_stride)."""
+        return bucket_id % self.bucket_stride
 
     def get_request_bucket(self, client_id: int, client_sn: int, group_id: int | None = None) -> int:
         """GetBucketNr (request.go) no modo MultiPaxos multicast.
@@ -95,7 +118,7 @@ class EpochManager:
         n = self.num_buckets
         if group_id is None:
             return (client_id + client_sn) % n
-        ng = self.sn_stride
+        ng = self.bucket_stride
         g = max(group_id, 0)
         if g >= ng:
             g %= ng

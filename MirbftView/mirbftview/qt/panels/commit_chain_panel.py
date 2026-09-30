@@ -1,9 +1,12 @@
-"""CommitChainPanel — o log replicado como GRADE: posição SN = linha * nGrupos + coluna.
+"""CommitChainPanel — o log replicado como GRADE: posição SN = linha * stride + (coluna - 1).
 
-Igual ao "Partitioning the log" do ISS: cada coluna é um grupo (G0, G1, ...), e o SN de um
-grupo g é g, g+nGrupos, g+2*nGrupos... (entrelaçado). Uma posição vazia é uma SN ainda não
-decidida (ou de outro grupo que ainda não chegou lá); a coluna de G0 fica vazia porque o
-Sequenciador não roda instâncias ISS.
+Igual ao "Partitioning the log" do ISS, mas só entre os grupos de DADOS: o SN de um grupo g
+(0-based, ver EpochManager.data_group_ids) é idx, idx+stride, idx+2*stride... (entrelaçado),
+onde stride = nº de grupos de dados. O grupo 0 (Sequenciador) nunca comita nada no log --
+fix aplicado em multipaxosgroup.go/GetDataGroupIndex -- então ele NÃO entra nesse stride;
+a coluna 0 desta grade é reservada só visualmente pra mostrar o estado do Sequenciador ao
+lado do log, sem ocupar nenhum SN real. Uma posição vazia é um SN de grupo de dados ainda
+não decidido.
 """
 
 import math
@@ -54,19 +57,35 @@ class CommitChainPanel(QWidget):
 
     # ─── Modelo ───────────────────────────────────────────────────────────
 
-    def _cols(self) -> int:
+    def _data_gids(self) -> list[int]:
+        """IDs dos grupos de dados, na mesma ordem 0-based usada pro SN real (fix do buraco)."""
+        return self.sim.epoch_mgr.data_group_ids()
+
+    def _stride(self) -> int:
+        """Nº de grupos de DADOS -- é o real divisor do SN (runSegment fixed), sem contar G0."""
         return max(self.sim.epoch_mgr.sn_stride, 1)
+
+    def _cols(self) -> int:
+        """Colunas VISUAIS: col 0 é reservada pro Sequencer (G0), col 1..N são os grupos de
+        dados. Diferente de `_stride()` -- o SN real nunca passa pela coluna do Sequencer."""
+        return len(self._data_gids()) + 1
+
+    def _gid_of_col(self, col: int) -> int | None:
+        """Group ID real mostrado na coluna visual `col` (None pra col 0 = Sequencer)."""
+        idx = col - 1
+        ids = self._data_gids()
+        return ids[idx] if 0 <= idx < len(ids) else None
 
     def _by_sn(self) -> dict:
         return {e["sn"]: e for e in self.sim.commit_history}
 
     def _rows(self, by_sn) -> int:
-        cols = self._cols()
+        stride = self._stride()
         top = max(by_sn) if by_sn else -1
         for hist in self.sim.sn_history.values():
             if hist:
                 top = max(top, hist[-1]["sn"])
-        return max(top // cols + 1, 1)
+        return max(top // stride + 1, 1)
 
     def _row_pitch(self):
         return _ROW_H + _ROW_GAP
@@ -80,7 +99,7 @@ class CommitChainPanel(QWidget):
 
     def _scroll_to_sn(self, sn, rows):
         """Mantém visível a linha do SN novo."""
-        row = sn // self._cols()
+        row = sn // self._stride()
         top = row * self._row_pitch()
         bottom = top + _ROW_H
         if top + self._scroll_y < 0:
@@ -291,11 +310,12 @@ class CommitChainPanel(QWidget):
         p.setPen(QColor(C["text3"]))
         p.setFont(QFont("Segoe UI", 6))
         p.drawText(QRectF(10, 18, w - 20, 12), Qt.AlignLeft,
-                   "posição = SN (linha × nº de grupos + coluna) | coluna = grupo | vazio = SN ainda não decidida")
+                   "posição = SN (linha × nº de grupos de dados + coluna-1) | col.0 = Sequenciador (fora do log) | vazio = SN ainda não decidida")
 
         history = self.sim.commit_history
         by_sn = self._by_sn()
         cols = self._cols()
+        stride = self._stride()
         rows = self._rows(by_sn)
         self._clamp_scroll(rows)
 
@@ -311,7 +331,8 @@ class CommitChainPanel(QWidget):
         # Cabeçalho de colunas (fixo)
         p.setFont(QFont("Segoe UI", 7, QFont.Bold))
         for col in range(cols):
-            gc_ = QColor(GROUP_COLORS[col % len(GROUP_COLORS)])
+            gid = self._gid_of_col(col)
+            gc_ = QColor(GROUP_COLORS[gid % len(GROUP_COLORS)]) if gid is not None else QColor(GROUP_COLORS[0])
             if col == 0 and self._g0_active():
                 beat = 0.5 + 0.5 * math.sin(self.sim.tick_count * 0.22)
                 glow = QColor(gc_)
@@ -320,7 +341,8 @@ class CommitChainPanel(QWidget):
                 p.setBrush(glow)
                 p.drawRoundedRect(QRectF(x_of(col) + cw / 2 - 34, 28, 68, 15), 7, 7)
             p.setPen(gc_)
-            label = f"G{col}" + (" (seq.)" if col == 0 else "")
+            label = f"G{gid}" if gid is not None else "G0"
+            label += " (seq.)" if col == 0 else ""
             p.drawText(QRectF(x_of(col), 30, cw, 12), Qt.AlignCenter, label)
 
         # Grade rolável, recortada abaixo do cabeçalho
@@ -329,16 +351,16 @@ class CommitChainPanel(QWidget):
         active = {hist[-1]["sn"]: hist[-1]["inst"] for hist in self.sim.sn_history.values() if hist}
         self._cells = {}
         last_sn = history[-1]["sn"] if history else -1
-        for sn in range(rows * cols):
-            row, col = divmod(sn, cols)
+        for sn in range(rows * stride):
+            row, idx = divmod(sn, stride)
+            col = idx + 1  # +1 porque col 0 é reservada pro Sequencer, fora do stride do SN
             y = _TOP + self._scroll_y + row * self._row_pitch()
             if y + _ROW_H < _TOP - 4 or y > h:
                 continue
-            if col == 0:
-                continue   # G0 não tem SNs no log: a coluna mostra as variáveis do Sequencer
+            gid = self._gid_of_col(col)
             rect = QRectF(x_of(col), y, cw, _ROW_H)
             self._cells[sn] = rect
-            gcol = QColor(GROUP_COLORS[col % len(GROUP_COLORS)])
+            gcol = QColor(GROUP_COLORS[gid % len(GROUP_COLORS)]) if gid is not None else QColor(GROUP_COLORS[0])
             entry = by_sn.get(sn)
             if entry is not None:
                 self._draw_block(p, rect, entry, gcol,
@@ -354,7 +376,7 @@ class CommitChainPanel(QWidget):
             a, b = self._cells.get(sn), self._cells.get(sn + 1)
             if a is None or b is None or (sn + 1) not in by_sn:
                 continue
-            if (sn + 1) % cols:
+            if (sn + 1) % stride:
                 p.drawLine(QPointF(a.right() + 1, a.center().y()), QPointF(b.left() - 1, b.center().y()))
             else:
                 ymid = a.bottom() + _ROW_GAP / 2

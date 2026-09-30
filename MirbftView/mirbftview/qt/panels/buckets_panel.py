@@ -138,7 +138,7 @@ class BucketsPanel(QWidget):
 
     def _grid_shape(self):
         em = self.sim.epoch_mgr
-        rows = em.sn_stride
+        rows = em.bucket_stride
         cols = max(len(em.buckets_of_group(0)), 1)  # G0 é o que tem mais buckets
         return rows, cols
 
@@ -467,7 +467,7 @@ class BucketsPanel(QWidget):
         lists = sim.bucket_lists(nid)
         contents = lists[bid] if bid < len(lists) else []
         owner = em.bucket_owner(bid)
-        ng = em.sn_stride
+        ng = em.bucket_stride
         mine = em.buckets_of_group(owner)
         member = owner == 0 or (owner < len(sim.groups) and nid in sim.groups[owner].members)
 

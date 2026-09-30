@@ -58,6 +58,28 @@ func (am *AtomicMulticast) GetDefinedGroups() []uint32 {
 	return groups
 }
 
+// GetDataGroupIndex retorna a posição 0-based de gid entre os grupos de DADOS (grupo 0,
+// sequenciador GSN, é excluído) e o total de grupos de dados. Usado pra calcular o offset de
+// SN de cada grupo no intercalamento global (ver runSegment em multipaxosorderer.go): como o
+// grupo 0 nunca comita batch nenhum, ele não pode ocupar posição no stride, senão esse SN fica
+// vazio pra sempre e trava o avanço de firstEmptySN/checkpoint (log.go, WaitForEntry). Todo nó
+// calcula o mesmo índice pro mesmo gid porque parte da mesma lista ordenada (GetDefinedGroups).
+func (am *AtomicMulticast) GetDataGroupIndex(gid uint32) (idx int32, total int32) {
+	all := am.GetDefinedGroups()
+	data := make([]uint32, 0, len(all))
+	for _, g := range all {
+		if g != 0 {
+			data = append(data, g)
+		}
+	}
+	for i, g := range data {
+		if g == gid {
+			return int32(i), int32(len(data))
+		}
+	}
+	return -1, int32(len(data))
+}
+
 func (am *AtomicMulticast) LoadGroupsFromYAML(filename string) error {
 	if filename == "" {
 		return fmt.Errorf("filename cannot be empty")

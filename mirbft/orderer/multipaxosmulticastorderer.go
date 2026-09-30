@@ -97,7 +97,10 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 	for gid, ord := range o.groupOrderers {
 		members := o.am.GetGroupMembers(gid)
 		if members == nil { continue }
-		firstSN := int32(gid)
+		// firstSN usa o índice denso 0-based do grupo (não o gid literal), pro mesmo motivo de
+		// runSegment: grupo 0 (Sequencer) não entra no stride, senão aquele SN nunca é preenchido.
+		firstSN, _ := o.am.GetDataGroupIndex(gid)
+		if firstSN < 0 { firstSN = 0 }
 		inst := ord.ensureInstance(firstSN)
 		inst.setSegment(initialSeg)
 		inst.bucketId = gid
