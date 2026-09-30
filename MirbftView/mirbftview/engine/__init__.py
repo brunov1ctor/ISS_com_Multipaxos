@@ -71,6 +71,8 @@ class Simulation:
     @property
     def bucket_born(self): return self._st.bucket_born
     @property
+    def cross_pulse(self): return self._st.cross_pulse
+    @property
     def instances(self): return self._st.instances
     @property
     def sn_history(self): return self._st.sn_history
