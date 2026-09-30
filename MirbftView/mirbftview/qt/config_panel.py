@@ -68,7 +68,7 @@ _BUILTIN_PRESETS = {
         "nodes_per_group": 3,
         "orderer": "MultiPaxosMulticast",
         "batch_size": 1,
-        "batch_timeout": 1000,
+        "batch_timeout_s": 10,
         "num_buckets": 3,
         "segment_length": 4,
         "checkpoint_interval": 4,
@@ -83,7 +83,7 @@ _BUILTIN_PRESETS = {
         "groups": "1: 0, 1, 2\n2: 2, 3, 4\n3: 0, 4, 1\n4: 1, 3, 4",
         "orderer": "MultiPaxosMulticast",
         "batch_size": 4096,
-        "batch_timeout": 1000,
+        "batch_timeout_s": 10,
         "num_buckets": 16,
         "segment_length": 16,
         "checkpoint_interval": 80,
@@ -257,16 +257,15 @@ class ConfigPanel(QWidget):
         layout.addLayout(_row("Batch Size:", self._batch_size))
 
         self._batch_timeout = _NoScrollSpinBox()
-        self._batch_timeout.setRange(10, 60000)
-        self._batch_timeout.setValue(1000)
-        self._batch_timeout.setSuffix(" ms")
+        self._batch_timeout.setRange(1, 600)
+        self._batch_timeout.setValue(10)
+        self._batch_timeout.setSuffix(" s")
         layout.addLayout(_row("Batch Timeout:", self._batch_timeout))
-        # A animação não usa timeout: o líder corta assim que a instância está preparada e há
-        # pelo menos um pedido nos buckets (o BatchSize acima continua valendo como teto).
-        self._batch_timeout.setEnabled(False)
+        # Segundos SIMULADOS: o líder espera o batch encher (BatchSize) ou este tempo vencer;
+        # uma cross-op acorda o corte na hora. O contador aparece em "SNs por grupo".
         self._batch_timeout.setToolTip(
-            "Nao usado na animacao: o lider corta o batch assim que a instancia esta "
-            "preparada (PREPARE/PROMISE) e ha ao menos 1 pedido nos buckets do grupo.")
+            "Tempo simulado que o lider espera pedidos antes de cortar o batch "
+            "(o BatchSize enchendo ou uma cross-op cortam antes).")
 
         self._num_buckets = _NoScrollSpinBox()
         self._num_buckets.setRange(1, 1024)
@@ -456,7 +455,7 @@ class ConfigPanel(QWidget):
             num_buckets=self._num_buckets.value(),
             segment_length=self._segment_length.value(),
             batch_size=self._batch_size.value(),
-            batch_timeout_ticks=self._batch_timeout.value() // 16,
+            batch_timeout_ticks=self._batch_timeout.value() * 62,
             checkpoint_interval=self._checkpoint_interval.value(),
             cross_op_pct=self._cross_op_pct.value() / 100.0,
             view_change_timeout=self._view_change_timeout.value() // 16,
@@ -484,7 +483,7 @@ class ConfigPanel(QWidget):
             "orderer": self._orderer.currentText(),
             "leader_policy": self._leader_policy.currentText(),
             "batch_size": self._batch_size.value(),
-            "batch_timeout": self._batch_timeout.value(),
+            "batch_timeout_s": self._batch_timeout.value(),
             "num_buckets": self._num_buckets.value(),
             "segment_length": self._segment_length.value(),
             "checkpoint_interval": self._checkpoint_interval.value(),
@@ -502,7 +501,7 @@ class ConfigPanel(QWidget):
         self._orderer.setCurrentText(cfg.get("orderer", "MultiPaxosMulticast"))
         self._leader_policy.setCurrentText(cfg.get("leader_policy", "Single"))
         self._batch_size.setValue(cfg.get("batch_size", 4096))
-        self._batch_timeout.setValue(cfg.get("batch_timeout", 1000))
+        self._batch_timeout.setValue(cfg.get("batch_timeout_s", 10))
         self._num_buckets.setValue(cfg.get("num_buckets", 16))
         self._segment_length.setValue(cfg.get("segment_length", 16))
         self._checkpoint_interval.setValue(cfg.get("checkpoint_interval", 80))

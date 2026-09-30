@@ -75,8 +75,30 @@ def _group_shape(points, extra=_GROUP_BASE_EXTRA):
     return _enclosing_shape(points, extra=extra)
 
 
-def draw_groups(p, sim, node_pos):
+def _draw_eye(p, cx, cy, color, hidden):
+    """Olhinho ao lado do nome do grupo: aberto = região visível; riscado = escondida."""
+    c = QColor(color)
+    c.setAlpha(90 if hidden else 230)
+    p.setBrush(Qt.NoBrush)
+    p.setPen(QPen(c, 1.3))
+    lens = QPainterPath()
+    lens.moveTo(cx - 7, cy)
+    lens.quadTo(cx, cy - 7, cx + 7, cy)
+    lens.quadTo(cx, cy + 7, cx - 7, cy)
+    p.drawPath(lens)
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawEllipse(QPointF(cx, cy), 2.2, 2.2)
+    if hidden:
+        p.setPen(QPen(c, 1.6))
+        p.drawLine(QPointF(cx - 7, cy + 6), QPointF(cx + 7, cy - 6))
+
+
+def draw_groups(p, sim, node_pos, hidden=None, eye_rects=None):
+    """`hidden`: ids de grupos com a região escondida (só o nome e o olhinho ficam).
+    `eye_rects`: dicionário preenchido com a área de clique de cada olhinho (coordenadas da cena)."""
     import math
+    hidden = hidden if hidden is not None else set()
     all_pts = [pt for pt in node_pos.values()]
     if not all_pts:
         return
@@ -93,21 +115,30 @@ def draw_groups(p, sim, node_pos):
             offsets = _group_offsets(sim)
             widest = max(offsets.values(), default=_GROUP_BASE_EXTRA)
             shape0 = _enclosing_shape(g0_points, extra=max(16, widest + 12))
-            fill0 = QColor(g0_color)
-            fill0.setAlpha(6)
-            p.setPen(Qt.NoPen)
-            p.setBrush(fill0)
-            p.drawPath(shape0)
-            border0 = QColor(g0_color)
-            border0.setAlpha(120)
-            p.setPen(QPen(border0, 1.4, Qt.DotLine))
-            p.setBrush(Qt.NoBrush)
-            p.drawPath(shape0)
+            off0 = 0 in hidden
+            if not off0:
+                fill0 = QColor(g0_color)
+                fill0.setAlpha(6)
+                p.setPen(Qt.NoPen)
+                p.setBrush(fill0)
+                p.drawPath(shape0)
+                border0 = QColor(g0_color)
+                border0.setAlpha(120)
+                p.setPen(QPen(border0, 1.4, Qt.DotLine))
+                p.setBrush(Qt.NoBrush)
+                p.drawPath(shape0)
             # Nome no ponto mais alto do contorno, fora dele
             top = shape0.boundingRect()
-            p.setPen(g0_color)
+            name_c = QColor(g0_color)
+            name_c.setAlpha(110 if off0 else 255)
+            p.setPen(name_c)
             p.setFont(QFont("Segoe UI", 8, QFont.Bold))
             p.drawText(QRectF(top.center().x() - 90, top.top() - 16, 180, 14), Qt.AlignCenter, g0.name)
+            tw = p.fontMetrics().horizontalAdvance(g0.name)
+            ex, ey = top.center().x() + tw / 2 + 11, top.top() - 9
+            _draw_eye(p, ex, ey, g0_color, off0)
+            if eye_rects is not None:
+                eye_rects[0] = QRectF(ex - 9, ey - 8, 18, 16)
 
     label_slots: dict = {}
     for group in sim.groups:
@@ -120,16 +151,18 @@ def draw_groups(p, sim, node_pos):
         extra = _group_offsets(sim).get(group.id, _GROUP_BASE_EXTRA)
         shape = _group_shape(points, extra)
 
-        fill = QColor(base_color)
-        fill.setAlpha(16)
-        p.setPen(Qt.NoPen)
-        p.setBrush(fill)
-        p.drawPath(shape)
-        border = QColor(base_color)
-        border.setAlpha(110)
-        p.setPen(QPen(border, 1.4, Qt.DashLine))
-        p.setBrush(Qt.NoBrush)
-        p.drawPath(shape)
+        off = group.id in hidden
+        if not off:
+            fill = QColor(base_color)
+            fill.setAlpha(16)
+            p.setPen(Qt.NoPen)
+            p.setBrush(fill)
+            p.drawPath(shape)
+            border = QColor(base_color)
+            border.setAlpha(110)
+            p.setPen(QPen(border, 1.4, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(shape)
 
         # Nome do grupo no lado de fora, junto ao membro mais afastado do centro.
         far = max(points, key=lambda pt: math.hypot(pt.x() - gcx, pt.y() - gcy))
@@ -142,9 +175,16 @@ def draw_groups(p, sim, node_pos):
         label_slots[anchor] = slot + 1
         reach = _NODE_R + _GROUP_MARGIN + extra + 12 + slot * 15
         lx, ly = far.x() + dx / norm * reach, far.y() + dy / norm * reach
-        p.setPen(base_color)
+        label_c = QColor(base_color)
+        label_c.setAlpha(110 if off else 255)
+        p.setPen(label_c)
         p.setFont(QFont("Segoe UI", 8, QFont.Bold))
         p.drawText(QRectF(lx - 60, ly - 8, 120, 16), Qt.AlignCenter, group.name)
+        tw = p.fontMetrics().horizontalAdvance(group.name)
+        ex, ey = lx + tw / 2 + 11, ly
+        _draw_eye(p, ex, ey, base_color, off)
+        if eye_rects is not None:
+            eye_rects[group.id] = QRectF(ex - 9, ey - 8, 18, 16)
 
 
 def draw_connections(p, sim, node_pos):

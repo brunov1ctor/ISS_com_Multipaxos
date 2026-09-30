@@ -213,65 +213,137 @@ def _proxy_formula_text(sim, msg) -> str:
     return "\n".join(lines)
 
 
-def draw_thought_bubbles(p, thought_bubbles, node_pos, client_pos=None):
-    for nid, bubble in thought_bubbles.items():
-        if isinstance(nid, tuple):  # ("client", id)
-            pos = (client_pos or {}).get(nid[1])
-        else:
-            pos = node_pos.get(nid)
-        if pos is None:
-            continue
-        text = bubble["text"]
-        color = bubble["color"]
-        is_error = bubble.get("is_error", False)
-        ttl = bubble["ttl"]
-        alpha = min(255, ttl * 6)
-        if alpha <= 0:
-            continue
+_placement_cache: dict = {}   # chave do balão -> índice do candidato escolhido (evita "pular")
+_NODE_OBS_R = 40
+_CLIENT_OBS_R = 26
 
-        lines = text.split("\n")
+
+def _overlap(a: QRectF, b: QRectF) -> float:
+    w = min(a.right(), b.right()) - max(a.left(), b.left())
+    h = min(a.bottom(), b.bottom()) - max(a.top(), b.top())
+    return w * h if w > 0 and h > 0 else 0.0
+
+
+def _candidates(pos, bw, bh):
+    """Posições possíveis do balão ao redor do ponto de ancoragem: 8 direções em 3 distâncias.
+    A ordem é a preferência (primeiro acima e à direita, como era antes)."""
+    out = []
+    for dist in (46, 86, 130):
+        out += [
+            QRectF(pos.x() + 14, pos.y() - dist - bh, bw, bh),             # cima-direita
+            QRectF(pos.x() - bw - 14, pos.y() - dist - bh, bw, bh),        # cima-esquerda
+            QRectF(pos.x() + dist, pos.y() - bh / 2, bw, bh),              # direita
+            QRectF(pos.x() - dist - bw, pos.y() - bh / 2, bw, bh),         # esquerda
+            QRectF(pos.x() + 14, pos.y() + dist, bw, bh),                  # baixo-direita
+            QRectF(pos.x() - bw - 14, pos.y() + dist, bw, bh),             # baixo-esquerda
+            QRectF(pos.x() - bw / 2, pos.y() - dist - bh, bw, bh),         # cima
+            QRectF(pos.x() - bw / 2, pos.y() + dist, bw, bh),              # baixo
+        ]
+    return out
+
+
+def draw_thought_bubbles(p, thought_bubbles, node_pos, client_pos=None):
+    """Desenha os balões em espaços livres: cada um escolhe, entre várias posições ao redor do
+    nó/cliente dele, a que menos cobre nós, rótulos de papel, clientes, outros balões e as
+    bordas visíveis da tela. A escolha anterior ganha um bônus para o balão não ficar pulando."""
+    items = []
+    for nid, bubble in thought_bubbles.items():
+        pos = (client_pos or {}).get(nid[1]) if isinstance(nid, tuple) else node_pos.get(nid)
+        if pos is None or min(255, bubble["ttl"] * 6) <= 0:
+            continue
+        lines = bubble["text"].split("\n")
         p.setFont(QFont("Consolas", 7))
         fm = p.fontMetrics()
         line_h = fm.height() + 1
         text_w = max(fm.horizontalAdvance(l) for l in lines) + 16
-        bubble_w = max(80, min(bubble.get("max_w", 160), text_w))
-        bubble_h = line_h * len(lines) + 10
-        bx = pos.x() + 20
-        by = pos.y() - 50 - bubble_h
-        by = max(by, 6)  # nó perto do topo: mantém o balão dentro da tela
+        bw = max(80, min(bubble.get("max_w", 160), text_w))
+        bh = line_h * len(lines) + 10
+        items.append((nid, bubble, pos, lines, line_h, bw, bh))
+    if not items:
+        _placement_cache.clear()
+        return
 
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(QRectF(bx, by, bubble_w, bubble_h), 8, 8)
-        bg_color = QColor(40, 10, 10, alpha) if is_error else QColor(12, 20, 38, alpha)
-        p.fillPath(bg_path, bg_color)
+    # Área visível em coordenadas do mundo (o canvas tem zoom/pan)
+    inv, ok = p.worldTransform().inverted()
+    vis = inv.mapRect(QRectF(p.viewport())) if ok else QRectF(0, 0, 4000, 4000)
+    vis = vis.adjusted(6, 6, -6, -6)
 
-        border_c = QColor(color)
-        border_c.setAlpha(alpha)
-        p.setPen(QPen(border_c, 1.5 if is_error else 1.0))
-        p.setBrush(Qt.NoBrush)
-        p.drawPath(bg_path)
+    # (retângulo, peso): nós e clientes pesam mais; a faixa dos rótulos de papel, menos
+    obstacles = []
+    for pt in node_pos.values():
+        obstacles.append((QRectF(pt.x() - _NODE_OBS_R, pt.y() - _NODE_OBS_R,
+                                 2 * _NODE_OBS_R, 2 * _NODE_OBS_R), 3.0))
+        obstacles.append((QRectF(pt.x() - 95, pt.y() - _NODE_OBS_R - 66, 190, 62), 1.0))
+    for pt in (client_pos or {}).values():
+        obstacles.append((QRectF(pt.x() - _CLIENT_OBS_R, pt.y() - _CLIENT_OBS_R,
+                                 2 * _CLIENT_OBS_R, 2 * _CLIENT_OBS_R), 3.0))
 
-        p.setPen(Qt.NoPen)
-        dot_c = QColor(color)
-        dot_c.setAlpha(alpha)
-        p.setBrush(dot_c)
-        dx = bx - pos.x()
-        dy = by + bubble_h - pos.y()
-        for frac, r in [(0.3, 2.5), (0.55, 3.5), (0.8, 2.0)]:
-            cx = pos.x() + 24 + dx * frac * 0.3
-            cy = pos.y() - 14 + dy * frac
-            p.drawEllipse(QPointF(cx, cy), r, r)
+    placed: list[QRectF] = []
+    live = set()
+    for nid, bubble, pos, lines, line_h, bw, bh in items:
+        live.add(nid)
+        cands = _candidates(pos, bw, bh)
+        prev = _placement_cache.get(nid)
+        best, best_cost = 0, None
+        for i, r in enumerate(cands):
+            area = bw * bh
+            cost = sum(_overlap(r, o) * wgt for o, wgt in obstacles)
+            cost += sum(_overlap(r, q) for q in placed) * 4.0
+            cost += (area - _overlap(r, vis)) * 4.0          # parte fora da tela
+            cost += i * 0.002 * area                          # preferência pela ordem
+            if i == prev:
+                cost *= 0.6                                   # histerese
+            if best_cost is None or cost < best_cost:
+                best, best_cost = i, cost
+        _placement_cache[nid] = best
+        rect = cands[best]
+        placed.append(rect)
+        _draw_bubble(p, bubble, pos, rect, lines, line_h, isinstance(nid, tuple))
+    for k in list(_placement_cache):
+        if k not in live:
+            del _placement_cache[k]
 
-        ty = by + 5
-        for i, line in enumerate(lines):
-            if i == 0:
-                p.setPen(QColor(color))
-                p.setFont(QFont("Consolas", 7, QFont.Bold))
-            else:
-                tc = QColor(C["text"] if not is_error else C["red"])
-                tc.setAlpha(alpha)
-                p.setPen(tc)
-                p.setFont(QFont("Consolas", 7))
-            p.drawText(QRectF(bx + 6, ty, bubble_w - 12, line_h),
-                       Qt.AlignLeft | Qt.AlignVCenter, line)
-            ty += line_h
+
+def _draw_bubble(p, bubble, pos, rect, lines, line_h, is_client):
+    color = bubble["color"]
+    is_error = bubble.get("is_error", False)
+    alpha = min(255, bubble["ttl"] * 6)
+    bx, by, bw, bh = rect.x(), rect.y(), rect.width(), rect.height()
+
+    bg_path = QPainterPath()
+    bg_path.addRoundedRect(rect, 8, 8)
+    p.fillPath(bg_path, QColor(40, 10, 10, alpha) if is_error else QColor(12, 20, 38, alpha))
+    border_c = QColor(color)
+    border_c.setAlpha(alpha)
+    p.setPen(QPen(border_c, 1.5 if is_error else 1.0))
+    p.setBrush(Qt.NoBrush)
+    p.drawPath(bg_path)
+
+    # Bolinhas de pensamento: da borda do nó/cliente até o ponto do balão mais próximo dele
+    near = QPointF(min(max(pos.x(), rect.left()), rect.right()),
+                   min(max(pos.y(), rect.top()), rect.bottom()))
+    dx, dy = near.x() - pos.x(), near.y() - pos.y()
+    dist = (dx * dx + dy * dy) ** 0.5 or 1.0
+    start_r = 24 if is_client else 38
+    ux, uy = dx / dist, dy / dist
+    sx, sy = pos.x() + ux * start_r, pos.y() + uy * start_r
+    span = max(dist - start_r, 0)
+    p.setPen(Qt.NoPen)
+    dot_c = QColor(color)
+    dot_c.setAlpha(alpha)
+    p.setBrush(dot_c)
+    for frac, r in [(0.25, 2.0), (0.55, 3.0), (0.85, 3.8)]:
+        p.drawEllipse(QPointF(sx + ux * span * frac, sy + uy * span * frac), r, r)
+
+    ty = by + 5
+    for i, line in enumerate(lines):
+        if i == 0:
+            p.setPen(QColor(color))
+            p.setFont(QFont("Consolas", 7, QFont.Bold))
+        else:
+            tc = QColor(C["text"] if not is_error else C["red"])
+            tc.setAlpha(alpha)
+            p.setPen(tc)
+            p.setFont(QFont("Consolas", 7))
+        p.drawText(QRectF(bx + 6, ty, bw - 12, line_h), Qt.AlignLeft | Qt.AlignVCenter, line)
+        ty += line_h

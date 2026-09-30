@@ -11,7 +11,7 @@ from PySide6.QtGui import QResizeEvent
 from mirbftview.qt.theme import STYLESHEET, C
 from mirbftview.qt.widgets import GlassPanel, AmbientBackground
 from mirbftview.qt.canvas import NetworkCanvas
-from mirbftview.qt.panels import InfoPanel, BucketsPanel, ExecutionPanel, CommitChainPanel, EventLogPanel, GlobalOrderPanel, SnTablePanel
+from mirbftview.qt.panels import InfoPanel, BucketsPanel, ExecutionPanel, CommitChainPanel, EventLogPanel, GlobalOrderPanel
 from mirbftview.qt.config_panel import ConfigPanel
 from mirbftview.qt.control_bar import ControlBar
 from mirbftview.qt.simulation import Simulation
@@ -133,9 +133,7 @@ class MirBFTViewWindow(QMainWindow):
         bottom_splitter.setStyleSheet("QSplitter{background:transparent;} QSplitter::handle{background:rgba(255,255,255,20); border-radius:2px;}")
         bottom_splitter.addWidget(self._commit_chain)
         bottom_splitter.addWidget(self._global_order)
-        self._sn_table = SnTablePanel(self.sim)
-        bottom_splitter.addWidget(self._sn_table)
-        bottom_splitter.setSizes([460, 380, 300])
+        bottom_splitter.setSizes([460, 380])
 
         v_splitter.addWidget(bottom_splitter)
 
@@ -216,6 +214,7 @@ class MirBFTViewWindow(QMainWindow):
         self._canvas._zoom = 1.0
         self._canvas._pan_offset = QPointF(0, 0)
         self._canvas._inspect_popup = None
+        self._canvas._hidden_groups.clear()   # os grupos mudaram: nenhum herda o "escondido" do antigo
         self._canvas._compute_positions()
         self._canvas.update()
         # Config aplicada com sucesso: fecha o painel para liberar o canvas. Em caso de

@@ -9,16 +9,17 @@ Duas espécies de item circulam em `st.active_requests`:
     COMMIT_NOTIFY -> DONE. Ao terminar, nasce a instância seguinte (SN + nGrupos) e ela
     refaz PREPARE/PROMISE (SetMembers cria e o líder envia o PREPARE em toda instância).
 
-O corte (ProposeIfDue -> CutBatch) acontece quando a instância está preparada e há ao menos
-um pedido nos buckets do líder; sem timeout, ele corta o que houver. Pedidos que chegam
-enquanto a instância do grupo ainda está em consenso esperam e saem juntos no próximo
-batch: é assim que o batch com vários pedidos aparece, sem carga artificial.
+O corte (ProposeIfDue -> CutBatch) espera, com a instância preparada, até o batch encher
+(BatchSize), o BatchTimeout vencer (contador simulado) ou chegar uma cross-op, que acorda o
+corte na hora. Pedidos que chegam enquanto a instância do grupo ainda está em consenso
+esperam e saem juntos no próximo batch: é assim que o batch com vários pedidos aparece.
 
 Todas as mensagens em voo andam juntas (rodadas): quando todas chegam, cada item avança
 uma fase.
 """
 
 import random
+import time
 
 from mirbftview.protocol.types import (
     Phase, MsgType, Message, RequestInfo, snapshot_client_request, key_to_group,
@@ -54,9 +55,11 @@ RETRANSMIT_CHANCE = 0.15
 def tick(st: SimState):
     """Chamado a cada frame (~16ms). Avança mensagens e lógica."""
     if st.paused and not st.advance_flag:
+        st._last_wall = None      # na pausa o relógio do timeout congela
         return
     st.advance_flag = False
     st.tick_count += 1
+    _advance_batch_timers(st)
     # Envelhece brilhos e balões dos buckets A CADA tick (não só ao fim de cada fase).
     _decay_visual_events(st)
 
@@ -123,9 +126,76 @@ def tick(st: SimState):
             new_messages.extend(st.extra_messages)
             st.extra_messages = []
 
+    _late_meta_step(st, new_messages)
     _spawn_requests(st, new_messages)
     st.messages = new_messages
     _update_global_phase(st)
+
+
+def _advance_batch_timers(st: SimState):
+    """Contador do BatchTimeout das instâncias que esperam pedidos: segue o RELÓGIO REAL (um
+    tick não dura sempre 16 ms: o redesenho atrasa o laço), multiplicado pela velocidade, e
+    congela na pausa. Guarda em cada instância o que os painéis mostram."""
+    now = time.monotonic()
+    last = getattr(st, "_last_wall", None)
+    st._last_wall = now
+    dt = 0.0 if last is None else min(now - last, 0.5)
+    for inst in st.instances.values():
+        if not (inst.phase == Phase.BATCH_CUT and getattr(inst, "_waiting", False)):
+            continue
+        inst._wait_elapsed += dt * st.speed * phases.TICKS_PER_SEC
+        singles, cross = phases._queued(st, inst.leader, st.epoch_mgr.buckets_of_group(inst.group_id))
+        inst._wait_queued = singles + cross
+        inst._wait_limit = st.batch_timeout_ticks
+        inst._wait_size = st.batch_size
+
+
+def _late_meta_step(st: SimState, new_messages: list):
+    """Cenário 'ADeliver bloqueado': quando o grupo atrasado já está com o commit retido (falta o
+    META), espera algumas rodadas para o bloqueio ficar visível e então envia o META aos nós
+    dele. Quando a mensagem chega, o RegisterMetadata registra o GSN e o drainBuffer libera."""
+    seq_leader = min(st.groups[0].members) if st.groups and st.groups[0].members else 0
+    for item in list(st.meta_late):
+        if item["state"] != "held":
+            continue
+        item["age"] += 1
+        g, gsn = item["group"], item["gsn"]
+        blocked = any(any(e.gsn == gsn for e in (getattr(r, '_delivery_entries', None) or []))
+                      for r in st.blocked_requests.get(g, []))
+        if blocked:
+            item["wait"] += 1
+        if item["wait"] < 4 and item["age"] < 80:
+            continue
+        item["state"] = "sent"
+        for nid in item["nodes"]:
+            new_messages.append(Message(
+                MsgType.META_STREAM, seq_leader, nid,
+                label=f"META gsn={gsn} (chegou)",
+                detail=f"atrasado para G{g}",
+                color="#FFB020",
+                on_arrive=(lambda st_, it=item: _late_meta_arrived(st_, it)),
+            ))
+
+
+def _late_meta_arrived(st: SimState, item: dict):
+    if item.get("state") == "done":
+        return
+    item["state"] = "done"
+    g, gsn = item["group"], item["gsn"]
+    st.delivery.meta_arrived(gsn, g)
+    if item in st.meta_late:
+        st.meta_late.remove(item)
+    st.log_event(Phase.ADELIVER, "META chegou: drainBuffer",
+                 f"G{g}: RegisterMetadata(gsn={gsn}) -> drainBuffer libera o commit retido\n"
+                 f"O batch e anunciado, o proxy e avisado e o grupo abre a proxima SN",
+                 "green")
+    st.info_text = (
+        f"\U0001f513 META chegou ao G{g}\n\n"
+        f"O ADeliver estava bloqueado: o G{g} ja tinha decidido a SN,\n"
+        f"mas nao conhecia o GSN {gsn}. Com o META registrado, o\n"
+        f"drainBuffer entrega o commit guardado e o grupo segue."
+    )
+    _release_unblocked(st, g)
 
 
 def _tag_messages(st: SimState, req: RequestInfo):
@@ -189,8 +259,9 @@ def _spawn_requests(st: SimState, new_messages: list):
         return
     pending = len(st.pending_info)
     in_flight = any(r.kind == "request" for r in st.active_requests)
-    if st.scenarios.get('single_request', False):
-        n = 1 if (pending == 0 and not in_flight) else 0
+    if st.scenarios.get('single_request', False) or st.scenarios.get('adeliver_block', False):
+        # Didático: um pedido por vez, só quando o anterior foi respondido (e sem META atrasado pendente)
+        n = 1 if (pending == 0 and not in_flight and not st.meta_late) else 0
     else:
         if st.round_count % max(st.arrival_every, 1) != 0 or pending >= st.max_pending:
             return
@@ -284,8 +355,9 @@ def _advance_instance(st: SimState, req: RequestInfo):
             _trigger_node_failure(st, req)
             return
 
-    # Cenário: adeliver_block
-    if next_phase == Phase.ADELIVER and st.scenarios.get('adeliver_block', False):
+    # Cenário: adeliver_block — agora é o META atrasado (ver phase_gsn_assign e _late_meta_step);
+    # o bloqueio artificial antigo foi desligado.
+    if False and next_phase == Phase.ADELIVER and st.scenarios.get('adeliver_block', False):
         if req.is_cross_group and not getattr(req, '_adeliver_blocked_done', False):
             req._adeliver_blocked_done = True
             st.phase = Phase.ADELIVER
@@ -436,12 +508,20 @@ def _generate_client_request(st: SimState, color: str) -> RequestInfo:
 
     cross_ratio_pct = round(st.cross_op_pct * 100)
     k1 = f"K{seq_nr:08d}"
-    if (seq_nr % 100) < cross_ratio_pct or st.scenarios.get('cross_group', False):
+    force_cross = st.scenarios.get('cross_group', False) or st.scenarios.get('adeliver_block', False)
+    if (seq_nr % 100) < cross_ratio_pct or force_cross:
         weights = parse_cross_op_group_weights(st.cross_op_group_weights)
         n_keys = pick_cross_op_group_count(seq_nr, weights)
         keys = [f"K{seq_nr + i * 1000:08d}" for i in range(n_keys)]
-        payload = "TX " + ",".join(keys)
         touched = sorted({key_to_group(k, num_data_groups) for k in keys})
+        if st.scenarios.get('adeliver_block', False):
+            # Didático: garante 2 grupos diferentes (se as chaves colidem, afasta a segunda)
+            step = 1
+            while len(touched) < 2 and step < 400:
+                keys = [f"K{seq_nr:08d}", f"K{seq_nr + (step + 1) * 1000:08d}"]
+                touched = sorted({key_to_group(k, num_data_groups) for k in keys})
+                step += 1
+        payload = "TX " + ",".join(keys)
     else:
         payload = f"GET {k1}"
         touched = [key_to_group(k1, num_data_groups)]

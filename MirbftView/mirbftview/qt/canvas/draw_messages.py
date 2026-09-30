@@ -103,9 +103,28 @@ def draw_messages(p, sim, node_pos, client_pos):
         p.setBrush(QBrush(glow))
         p.drawEllipse(QPointF(x, y), 14, 14)
 
-        # Partícula
-        p.setBrush(color)
-        p.drawEllipse(QPointF(x, y), 5, 5)
+        # Partícula. Cross-op (GSN atribuído e mais de um grupo tocado): núcleo em tom mais
+        # CLARO e anel escuro pulsante, em todas as fases dela (pedido, META, cópias, ACCEPT...).
+        snap = msg.req_snapshot or {}
+        is_cross = snap.get("gsn", 0) > 0 and len(snap.get("touched_groups", [])) > 1
+        if is_cross:
+            pulse = 0.5 + 0.5 * math.sin(sim.tick_count * 0.18)
+            ring_c = QColor(color).darker(190)
+            ring_c.setAlpha(int(150 + 105 * pulse))
+            p.setPen(QPen(ring_c, 2.4))
+            p.setBrush(Qt.NoBrush)
+            r_ring = 7.5 + 3.5 * pulse
+            p.drawEllipse(QPointF(x, y), r_ring, r_ring)
+            halo = QColor(color).darker(190)
+            halo.setAlpha(int(40 * pulse))
+            p.setPen(Qt.NoPen)
+            p.setBrush(halo)
+            p.drawEllipse(QPointF(x, y), r_ring + 3, r_ring + 3)
+            p.setBrush(QColor(color).lighter(165))
+            p.drawEllipse(QPointF(x, y), 5, 5)
+        else:
+            p.setBrush(color)
+            p.drawEllipse(QPointF(x, y), 5, 5)
 
         # Label
         if msg.label:

@@ -50,6 +50,25 @@ class AtomicDelivery:
         self._pending: dict[int, list[DeliveryEntry]] = {}  # group_id → [entries]
         # Historico de entregas (para visualizacao)
         self.delivery_history: list[dict] = []  # [{gsn, groups, sn, status}]
+        # (gsn, grupo) cujo META ainda NÃO chegou a este grupo: o ADeliver real também bloqueia aí
+        # ("missing META for own gsn") até o RegisterMetadata chegar e o drainBuffer liberar.
+        self._meta_missing: set[tuple[int, int]] = set()
+
+    def hold_meta(self, gsn: int, group_id: int):
+        """O META deste GSN ainda não chegou a este grupo (cenário didático)."""
+        self._meta_missing.add((gsn, group_id))
+
+    def meta_arrived(self, gsn: int, group_id: int) -> list["DeliveryEntry"]:
+        """O META chegou: registra o GSN na fila do grupo e drena o que já estava decidido."""
+        self._meta_missing.discard((gsn, group_id))
+        self.register_touch(gsn, group_id)
+        delivered = self._try_deliver(group_id)
+        for d in delivered:
+            self.delivery_history.append({
+                "gsn": d.gsn, "sn": d.sn, "group": d.group_id,
+                "groups": [d.group_id], "status": "delivered", "type": "cross",
+            })
+        return delivered
 
     def register_touch(self, gsn: int, group_id: int):
         """Anuncia que este GSN toca este grupo — chamado assim que o META
@@ -95,6 +114,11 @@ class AtomicDelivery:
         else:
             pending.append(entry)
             pending.sort(key=lambda e: e.gsn)
+
+        # Sem o META deste GSN neste grupo, o ADeliver bloqueia: o commit fica guardado
+        # (BufferCommit) até o META chegar (meta_arrived).
+        if (entry.gsn, gid) in self._meta_missing:
+            return []
 
         delivered = self._try_deliver(gid)
         for d in delivered:

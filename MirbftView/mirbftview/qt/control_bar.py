@@ -160,12 +160,12 @@ class ControlBar(QWidget):
              "permite truncar o log — nao troca lider nem redistribui\n"
              "buckets (grupos sao estaticos)."),
             ("adeliver_block", "ADeliver bloqueado",
-             "Forca artificialmente, numa operacao cross-group, o bloqueio\n"
-             "real do ADeliver: um grupo so entrega um GSN depois de ja ter\n"
-             "entregue todo GSN anterior que tambem o toca. No simulador,\n"
-             "com poucos grupos e poucas operacoes, esse bloqueio natural\n"
-             "e raro — o cenario garante que voce veja o log 'BLOQUEADO'\n"
-             "sem depender de coincidencia."),
+             "Cenario didatico: um unico pedido cross-group por vez. O META\n"
+             "do GSN chega ATRASADO a um dos dois grupos: ele decide a copia\n"
+             "dele (ACCEPT/COMMIT), mas o ADeliver bloqueia ('missing META')\n"
+             "e o commit fica retido (BufferCommit). Quando o META chega, o\n"
+             "drainBuffer libera, o batch e anunciado e o grupo abre a proxima\n"
+             "SN. O outro grupo entrega normalmente e responde ao cliente."),
             ("batch_resurrect", "Batch Resurrect",
              "Com chance aleatoria, simula uma instancia desistindo de\n"
              "esperar quorum para uma posicao do log (mecanismo real de\n"

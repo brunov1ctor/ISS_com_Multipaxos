@@ -9,8 +9,8 @@ from PySide6.QtGui import (
 
 from mirbftview.qt.theme import C
 from mirbftview.qt.canvas._constants import GROUP_COLORS
-from mirbftview.engine.phases import BUCKET_ENTER_TICKS, BUCKET_LEAVE_TICKS
-from mirbftview.qt.simulation import Simulation
+from mirbftview.engine.phases import BUCKET_ENTER_TICKS, BUCKET_LEAVE_TICKS, CROSS_PULSE_TICKS, TICKS_PER_SEC
+from mirbftview.qt.simulation import Simulation, Phase
 
 
 class BucketsPanel(QWidget):
@@ -240,18 +240,51 @@ class BucketsPanel(QWidget):
         p.drawText(QRectF(rect.x() + 5, rect.y() + 2, rect.width() - 20, 12),
                    Qt.AlignLeft | Qt.AlignVCenter, f"B{i}")
 
-        chip_w, chip_h, chip_gap = 9, 8, 2
-        max_chips = max(int((rect.width() - 10) // (chip_w + chip_gap)), 1)
+        chip_h, chip_gap = (12 if rect.height() >= 34 else 9), 2
+        chip_font = QFont("Consolas", 6, QFont.Bold)
+        fm = QFontMetrics(chip_font)
         x0 = rect.x() + 5
-        y0 = rect.bottom() - chip_h - 6
+        y0 = rect.bottom() - chip_h - 4
         born = self.sim.bucket_born
+        meta_of = self.sim.bucket_meta
+        cross_col = QColor("#FF3DF2")
+
+        def chip_text(label):
+            # "c0#12" -> "0#12"; cross-op ganha uma estrela
+            t = label[1:] if label.startswith("c") else label
+            return ("\u2605" if meta_of.get(label, {}).get("cross") else "") + t
+
+        # Quais pastilhas cabem (largura de cada uma = largura do texto)
+        widths = [fm.horizontalAdvance(chip_text(l)) + 6 for l in contents]
+        shown_from = len(contents)
+        used = 0
+        avail = rect.width() - 10 - 14
+        while shown_from > 0 and used + widths[shown_from - 1] + chip_gap <= avail:
+            shown_from -= 1
+            used += widths[shown_from] + chip_gap
+        if shown_from == len(contents) and contents:
+            shown_from = len(contents) - 1   # ao menos a última, mesmo cortada
+        shown = contents[shown_from:]
+        hidden = shown_from
 
         # Pulso do contador quando entra um pedido novo (dura a animação de entrada)
         pulse = 0.0
-        for label in contents[-max_chips:]:
+        for label in shown:
             t = (now - born.get((nid, i, label), -9999)) / BUCKET_ENTER_TICKS
             if 0 <= t < 1:
                 pulse = max(pulse, 1 - t)
+
+        # Contador do BatchTimeout ao lado do badge: só na visão do LÍDER do grupo dono, enquanto
+        # o CutBatch espera pedidos (some quando o batch é cortado).
+        inst = self.sim.instances.get(owner)
+        if (member and inst is not None and inst.leader == nid and inst.phase == Phase.BATCH_CUT
+                and getattr(inst, "_waiting", False)):
+            limit = getattr(inst, "_wait_limit", 0) or 1
+            left = max(limit - getattr(inst, "_wait_elapsed", 0.0), 0) / TICKS_PER_SEC
+            p.setPen(QColor(C["gold"]))
+            p.setFont(QFont("Segoe UI", 6, QFont.Bold))
+            p.drawText(QRectF(rect.x() + 22, rect.y() + 2, rect.width() - 22 - 22, 14),
+                       Qt.AlignRight | Qt.AlignVCenter, f"⏱ {left:0.0f}s")
 
         # Quantos pedidos na fila DESTE nó
         if contents:
@@ -264,22 +297,29 @@ class BucketsPanel(QWidget):
             p.setFont(QFont("Segoe UI", 6, QFont.Bold))
             p.drawText(QRectF(cx - r, cy - r, r * 2, r * 2), Qt.AlignCenter, str(len(contents)))
 
-            # Pedidos como pastilhas, na ordem em que CHEGARAM A ESTE NÓ, na cor do pedido.
-            # Ao entrar, a pastilha cai de cima, cresce e ganha um anel.
-            shown = contents[-max_chips:]
-            for k, label in enumerate(shown):
-                meta = self.sim.bucket_meta.get(label, {})
-                col = QColor(meta.get("color") or gc)
+            # Pedidos como pastilhas COM RÓTULO (cliente#sn), na ordem em que CHEGARAM A ESTE
+            # NÓ, na cor do pedido; cross-ops em magenta com estrela. Ao entrar, a pastilha cai
+            # de cima, cresce e ganha um anel.
+            xk = x0
+            for label in shown:
+                meta = meta_of.get(label, {})
+                is_cross = bool(meta.get("cross"))
+                col = QColor(cross_col if is_cross else (meta.get("color") or gc))
                 t = min(max((now - born.get((nid, i, label), -9999)) / BUCKET_ENTER_TICKS, 0.0), 1.0)
                 e = 1 - (1 - t) ** 3                      # ease-out
-                ccx = x0 + k * (chip_w + chip_gap) + chip_w / 2
+                cw_ = fm.horizontalAdvance(chip_text(label)) + 6
+                ccx = xk + cw_ / 2
                 ccy = y0 + chip_h / 2 - (1 - e) * 16      # cai de cima até o lugar
                 sc = 0.4 + 0.6 * e
-                rc = QRectF(ccx - chip_w * sc / 2, ccy - chip_h * sc / 2, chip_w * sc, chip_h * sc)
-                col.setAlpha(int(90 + 130 * e))
-                p.setPen(Qt.NoPen)
+                rc = QRectF(ccx - cw_ * sc / 2, ccy - chip_h * sc / 2, cw_ * sc, chip_h * sc)
+                col.setAlpha(int(110 + 130 * e))
+                p.setPen(QPen(QColor(255, 255, 255, 190), 1.2) if is_cross else Qt.NoPen)
                 p.setBrush(col)
-                p.drawRoundedRect(rc, 2, 2)
+                p.drawRoundedRect(rc, 3, 3)
+                if e > 0.6:
+                    p.setFont(chip_font)
+                    p.setPen(QColor(255, 255, 255) if is_cross else QColor(10, 14, 24))
+                    p.drawText(rc, Qt.AlignCenter, chip_text(label))
                 if t < 1:
                     ring = QColor(col)
                     ring.setAlpha(int(200 * (1 - t)))
@@ -287,11 +327,13 @@ class BucketsPanel(QWidget):
                     p.setBrush(Qt.NoBrush)
                     rr = 4 + 10 * t
                     p.drawEllipse(QPointF(ccx, y0 + chip_h / 2), rr, rr)
-            if len(contents) > max_chips:
-                p.setPen(QColor(255, 255, 255, 170))
-                p.setFont(QFont("Segoe UI", 6))
-                p.drawText(QRectF(rect.x(), rect.bottom() - 13, rect.width() - 4, 11),
-                           Qt.AlignRight | Qt.AlignVCenter, f"+{len(contents) - max_chips}")
+                xk += cw_ + chip_gap
+            if hidden > 0:
+                p.setPen(QColor(255, 255, 255, 190))
+                p.setFont(QFont("Segoe UI", 6, QFont.Bold))
+                p.drawText(QRectF(rect.x(), rect.y() + 2, rect.width() - 22, 11),
+                           Qt.AlignRight | Qt.AlignVCenter, f"+{hidden}")
+        max_chips = max(len(shown), 1)
 
         # Saída: pedidos que ESTE nó acabou de tirar do bucket (líder: no corte do batch;
         # seguidor: no commit) ficam dourados, sobem, crescem e somem.
@@ -302,12 +344,31 @@ class BucketsPanel(QWidget):
             col = QColor(C["gold"] if t < 0.35 else (ev["color"] or gc))
             col.setAlpha(int(230 * (1 - t)))
             sc = 1 + 0.6 * t
+            chip_w = 22
             ccx = x0 + min(ev["slot"], max_chips - 1) * (chip_w + chip_gap) + chip_w / 2
             ccy = y0 + chip_h / 2 - 26 * t
             p.setPen(Qt.NoPen)
             p.setBrush(col)
             p.drawRoundedRect(QRectF(ccx - chip_w * sc / 2, ccy - chip_h * sc / 2,
                                      chip_w * sc, chip_h * sc), 2, 2)
+
+        # Chegada de cross-op NESTE nó: anéis magenta pulsantes ao redor da célula
+        born_x = self.sim.cross_pulse.get((nid, i))
+        if born_x is not None and 0 <= now - born_x < CROSS_PULSE_TICKS:
+            t = (now - born_x) / CROSS_PULSE_TICKS
+            for k in range(2):
+                ph = (t * 3 + k * 0.5) % 1.0
+                ring = QColor("#FF3DF2")
+                ring.setAlpha(int(240 * (1 - t) * (1 - ph)))
+                grow = 1 + 9 * ph
+                rp = QPainterPath()
+                rp.addRoundedRect(rect.adjusted(-grow, -grow, grow, grow), 8, 8)
+                p.setPen(QPen(ring, 2.4))
+                p.setBrush(Qt.NoBrush)
+                p.drawPath(rp)
+            tint = QColor("#FF3DF2")
+            tint.setAlpha(int(70 * (1 - t) * (0.5 + 0.5 * math.sin(t * 6 * math.pi))))
+            p.fillPath(path, tint)
 
         # Brilho da célula: dourado quando entra pedido NESTE nó, verde quando ele corta o batch
         for ev in self.sim.visual_events:
@@ -463,3 +524,4 @@ class BucketsPanel(QWidget):
         self._detail.setGeometry(w - popup_w - 6, 24, popup_w, popup_h)
         self._detail.show()
         self._detail.raise_()
+

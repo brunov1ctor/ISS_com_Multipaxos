@@ -17,6 +17,7 @@ _NEW_TICKS = 70          # quanto tempo (ticks da simulação) o SN recém-criad
 _CHIP_W, _CHIP_H, _GAP = 50, 26, 4
 _LABEL_W = 34
 _PHASE_W = 96
+_TPS = 62               # ticks por segundo simulado (igual a engine.phases.TICKS_PER_SEC)
 
 _PHASE_NAMES = {
     Phase.PREPARE: "Prepare", Phase.PROMISE: "Promise", Phase.BATCH_CUT: "Corte",
@@ -139,8 +140,25 @@ class SnTablePanel(QWidget):
                 p.drawText(QRectF(px, y, _PHASE_W, row_h * 0.55), Qt.AlignLeft | Qt.AlignBottom,
                            self._phase_text(inst))
                 n = len(inst.members)
+                waiting = inst.phase == Phase.BATCH_CUT and getattr(inst, "_waiting", False)
                 p.setPen(QColor(C["text3"]))
                 p.setFont(QFont("Segoe UI", 6))
-                p.drawText(QRectF(px, y + row_h * 0.55, _PHASE_W, row_h * 0.45), Qt.AlignLeft | Qt.AlignTop,
-                           f"{n} pedido(s) no batch" if n else "batch ainda vazio")
+                if waiting:
+                    limit = getattr(inst, "_wait_limit", 0) or 1
+                    elapsed = min(getattr(inst, "_wait_elapsed", 0.0), limit)
+                    left = (limit - elapsed) / _TPS
+                    p.setPen(QColor(C["gold"]))
+                    p.drawText(QRectF(px, y + row_h * 0.55, _PHASE_W, row_h * 0.3),
+                               Qt.AlignLeft | Qt.AlignTop,
+                               f"\u23f1 {left:0.0f}s / {limit / _TPS:0.0f}s \u00b7 {getattr(inst, '_wait_queued', 0)}/{getattr(inst, '_wait_size', 0)}")
+                    bar = QRectF(px, y + row_h * 0.55 + 11, _PHASE_W - 8, 3)
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(QColor(255, 255, 255, 30))
+                    p.drawRoundedRect(bar, 1.5, 1.5)
+                    p.setBrush(QColor(gcolor))
+                    p.drawRoundedRect(QRectF(bar.x(), bar.y(), bar.width() * (elapsed / limit), 3), 1.5, 1.5)
+                else:
+                    p.drawText(QRectF(px, y + row_h * 0.55, _PHASE_W, row_h * 0.45),
+                               Qt.AlignLeft | Qt.AlignTop,
+                               f"{n} pedido(s) no batch" if n else "batch ainda vazio")
         p.end()

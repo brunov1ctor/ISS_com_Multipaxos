@@ -14,6 +14,8 @@ from mirbftview.engine.state import SimState
 
 BUCKET_ENTER_TICKS = 20   # animação de entrada de um pedido no bucket
 BUCKET_LEAVE_TICKS = 34   # animação de saída (corte do batch)
+CROSS_PULSE_TICKS = 90    # pulso da célula quando chega uma cross-op
+TICKS_PER_SEC = 62        # 1 s simulado = 62 ticks (~16 ms cada) na velocidade 1x
 
 
 def bubble_ttl(st, n_phases: float) -> int:
@@ -41,6 +43,8 @@ def bucket_add(st, node_id, bucket_id, label, meta):
     lists[bucket_id].append(label)
     st.bucket_born[(node_id, bucket_id, label)] = st.tick_count
     st.bucket_meta.setdefault(label, dict(meta))
+    if meta.get("cross"):
+        st.cross_pulse[(node_id, bucket_id)] = st.tick_count
     st.visual_events.append({"type": "bucket_in", "bucket": bucket_id, "node": node_id, "ttl": 18})
 
 
@@ -74,7 +78,7 @@ def _take_singles(st, bucket, n):
     return taken
 
 
-def _cut_items(st, leader, gid):
+def _cut_items(st, leader, gid, skip_cross=False):
     """CutBatch (bucketgroup.go) sobre os buckets DO LÍDER, sem timeout: corta o que houver.
 
     1) cross-ops de TODOS os buckets do grupo, por GSN, vêm primeiro; se há alguma, o
@@ -87,8 +91,9 @@ def _cut_items(st, leader, gid):
     size = max(int(st.batch_size), 1)
     meta = st.bucket_meta
     batch = []
-    cross = sorted((meta.get(l, {}).get("gsn", 0), b, l)
-                   for b in bids for l in lists[b] if meta.get(l, {}).get("cross"))
+    cross = [] if skip_cross else sorted(
+        (meta.get(l, {}).get("gsn", 0), b, l)
+        for b in bids for l in lists[b] if meta.get(l, {}).get("cross"))
     for _gsn, b, l in cross:
         if len(batch) >= size:
             break
@@ -136,6 +141,10 @@ def new_instance(st, gid):
                        color=color, touched_groups=[gid], batch_requests=0)
     inst._waiting = False
     inst._batch_items = []
+    inst._wait_started = False   # o timer do CutBatch começa quando ele passa a esperar
+    inst._wait_elapsed = 0.0     # ticks (ponderados pela velocidade) esperando pedidos
+    inst._cross_at_start = False
+    inst._cut_reason = ""
     st.instances[gid] = inst
     st.active_requests.append(inst)
     hist = st.sn_history.setdefault(gid, [])
@@ -145,20 +154,63 @@ def new_instance(st, gid):
     return inst
 
 
+def _queued(st, leader, bids):
+    """(pedidos single-group, cross-ops) nos buckets do líder para os buckets do grupo."""
+    lists = node_buckets(st, leader)
+    singles = cross = 0
+    for b in bids:
+        for l in lists[b]:
+            if st.bucket_meta.get(l, {}).get("cross"):
+                cross += 1
+            else:
+                singles += 1
+    return singles, cross
+
+
 def try_cut(st, inst):
-    """ProposeIfDue: com a instância preparada (quórum de PROMISE), o líder chama o
-    CutBatch dos buckets do grupo. Sem pedidos, espera (waitForRequests, aqui sem
-    timeout); com pelo menos um, corta na hora tudo o que houver. Devolve True se cortou."""
+    """ProposeIfDue -> CutBatch (bucketgroup.go) com a instância preparada.
+
+    O timer começa quando o CutBatch passa a esperar (logo após o PROMISE) e a espera acaba
+    por: (a) cross-op já pronta no início -> corta na hora, cross-ops primeiro; (b) batch
+    cheio (BatchSize); (c) timeout, cortando o que houver; (d) uma cross-op que CHEGA durante
+    a espera acorda o CutBatch na hora (RequestAddedCrossOp): sai o que já estava acumulado
+    de single-group e a cross-op fica para o corte seguinte (se não havia nenhum single, ela
+    sai já). Devolve True se cortou."""
     gid = inst.group_id
     bids = st.epoch_mgr.buckets_of_group(gid)
-    items = _cut_items(st, inst.leader, gid)
+    size = max(int(st.batch_size), 1)
+    singles, cross = _queued(st, inst.leader, bids)
+
+    if not inst._wait_started:
+        inst._wait_started = True
+        inst._cross_at_start = cross > 0
+        inst._wait_elapsed = 0.0
+
+    reason = ""
+    skip_cross = False
+    if cross and inst._cross_at_start:
+        reason = "cross-op pronta: corte imediato"
+    elif cross and singles:
+        reason = "cross-op chegou durante a espera: acordou o corte (single-group acumulados saem, a cross-op fica para o próximo)"
+        skip_cross = True
+    elif cross:
+        reason = "cross-op chegou durante a espera: acordou o corte"
+    elif singles >= size:
+        reason = f"batch cheio ({singles}/{size})"
+    elif inst._wait_elapsed >= st.batch_timeout_ticks:
+        if singles:
+            reason = f"timeout de {st.batch_timeout_ticks / TICKS_PER_SEC:.0f}s: corta o que houver"
+        else:
+            inst._wait_elapsed = 0.0   # timeout sem nada nos buckets: volta a esperar
+    if not reason:
+        st.messages = []   # waitForRequests: a instância só espera (contador no painel de SNs)
+        return False
+
+    items = _cut_items(st, inst.leader, gid, skip_cross=skip_cross)
     if not items:
-        anchor = bids[0] if bids else 0
-        st.bucket_bubbles[anchor] = {
-            "text": f"waitForRequests()\nG{gid} SN {inst.sn}: buckets vazios",
-            "color": "gold", "ttl": bubble_ttl(st, 1.1), "node": inst.leader}
         st.messages = []
         return False
+    inst._cut_reason = reason
 
     inst._waiting = False
     inst._batch_items = items
@@ -187,7 +239,8 @@ def try_cut(st, inst):
     st.bucket_bubbles[anchor] = {
         "text": (f"CutBatch()\n{len(items)} pedido(s)"
                  + (f" ({n_cross} cross)" if n_cross else "")
-                 + f"\ndigest={inst.batch_digest[:6]}"),
+                 + f"\ndigest={inst.batch_digest[:6]}"
+                 + f"\n{reason}"),
         "color": "green", "ttl": bubble_ttl(st, 1.5), "node": inst.leader}
 
     st.phase = Phase.BATCH_CUT
@@ -206,8 +259,7 @@ def try_cut(st, inst):
         + "• depois os single-group, em ordem de bucket\n\n"
         f"Os pedidos saíram dos buckets do líder agora; nos\n"
         f"seguidores a cópia só sai quando o COMMIT chegar.\n\n"
-        f"Sem timeout aqui: corta assim que a instância está\n"
-        f"preparada e há ao menos 1 pedido nos buckets."
+        f"Motivo do corte: {reason}"
     )
     st.messages = [Message(
         MsgType.CLIENT_REQUEST, inst.leader, inst.leader,
@@ -417,8 +469,21 @@ def phase_gsn_assign(st: SimState):
     # quando aquele grupo especifico termina seu proprio consenso. E isso
     # que faz o ADeliver poder de fato bloquear em ordem, sem depender de
     # que os GSNs sejam inteiros consecutivos por grupo.
+    # Cenário "ADeliver bloqueado": o META deste GSN chega ATRASADO a um dos grupos tocados. O
+    # grupo decide a cópia dele normalmente, mas o ADeliver bloqueia ("missing META") até o META
+    # chegar. É um bloqueio real do Go e se resolve sozinho (RegisterMetadata -> drainBuffer).
+    late_group = None
+    if st.scenarios.get('adeliver_block', False) and len(req.touched_groups) > 1:
+        late_group = req.touched_groups[-1]
+        others = {n for g in req.touched_groups if g != late_group for n in st.groups[g].members}
+        exclusive = [n for n in st.groups[late_group].members if n not in others]
+        late_nodes = exclusive or list(st.groups[late_group].members)
+        st.delivery.hold_meta(req.gsn, late_group)
+        st.meta_late.append({"gsn": req.gsn, "group": late_group, "nodes": late_nodes,
+                             "state": "held", "wait": 0, "age": 0})
     for gid in req.touched_groups:
-        st.delivery.register_touch(req.gsn, gid)
+        if gid != late_group:
+            st.delivery.register_touch(req.gsn, gid)
 
     st.phase = Phase.GSN_ASSIGN
     st.log_event(Phase.GSN_ASSIGN, "GSN Atribuido",
@@ -439,13 +504,20 @@ def phase_gsn_assign(st: SimState):
     )
 
     st.messages = []
+    held_nodes = set(st.meta_late[-1]["nodes"]) if late_group is not None else set()
     for nid in st.groups[0].members:
-        if nid != seq_leader:
+        if nid != seq_leader and nid not in held_nodes:
             st.messages.append(Message(
                 MsgType.META_STREAM, seq_leader, nid,
                 label=f"META gsn={req.gsn}",
                 detail=f"groups={req.touched_groups}",
             ))
+    if late_group is not None:
+        st.log_event(Phase.GSN_ASSIGN, "Cenario: META atrasado",
+                     f"O META do GSN={req.gsn} ainda nao chegou ao G{late_group}\n"
+                     f"(nos {sorted(held_nodes)}). Esse grupo vai decidir a copia dele,\n"
+                     f"mas o ADeliver vai bloquear ate o META chegar.",
+                     "orange")
 
 
 def phase_prepare(st: SimState):
@@ -652,9 +724,11 @@ def phase_commit_notify(st: SimState):
         "group": req.group_id,
         "color": (members[0].get("color") if members else req.color) or req.color,
         "n": len(members),
+        "items": [{"label": m["label"], "cross": bool(m.get("cross")), "gsn": m.get("gsn", 0),
+                   "color": m.get("color", "")} for m in members],
     })
-    if len(st.commit_history) > 60:
-        st.commit_history = st.commit_history[-60:]
+    if len(st.commit_history) > 400:
+        st.commit_history = st.commit_history[-400:]
 
     st.phase = Phase.COMMIT_NOTIFY
     names = {m["label"]: (st.clients[m["client_id"]].name if m["client_id"] < len(st.clients)

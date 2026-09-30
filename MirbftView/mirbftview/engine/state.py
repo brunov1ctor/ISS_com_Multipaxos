@@ -44,7 +44,7 @@ class SimState:
         self.num_buckets = 16
         self.segment_length = 16  # segmentLengths=16
         self.batch_size = 4096  # batchsizes=4096
-        self.batch_timeout_ticks = 62  # minBatchTimeout=1000ms / 16ms per tick ≈ 62
+        self.batch_timeout_ticks = 10 * 62  # timeout do CutBatch: 10 s simulados (62 ticks = 1 s)
         # Intervalo de checkpoint (a cada N commits), independente de época/líder:
         # o MultiPaxosMulticastOrderer não redistribui buckets nem troca líder
         # em checkpoints, só permite truncar o log.
@@ -91,6 +91,8 @@ class SimState:
         #   bucket_leaving      -> pedidos que acabaram de sair do bucket de um nó (commit)
         self.bucket_meta: dict[str, dict] = {}
         self.bucket_leaving: list[dict] = []
+        # (nó, bucket) -> tick em que chegou a última cross-op àquele bucket (pulso na UI)
+        self.cross_pulse: dict = {}
         # Commit history for visual chain
         self.commit_history: list[dict] = []  # [{sn, leader, epoch, hash, is_cross, gsn}]
         # Scenarios toggles
@@ -123,6 +125,9 @@ class SimState:
         # bloqueadas — o tick.py as libera quando outro commit do mesmo
         # grupo roda _try_deliver de novo e desbloqueia a fila.
         self.blocked_requests: dict[int, list[RequestInfo]] = {}
+        # Cenário 'ADeliver bloqueado': META que chega atrasado a um grupo
+        #   {gsn, group, nodes, state: 'held'|'sent', wait, age}
+        self.meta_late: list[dict] = []
         self.pipeline_size: int = 3
         # Steady-state: após primeiro PREPARE/PROMISE, pula direto para ACCEPT
         self.prepared: bool = False
@@ -181,6 +186,7 @@ class SimState:
         self.node_buckets = {}
         self.commit_history = []
         self.meta_stream = []
+        self.meta_late = []
         self.batch_fill = {}
         self.batch_timeout_counter = {}
         self.batch_ready = {}

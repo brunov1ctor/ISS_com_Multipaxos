@@ -42,6 +42,9 @@ class NetworkCanvas(QWidget):
         self._pan_start = QPointF(0, 0)
         self._popup_widget = self._make_popup_widget()
         self._thought_bubbles: dict[int, dict] = {}
+        self._hidden_groups: set[int] = set()   # grupos com a região escondida (olhinho)
+        self._eye_rects: dict[int, QRectF] = {}  # área de clique do olhinho de cada grupo (cena)
+        self._eye_click = False
         self._color_pool_idx = 0
         self._known_msgs: set = set()
         self._timer = QTimer(self)
@@ -53,6 +56,7 @@ class NetworkCanvas(QWidget):
 
     def _on_tick(self):
         update_thought_bubbles(self.sim, self._thought_bubbles)
+        self._refresh_live_popup()
         self._color_pool_idx = assign_msg_colors(
             self.sim, self._color_pool_idx, self._known_msgs
         )
@@ -110,7 +114,13 @@ class NetworkCanvas(QWidget):
             )
         return "".join(rows)
 
-    def _show_debug_popup(self, lines: list[str], pos: QPointF):
+    def _show_debug_popup(self, lines: list[str], pos: QPointF, live=None):
+        # `live`: função sem argumentos que devolve as linhas atuais; enquanto o popup estiver
+        # aberto, ele é reconstruído a cada mudança da simulação (em vez de ficar um retrato).
+        self._live_fn = live
+        self._live_pos = pos
+        self._live_last = list(lines)
+        self._live_tick = self.sim.tick_count
         body = self._lines_to_debug_html(lines)
         self._popup_widget.setHtml(f'<div style="font-family:Consolas; font-size:9pt; white-space:pre;">{body}</div>')
 
@@ -140,7 +150,21 @@ class NetworkCanvas(QWidget):
         self._popup_widget.raise_()
 
     def _hide_debug_popup(self):
+        self._live_fn = None
         self._popup_widget.hide()
+
+    def _refresh_live_popup(self):
+        fn = getattr(self, '_live_fn', None)
+        if fn is None or not self._popup_widget.isVisible():
+            return
+        if self.sim.tick_count == self._live_tick:
+            return
+        self._live_tick = self.sim.tick_count
+        if self._popup_widget.textCursor().hasSelection():
+            return  # não apaga o texto que o usuário está selecionando para copiar
+        lines = fn()
+        if lines and lines != self._live_last:
+            self._show_debug_popup(lines, self._live_pos, live=fn)
 
     # ─── Geometry ─────────────────────────────────────────────────────────
 
@@ -162,6 +186,14 @@ class NetworkCanvas(QWidget):
 
     def _to_scene(self, screen_pos: QPointF) -> QPointF:
         return (screen_pos - self._pan_offset) / self._zoom
+
+    def _eye_at(self, pos: QPointF):
+        """Id do grupo cujo olhinho está sob `pos` (coordenadas da tela), ou None."""
+        scene = self._to_scene(pos)
+        for gid, rect in self._eye_rects.items():
+            if rect.contains(scene):
+                return gid
+        return None
 
     # ─── Hit testing ──────────────────────────────────────────────────────
 
@@ -195,6 +227,7 @@ class NetworkCanvas(QWidget):
     def _gsn_panel_rect(self) -> QRectF:
         """Retângulo do painel 'GSN Sequencer' (mesma fórmula de draw_hud.py
         draw_gsn_meta_panel), usado para hit-test do clique."""
+        return QRectF()  # painel removido da tela: sem área de clique
         if self.sim.gsn <= 0 and not self.sim.meta_stream:
             return QRectF()  # painel oculto (sem pedidos cross-group)
         meta = self.sim.meta_stream
@@ -207,6 +240,7 @@ class NetworkCanvas(QWidget):
     def _adeliver_panel_rect(self) -> QRectF:
         """Retângulo do painel 'ADeliver (por grupo)' (mesma fórmula de
         draw_hud.py draw_adeliver_panel), usado para hit-test do clique."""
+        return QRectF()  # painel removido da tela
         dlv = self.sim.delivery
         if (not dlv or not dlv._last_delivered_gsn
                 or (self.sim.gsn <= 0 and not self.sim.meta_stream)):
@@ -251,6 +285,14 @@ class NetworkCanvas(QWidget):
             event.ignore()
             return
         if event.button() == Qt.LeftButton:
+            gid = self._eye_at(event.position())
+            if gid is not None:
+                # Olhinho ao lado do nome do grupo: mostra/esconde a região dele.
+                self._hidden_groups.symmetric_difference_update({gid})
+                self._eye_click = True
+                self.update()
+                event.accept()
+                return
             self._drag_moved = False
             hit = self._hit_test(event.position())
             if hit:
@@ -305,10 +347,15 @@ class NetworkCanvas(QWidget):
             if not (hit or msg):
                 panel_hit = (self._gsn_panel_rect().contains(event.position())
                              or self._adeliver_panel_rect().contains(event.position()))
-            self.setCursor(Qt.PointingHandCursor if (hit or msg or panel_hit) else Qt.ArrowCursor)
+            eye = self._eye_at(event.position()) is not None
+            self.setCursor(Qt.PointingHandCursor if (hit or msg or panel_hit or eye) else Qt.ArrowCursor)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._eye_click:
+            self._eye_click = False
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
             if self._dragging and not self._drag_moved:
                 self._open_inspect(self._dragging, event.position())
@@ -396,10 +443,12 @@ class NetworkCanvas(QWidget):
         id_ = int(id_str)
         if kind == "node":
             lines, color = self._inspect_node_lines(id_)
+            live = lambda: self._inspect_node_lines(id_)[0]
         else:
             lines, color = self._inspect_client_lines(id_)
+            live = lambda: self._inspect_client_lines(id_)[0]
         if lines:
-            self._show_debug_popup(lines, pos)
+            self._show_debug_popup(lines, pos, live=live)
 
     def _inspect_node_lines(self, node_id):
         node = self.sim.nodes[node_id] if node_id < len(self.sim.nodes) else None
@@ -428,7 +477,39 @@ class NetworkCanvas(QWidget):
             f"Papel atual: {role}",
             f"Grupos: {', '.join(groups)}",
         ]
+        lines += self._inspect_sequencer_state(node_id, member_of)
         return lines, C["accent"]
+
+    def _inspect_sequencer_state(self, node_id, member_of):
+        """Estado do Sequencer que CADA nó guarda em memória (sequencer.go): metadata,
+        groupGSNQueue, lastDeliveredGSN e pendingCommits. O META é transmitido a todos os nós,
+        então o simulador mantém uma só cópia, que vale para todos; a fila, a última entrega e os
+        commits guardados aparecem só para os grupos DESTE nó."""
+        sim = self.sim
+        metas = list(sim.meta_stream)
+        dlv = sim.delivery
+        if not metas and not (dlv and dlv._last_delivered_gsn):
+            return []
+        out = ["", "── Sequencer (neste nó) ──",
+               "metadata[gsn] = grupos que o GSN toca"]
+        if metas:
+            for m in metas[-5:]:
+                out.append(f"  {m['gsn']} → " + ", ".join(f"G{g}" for g in m["groups"]))
+            if len(metas) > 5:
+                out.append(f"  (+{len(metas) - 5} anteriores)")
+        else:
+            out.append("  (vazio)")
+        if dlv:
+            for g in member_of:
+                pend = dlv._pending.get(g, [])
+                queue = ", ".join(f"{e.gsn}{'*' if e.committed else ''}" for e in pend) or "—"
+                last = dlv._last_delivered_gsn.get(g, 0)
+                blocked = dlv.get_blocked_entries(g)
+                out.append(f"G{g}: groupGSNQueue = [{queue}]  (* = commit já decidido)")
+                out.append(f"    lastDeliveredGSN = {last}")
+                out.append("    pendingCommits = "
+                           + (", ".join(f"gsn {e.gsn} (SN {e.sn})" for e in blocked) if blocked else "—"))
+        return out
 
     def _inspect_client_lines(self, client_id):
         client = self.sim.clients[client_id] if client_id < len(self.sim.clients) else None
@@ -531,7 +612,8 @@ class NetworkCanvas(QWidget):
         p.save()
         p.translate(self._pan_offset)
         p.scale(self._zoom, self._zoom)
-        draw_groups(p, self.sim, self._node_pos)
+        self._eye_rects = {}
+        draw_groups(p, self.sim, self._node_pos, self._hidden_groups, self._eye_rects)
         draw_connections(p, self.sim, self._node_pos)
         draw_meta_broadcast_lines(p, self.sim, self._node_pos)
         draw_messages(p, self.sim, self._node_pos, self._client_pos)
@@ -542,8 +624,7 @@ class NetworkCanvas(QWidget):
         draw_clients(p, self.sim, self._client_pos)
         p.restore()
 
-        draw_gsn_meta_panel(p, self.sim)
-        draw_adeliver_panel(p, self.sim)
+        # Painéis 'GSN Sequencer' e 'ADeliver (por grupo)' removidos da tela (a pedido).
         self._draw_phase_banner(p)
         p.end()
 
