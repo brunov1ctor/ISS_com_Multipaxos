@@ -64,6 +64,14 @@ class SimState:
         self.committed = 0
         self.last_checkpoint_sn = -1
         self.checkpoints_done = 0
+        # Checkpoint por grupo (ver recordGroupCommit em multipaxosorderer.go): cada grupo de
+        # dados conta seus próprios commits e estabiliza seu checkpoint sozinho, sem round-trip
+        # de rede nem depender do log intercalado inteiro -- diferente do que o código antigo
+        # (e esta simulação, antes do fix) assumia, de checkpoint global confirmado por todo
+        # mundo. group_commit_count/group_last_checkpoint_sn são por grupo; checkpoints_done
+        # continua global só para o contador agregado exibido na tela (soma de todos os grupos).
+        self.group_commit_count: dict[int, int] = {}
+        self.group_last_checkpoint_sn: dict[int, int] = {}
         # META stream: historico de publicacoes GSN -> grupos
         self.meta_stream: list[dict] = []  # [{gsn, groups, published_by}]
 

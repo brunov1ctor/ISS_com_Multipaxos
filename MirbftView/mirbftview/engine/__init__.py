@@ -103,6 +103,8 @@ class Simulation:
     def _checkpoint_interval(self): return self._st.checkpoint_interval
     @_checkpoint_interval.setter
     def _checkpoint_interval(self, v): self._st.checkpoint_interval = v
+    @property
+    def group_commit_count(self): return self._st.group_commit_count
 
     # Epoch manager exposto para painéis
     @property

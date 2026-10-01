@@ -639,14 +639,20 @@ def _handle_special(st: SimState, req: RequestInfo):
 
 
 def _needs_checkpoint(st: SimState) -> bool:
-    """Verifica se é hora de fazer checkpoint."""
-    if st.scenarios.get('checkpoint_force', False) and st.committed > 0:
-        return st.last_checkpoint_sn != st.current_request.sn
-    return (
-        st.committed > 0
-        and st.committed % st.checkpoint_interval == 0
-        and st.last_checkpoint_sn != st.current_request.sn
-    )
+    """Verifica se é hora de fazer checkpoint NESTE grupo (ver recordGroupCommit em
+    multipaxosorderer.go): cada grupo de dados conta seus próprios commits e estabiliza seu
+    checkpoint sozinho, dividindo checkpoint_interval pelo número de grupos de dados pra manter
+    a mesma frequência relativa que o intervalo teria num log não particionado em grupos.
+    """
+    req = st.current_request
+    gid = req.group_id
+    count = st.group_commit_count.get(gid, 0)
+    num_groups = max(st.epoch_mgr.sn_stride, 1)
+    interval = max(st.checkpoint_interval // num_groups, 1)
+    last_sn = st.group_last_checkpoint_sn.get(gid, -1)
+    if st.scenarios.get('checkpoint_force', False) and count > 0:
+        return last_sn != req.sn
+    return count > 0 and count % interval == 0 and last_sn != req.sn
 
 
 def _decay_visual_events(st: SimState):

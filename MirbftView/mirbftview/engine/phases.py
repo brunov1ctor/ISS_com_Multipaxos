@@ -705,6 +705,7 @@ def phase_commit_notify(st: SimState):
     members = list(req.members)
     if members:
         st.committed += 1
+        st.group_commit_count[req.group_id] = st.group_commit_count.get(req.group_id, 0) + 1
 
     answered = []      # pedidos que ESTA instância respondeu
     for m in members:
@@ -837,47 +838,50 @@ def phase_adeliver(st: SimState):
 
 
 def phase_checkpoint(st: SimState):
-    """Checkpoint — broadcast entre todos os nós.
+    """Checkpoint POR GRUPO — sem broadcast entre todos os nós, sem round-trip de rede novo
+    (fix de hoje em multipaxosorderer.go: recordGroupCommit/GroupCheckpointSN).
 
-    No MultiPaxosMulticastOrderer, um checkpoint só permite truncar o log
-    (descartar entradas antigas); ao contrário do ISS clássico, ele NÃO troca
-    líderes nem redistribui buckets — os grupos de dados são estáticos.
+    O checkpoint do Manager clássico (log intercalado inteiro, confirmado por todo mundo) nunca
+    estabiliza no MultiPaxosMulticast: cada nó só comita localmente os SNs dos grupos dos quais é
+    membro, então nenhum nó completa o log inteiro sozinho. A correção conta o progresso
+    LOCALMENTE, dentro de cada grupo: o próprio COMMIT do MultiPaxos (maioria de ACCEPTED) já é
+    prova de durabilidade suficiente (MultiPaxos só tolera falha de parada, não Byzantine), então
+    nenhuma mensagem adicional precisa ser trocada -- diferente do ISS clássico, que também não
+    troca líderes nem redistribui buckets num checkpoint (grupos de dados são estáticos).
     """
     req = st.current_request
-    st.last_checkpoint_sn = req.sn
+    gid = req.group_id
+    st.group_last_checkpoint_sn[gid] = req.sn
     st.checkpoints_done += 1
+    group_count = st.group_commit_count.get(gid, 0)
+    num_groups = max(st.epoch_mgr.sn_stride, 1)
+    group_interval = max(st.checkpoint_interval // num_groups, 1)
 
     st.phase = Phase.CHECKPOINT
     st.log_event(Phase.CHECKPOINT, "CHECKPOINT",
-                 f"SN={req.sn} | Intervalo: {st.checkpoint_interval}\n"
-                 f"Broadcast CHECKPOINT -> log pode ser truncado\n"
-                 f"(grupos e lideres continuam os mesmos)",
+                 f"G{gid} SN={req.sn} | Intervalo do grupo: {group_interval} commits\n"
+                 f"Sem mensagem nova: o proprio COMMIT (maioria de ACCEPTED)\n"
+                 f"ja prova durabilidade -- log do grupo pode ser truncado",
                  "purple")
 
     st.info_text = (
-        f"🏁 CHECKPOINT — Salvando progresso\n\n"
-        f"O sistema 'salva o jogo' periodicamente.\n"
-        f"Todos os nós confirmam entre si que estão\n"
-        f"sincronizados até a decisão nº {req.sn}.\n\n"
-        f"Isso permite descartar dados antigos e\n"
-        f"ajuda nós que ficaram para trás a se\n"
-        f"atualizarem rapidamente.\n\n"
-        f"Diferente do ISS clássico: aqui o checkpoint NÃO\n"
-        f"troca líderes nem redistribui buckets — os grupos\n"
-        f"de dados são fixos.\n\n"
+        f"🏁 CHECKPOINT (por grupo) — G{gid} salvando progresso\n\n"
+        f"Só os membros do G{gid} confirmam entre si (implicitamente,\n"
+        f"pelo próprio commit) que estão sincronizados até a\n"
+        f"decisão nº {req.sn} DESTE grupo.\n\n"
+        f"Nenhuma mensagem nova é trocada: o COMMIT que já\n"
+        f"aconteceu (maioria de ACCEPTED) é a mesma prova que um\n"
+        f"checkpoint buscaria confirmar.\n\n"
+        f"Diferente do checkpoint global do ISS clássico: aqui cada\n"
+        f"grupo tem seu próprio progresso, porque nenhum nó vê os\n"
+        f"commits de grupos dos quais não é membro.\n\n"
         f"─── Detalhes ───\n"
-        f"Checkpoint nº {st.checkpoints_done} | Intervalo: a cada {st.checkpoint_interval} decisões"
+        f"Checkpoint nº {st.checkpoints_done} (total, todos os grupos) | "
+        f"G{gid}: {group_count} commits locais, intervalo a cada {group_interval}"
     )
 
+    # Sem mensagens novas na rede: o checkpoint é inferido do COMMIT que já aconteceu.
     st.messages = []
-    for n1 in st.nodes:
-        for n2 in st.nodes:
-            if n1.id != n2.id and n1.is_alive and n2.is_alive:
-                st.messages.append(Message(
-                    MsgType.CHECKPOINT, n1.id, n2.id,
-                    label="CKPT",
-                    detail=f"sn={req.sn}",
-                ))
 
 
 def phase_view_change(st: SimState, old_leader: int, new_leader: int, new_ballot: int):

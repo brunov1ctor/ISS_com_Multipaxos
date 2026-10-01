@@ -74,7 +74,12 @@ class ExecutionPanel(QWidget):
         badge_y = 24
         badge_h = 32
         n_groups = len([g for g in s.groups if g.id != 0]) if s.groups else 0
-        remaining = s._checkpoint_interval - (s._committed % s._checkpoint_interval) if s._committed > 0 else s._checkpoint_interval
+        # Checkpoint agora é por grupo (ver phase_checkpoint): cada grupo tem seu próprio
+        # intervalo (checkpoint_interval / nGrupos) e sua própria contagem. "Falta Ckpt" mostra
+        # o grupo mais perto de completar o seu, não um progresso global único.
+        group_interval = max(s._checkpoint_interval // max(n_groups, 1), 1)
+        counts = s.group_commit_count.values() if s.group_commit_count else []
+        remaining = min((group_interval - (c % group_interval) for c in counts), default=group_interval)
         metrics = [
             ("Checkpoints", str(s._checkpoints_done), C["accent"]),
             ("Commits", str(s._committed), C["green"]),
