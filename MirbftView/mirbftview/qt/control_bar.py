@@ -153,12 +153,13 @@ class ControlBar(QWidget):
              "completo com GSN/META/ADeliver, sem esperar o sorteio."),
             ("checkpoint_force", "Checkpoint a cada commit",
              "Forca um CHECKPOINT depois de toda unica decisao, em vez de\n"
-             "esperar o intervalo normal (checkpoint_interval, por padrao\n"
-             "a cada 80 commits). O checkpoint em si e real e periodico;\n"
-             "isso so exagera a frequencia para voce ver o evento sem\n"
-             "esperar. No MultiPaxosMulticastOrderer, um checkpoint so\n"
-             "permite truncar o log — nao troca lider nem redistribui\n"
-             "buckets (grupos sao estaticos)."),
+             "esperar o intervalo normal (checkpoint_interval dividido\n"
+             "pelo numero de grupos, por padrao 80 commits no total). O\n"
+             "checkpoint e POR GRUPO e sem mensagem nova (o proprio COMMIT\n"
+             "ja prova durabilidade) -- isso so exagera a frequencia para\n"
+             "voce ver o evento sem esperar. No MultiPaxosMulticastOrderer,\n"
+             "um checkpoint so permite truncar o log do grupo -- nao troca\n"
+             "lider nem redistribui buckets (grupos sao estaticos)."),
             ("adeliver_block", "ADeliver bloqueado",
              "Cenario didatico: um unico pedido cross-group por vez. O META\n"
              "do GSN chega ATRASADO a um dos dois grupos: ele decide a copia\n"
