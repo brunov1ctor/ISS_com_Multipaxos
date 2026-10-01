@@ -45,6 +45,16 @@ type MultiPaxosOrderer struct {
 	ownedGroupID   uint32                        // grupo de dados administrado por este orderer (0 = broadcast/standalone)
 	skipHandlerRegistration bool                 // true quando este orderer é filho de um MultiPaxosMulticastOrderer
 	commitNotifyCh chan struct{} // shared channel from parent multicast orderer
+
+	// Checkpoint por grupo (ver comentário em recordGroupCommit): como cada nó só enxerga as
+	// decisões dos grupos dos quais é membro, o checkpoint global do Manager (mirlog, baseado em
+	// firstEmptySN sobre o log intercalado inteiro) nunca estabiliza para a maioria dos nós.
+	// Esses dois campos substituem essa dependência por um progresso contado localmente, só
+	// dentro deste grupo -- sem round-trip de rede, pois o próprio COMMIT do MultiPaxos (maioria
+	// de ACCEPTED) já é a prova de durabilidade que um checkpoint normalmente buscaria confirmar
+	// (válido porque o MultiPaxos só tolera falhas de parada, não Byzantine).
+	groupCommitCount  int32 // atomic: quantos SNs este grupo já comitou localmente, nesta réplica
+	groupCheckpointSN int32 // atomic: maior SN deste grupo confirmado como ponto estável
 }
 
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
@@ -89,6 +99,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			now := time.Now().UnixNano()
 			announcer.Announce(&mirlog.Entry{Sn: sn, Batch: b, Digest: crypto.Hash(batchBytes),
 				ShouldRespond: &shouldRespond, ProposeTs: now, CommitTs: now})
+			o.recordGroupCommit(sn)
 			return
 		}
 		var digest []byte
@@ -105,6 +116,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		if commitTs == 0 { commitTs = now }
 		announcer.Announce(&mirlog.Entry{Sn: sn, Batch: b, Digest: digest,
 			ShouldRespond: &shouldRespond, ProposeTs: proposeTs, CommitTs: commitTs})
+		o.recordGroupCommit(sn)
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
 			// CSMR Output Processing: only the leader notifies proxy (avoids 3x duplicate notifications)
 			if inst, ok := o.dispatcher.load(sn); ok && inst != nil && inst.leader == membership.OwnID {
@@ -257,6 +269,31 @@ func (o *MultiPaxosOrderer) getOrCreateInstance(sn int32, gid uint32, seg manage
 	return inst
 }
 
+// recordGroupCommit atualiza o checkpoint LOCAL deste grupo após um commit bem-sucedido (chamado
+// de dentro de o.announce, uma vez por SN comitado). Só se aplica ao modo multicast; no broadcast
+// (sem grupos) todo nó já vê o log inteiro e o checkpoint global do Manager funciona normalmente.
+// Sem round-trip de rede: o próprio COMMIT do MultiPaxos (maioria de ACCEPTED) já é a prova de
+// durabilidade que um checkpoint buscaria confirmar -- válido porque MultiPaxos só tolera falhas
+// de parada, não Byzantine. O intervalo é dividido por numGroups pra manter a mesma frequência
+// relativa de checkpoints que CheckpointInterval teria num log não particionado em grupos.
+func (o *MultiPaxosOrderer) recordGroupCommit(sn int32) {
+	if !o.skipHandlerRegistration || o.am == nil { return }
+	_, numGroups := o.am.GetDataGroupIndex(o.ownedGroupID)
+	if numGroups < 1 { numGroups = 1 }
+	interval := int32(config.Config.CheckpointInterval) / numGroups
+	if interval < 1 { interval = 1 }
+	if n := atomic.AddInt32(&o.groupCommitCount, 1); n%interval == 0 {
+		atomic.StoreInt32(&o.groupCheckpointSN, sn)
+		logger.Info().Uint32("group", o.ownedGroupID).Int32("sn", sn).Msg("New stable checkpoint (per-group).")
+	}
+}
+
+// GroupCheckpointSN retorna o maior SN deste grupo já confirmado como ponto de checkpoint
+// estável nesta réplica. Usado por killSegment no lugar do checkpoint global do Manager.
+func (o *MultiPaxosOrderer) GroupCheckpointSN() int32 {
+	return atomic.LoadInt32(&o.groupCheckpointSN)
+}
+
 func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 	lastSN := seg.LastSN()
 	timeout := time.After(30 * time.Second)
@@ -266,13 +303,26 @@ func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
 		default: time.Sleep(10 * time.Millisecond)
 		}
 	}
-	checkpoints := mirlog.Checkpoints()
-	cp := mirlog.GetCheckpoint()
 	cpTimeout := time.After(60 * time.Second)
-	for cp == nil || cp.Sn < seg.LastSN() {
-		select {
-		case cp = <-checkpoints:
-		case <-cpTimeout: return
+	if o.skipHandlerRegistration {
+		// Multicast: checkpoint por grupo (ver recordGroupCommit), não o global do Manager, que
+		// nunca estabiliza pra um nó que não é membro de todos os grupos de dados.
+		for atomic.LoadInt32(&o.groupCheckpointSN) < seg.LastSN() {
+			select {
+			case <-time.After(50 * time.Millisecond):
+			case <-cpTimeout: return
+			}
+		}
+	} else {
+		// Broadcast (MultiPaxos sem grupos): todo nó vê o log inteiro, o checkpoint global do
+		// Manager funciona normalmente aqui.
+		checkpoints := mirlog.Checkpoints()
+		cp := mirlog.GetCheckpoint()
+		for cp == nil || cp.Sn < seg.LastSN() {
+			select {
+			case cp = <-checkpoints:
+			case <-cpTimeout: return
+			}
 		}
 	}
 	o.instMu.Lock()
