@@ -55,6 +55,7 @@ type MultiPaxosOrderer struct {
 	// (válido porque o MultiPaxos só tolera falhas de parada, não Byzantine).
 	groupCommitCount  int32 // atomic: quantos SNs este grupo já comitou localmente, nesta réplica
 	groupCheckpointSN int32 // atomic: maior SN deste grupo confirmado como ponto estável
+	extendedUpTo      int32 // atomic: maior lastSN de segmento pra qual já foi criada uma extensão
 }
 
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
@@ -235,12 +236,12 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			select {
 			case <-stopCh: return
 			case <-commitCh:
-				if currentSN > seg.LastSN() { continue }
+				if currentSN > seg.LastSN() { o.extendSegmentIfReady(seg, gid, numGroups, members); continue }
 				if mirlog.GetEntry(currentSN) != nil { currentSN += numGroups; continue }
 				inst := o.getOrCreateInstance(currentSN, gid, seg, members)
 				inst.ProposeIfDue()
 			case <-t.C:
-				if currentSN > seg.LastSN() { continue }
+				if currentSN > seg.LastSN() { o.extendSegmentIfReady(seg, gid, numGroups, members); continue }
 				now := time.Now()
 				if mirlog.GetEntry(currentSN) != nil { currentSN += numGroups; continue }
 				inst := o.getOrCreateInstance(currentSN, gid, seg, members)
@@ -292,6 +293,30 @@ func (o *MultiPaxosOrderer) recordGroupCommit(sn int32) {
 // estável nesta réplica. Usado por killSegment no lugar do checkpoint global do Manager.
 func (o *MultiPaxosOrderer) GroupCheckpointSN() int32 {
 	return atomic.LoadInt32(&o.groupCheckpointSN)
+}
+
+// extendSegmentIfReady cria e lança o próximo segmento deste grupo quando o atual se esgota
+// (currentSN > seg.LastSN()), seguindo o mesmo padrão que o Manager usa pros outros orderers
+// (checkpoint confirma -> emite segmento novo), só que local a este grupo e disparado pelo
+// checkpoint por grupo (groupCheckpointSN), não pelo checkpoint global do cluster -- que nunca
+// estabiliza pra um nó que não é membro de todos os grupos (ver recordGroupCommit). Sem isso, um
+// grupo que esgota seu segmento simplesmente para de propor pra sempre, silenciosamente.
+// Só se aplica ao modo multicast; no broadcast o Manager compartilhado já cuida disso sozinho.
+func (o *MultiPaxosOrderer) extendSegmentIfReady(seg manager.Segment, groupId uint32, numGroups int32, members []int32) {
+	if !o.skipHandlerRegistration { return }
+	lastSN := seg.LastSN()
+	if atomic.LoadInt32(&o.groupCheckpointSN) < lastSN { return } // segmento ainda não confirmado
+	for {
+		cur := atomic.LoadInt32(&o.extendedUpTo)
+		if cur >= lastSN { return } // outra goroutine já criou (ou está criando) esta extensão
+		if atomic.CompareAndSwapInt32(&o.extendedUpTo, cur, lastSN) { break }
+	}
+	next := &manager.ContiguousSegment{}
+	newFirst := lastSN + 1
+	next.SetFields(0, membership.AllNodeIDs(), membership.AllNodeIDs(), newFirst, seg.Len(), lastSN)
+	fmt.Printf("[MPX] group=%d EXTEND segment firstSN=%d lastSN=%d (checkpoint do grupo confirmou o fim do anterior)\n",
+		groupId, next.FirstSN(), next.LastSN())
+	o.runSegment(next)
 }
 
 func (o *MultiPaxosOrderer) killSegment(seg manager.Segment) {
