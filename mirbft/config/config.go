@@ -114,6 +114,32 @@ type configuration struct {
 	CrossOpRatio         int    `yaml:"CrossOpRatio"`        // Percentage (0-100) of client requests that are cross-group (TX K1,K2) instead of single-group (GET K).
 	CrossOpGroupWeights  string `yaml:"CrossOpGroupWeights"` // Weights "groups:weight,groups:weight,..." for how many distinct groups a cross-op touches (e.g. "2:70,3:25,4:5"). Empty/unset defaults to "2:100" (always 2 groups, current behavior).
 
+	// OverloadGroupOverride força GroupId/TouchedGroups de toda requisição gerada por
+	// client.go pro grupo apontado, em vez de deixar nil (roteamento automático por hash no
+	// servidor). Nunca vem de config.yml -- é setado em memória só pelo comando
+	// "orderingclient api ... overload <grupo> <duração>" (ver apimode.go), antes de chamar
+	// RunBenchmarkClients. Ponteiro (não int com sentinela -1) porque group 0 (Sequencer) não
+	// é um grupo de dados válido pra TouchedGroups, mas ainda assim é um uint32 "normal" -- nil
+	// é o único jeito de dizer "desligado" sem colidir com nenhum ID de grupo real.
+	OverloadGroupOverride *uint32 `yaml:"-"`
+
+	// ApiWorkingSetSize > 0 liga o modo "overload --api": em vez do payload sintético de
+	// sempre (GET/TX, que nunca toca GroupState.data), createRequest gera tráfego real da API
+	// (APIPUT/APIGET/APIDELETE). Uma fase de semeadura grava ApiWorkingSetSize chaves via
+	// APIPUT antes do laço de envio normal (fora da janela medida); depois, cada requisição
+	// escolhe uma chave DENTRE AS JÁ SEMEADAS (seqNr % ApiWorkingSetSize) -- found=true
+	// garantido de verdade, nunca por acaso. Nunca vem de config.yml, mesmo padrão de
+	// OverloadGroupOverride (setado em memória só pelo comando "overload ... --api", ver
+	// apimode.go).
+	ApiWorkingSetSize int
+
+	// ApiWriteRatio/ApiDeleteRatio (0-100): proporção da FASE MEDIDA que é PUT (sobrescreve
+	// uma chave já semeada -- nunca cria chave nova, pra não misturar "custo de operação" com
+	// "custo do dataset crescer") / DELETE. O restante é GET. Mesma lógica de decisão
+	// determinística por seqNr que CrossOpRatio já usa (sem aleatoriedade real).
+	ApiWriteRatio  int
+	ApiDeleteRatio int
+
 	// System parameters
 	RequestHandlerThreads     int    `yaml:"RequestHandlerThreads"` // Number of threads that write incoming requests to request Buffers.
 	RequestInputChannelBuffer int    `yaml:"RequestInputChannelBuffer"`

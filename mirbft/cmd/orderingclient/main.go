@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog"
@@ -20,17 +23,118 @@ var (
 	membershipInitializer sync.Once
 )
 
+// apiVerbs são os comandos despachados direto como "orderingclient <verbo> <config> <addr>
+// [args...]" (ver main() e apimode.go) -- mesma lista que o switch de runAPIMode reconhece.
+var apiVerbs = map[string]bool{
+	"ls": true, "put": true, "get": true, "delete": true, "transfer": true, "overload": true, "repl": true,
+}
+
+// resolveConfigAddr acha config.yml e o endereço do discovery SEM exigir que venham na linha
+// de comando, em duas fontes (nessa ordem):
+//  1. Variáveis de ambiente ORDERINGCLIENT_CONFIG/ORDERINGCLIENT_ADDR -- pra quem exportou uma
+//     vez por sessão de terminal.
+//  2. Arquivos de caminho fixo que o deploy já escreve em TODO nó que participou dele:
+//     $ISS_BASE_DIR/config/config.yml (mesmo caminho que SLAVE_CONFIG_FILE em
+//     generate-master-commands.py) e .../config/master-addr (escrito por writeMasterAddrFile,
+//     mesmo script). Então rodando de dentro de um nó já deployado (ex. node-0), os dois já
+//     estão lá sozinhos.
+//
+// ok=false se nenhuma das duas fontes tiver os dois valores completos -- o chamador volta a
+// exigir <config> <addr> na linha de comando, como sempre foi.
+func resolveConfigAddr() (configFile, addr string, ok bool) {
+	if c := os.Getenv("ORDERINGCLIENT_CONFIG"); c != "" {
+		if a := os.Getenv("ORDERINGCLIENT_ADDR"); a != "" {
+			return c, a, true
+		}
+	}
+	base := os.Getenv("ISS_BASE_DIR")
+	if base == "" {
+		user := os.Getenv("USER")
+		if user == "" {
+			user = "user"
+		}
+		base = fmt.Sprintf("/users/%s/iss", user)
+	}
+	configFile = filepath.Join(base, "config", "config.yml")
+	if st, err := os.Stat(configFile); err != nil || st.Size() == 0 {
+		return "", "", false
+	}
+	addrBytes, err := os.ReadFile(filepath.Join(base, "config", "master-addr"))
+	if err != nil {
+		return "", "", false
+	}
+	addr = strings.TrimSpace(string(addrBytes))
+	if addr == "" {
+		return "", "", false
+	}
+	return configFile, addr, true
+}
+
 // CRASH MODEL (CSMR): Aceita primeira resposta (não BFT)
 func enoughResponses(n int) bool {
 	return n >= 1
 }
 
 func main() {
+	// "help"/"-h"/"--help" como primeiro argumento -- nenhum uso existente (benchmark ou api)
+	// passa essas palavras como caminho de config, então é seguro interceptar aqui, antes de
+	// tudo, sem mudar nenhum comportamento de quem já chama com argumentos de verdade.
+	if len(os.Args) > 1 && (os.Args[1] == "help" || os.Args[1] == "-h" || os.Args[1] == "--help") {
+		printTopLevelHelp()
+		return
+	}
+
+	// "orderingclient <comando> [config] [addr] [args...]" -- cada verbo da API despachado
+	// DIRETO, sem precisar da palavra "api" na frente (o jeito antigo, "api <config> <addr>
+	// <comando> ...", continua funcionando logo abaixo, só não é mais o jeito documentado --
+	// mantido por compatibilidade, zero custo). Seguro porque nenhum uso de benchmark passa um
+	// desses nomes como primeiro argumento (é sempre um caminho de arquivo de config).
+	//
+	// config/addr são OPCIONAIS: se resolveConfigAddr() achar os dois sozinho (env vars, ou
+	// rodando num nó já deployado), TODO o resto de os.Args vira argumento do comando -- não
+	// precisa digitar config.yml/endereço nenhuma vez. Só exige na mão quando nenhuma das
+	// fontes automáticas está disponível (ex. rodando de fora do Emulab, numa máquina que
+	// nunca participou de um deploy).
+	if len(os.Args) > 1 && apiVerbs[os.Args[1]] {
+		verb := os.Args[1]
+		rest := os.Args[2:]
+		if cfg, addr, ok := resolveConfigAddr(); ok {
+			runAPIMode(append([]string{cfg, addr, verb}, rest...))
+			return
+		}
+		if len(rest) < 2 {
+			fmt.Printf("uso: orderingclient %s <config_file> <discovery_addr:port> [args...]\n", verb)
+			fmt.Println("(ou defina ORDERINGCLIENT_CONFIG/ORDERINGCLIENT_ADDR, ou rode num nó já deployado -- aí não precisa digitar nenhum dos dois)")
+			os.Exit(1)
+		}
+		runAPIMode(append([]string{rest[0], rest[1], verb}, rest[2:]...))
+		return
+	}
+
+	// Forma antiga, "api <config> <addr> <comando> ...", mantida funcionando (alguns scripts
+	// ou hábito de quem já usava antes) -- equivalente a despachar pelo verbo direto acima.
+	if len(os.Args) > 1 && os.Args[1] == "api" {
+		runAPIMode(os.Args[2:])
+		return
+	}
+
 	// Check number of parameters
 	if len(os.Args) <= 2 {
+		if len(os.Args) <= 1 {
+			// "orderingclient" sozinho, sem nenhum argumento: se config/addr resolverem
+			// sozinhos (nó já deployado, ou env vars), entra direto no repl -- mais útil do
+			// que só mostrar a ajuda, já que dá pra conectar sem digitar nada. Sem isso, cai
+			// na ajuda como sempre foi.
+			if cfg, addr, ok := resolveConfigAddr(); ok {
+				runREPL(cfg, addr)
+				return
+			}
+			printTopLevelHelp()
+			return
+		}
 		logger.Fatal().
 			Int("argsGiven", len(os.Args)-1).
-			Msg("usage: orderingclient config_file_name discovery_server_addr:port out_file_prefix [profiler_output_prefix]")
+			Msg("usage: orderingclient config_file_name discovery_server_addr:port out_file_prefix [profiler_output_prefix] -- ou 'orderingclient help'")
 	}
 
 	// Get config file name
@@ -53,11 +157,11 @@ func main() {
 
 	// Get discovery server address from command line.
 	// The membership will be obtained from this server
-	dServAddr := os.Args[2]
+	discoveryAddrForClients = os.Args[2]
 
 	// Get output file prefix from command line.
 	// Log and trace files will all begin with this
-	outFilePrefix = os.Args[3]
+	outPrefix := os.Args[3]
 
 	// Initialize membership module
 	membership.Init()
@@ -71,43 +175,7 @@ func main() {
 		defer profiling.StopProfiler()
 	}
 
-	// Get number of clients and number of requests / client.
-	numClients := config.Config.ClientsPerProcess
-	numRequests := config.Config.RequestsPerClient
-
-	logger.Info().
-		Int("numClients", numClients).
-		Int("numRequests", numRequests).
-		Int("crossOpRatio", config.Config.CrossOpRatio).
-		Msg("Starting clients.")
-
-	// Create wait group for initializing and running clients
-	wg := sync.WaitGroup{}
-
-	// Create all clients first (and have them pre-compute all requests)
-	logger.Info().Msg("Initilizing clients.")
-	clients := make([]*client, numClients)
-	wg.Add(numClients)
-	for i := 0; i < numClients; i++ {
-		go func(j int) { clients[j] = newClient(dServAddr, numRequests); wg.Done() }(i)
-	}
-
-	// Wait until all clients are initialized.
-	wg.Wait()
-	logger.Info().Msg("Clients initialized.")
-
-	// Run all clients
-	logger.Info().Msg("Launching clients.")
-	wg.Add(numClients)
-	for i := 0; i < numClients; i++ {
-		go clients[i].Run(&wg)
-	}
-
-	// Wait for clients to finish.
-	logger.Info().Msg("Waiting for clients.")
-	wg.Wait()
-
-	logger.Info().Msg("Done.")
+	RunBenchmarkClients(outPrefix)
 }
 
 // Enables and starts the profiler of used resources.

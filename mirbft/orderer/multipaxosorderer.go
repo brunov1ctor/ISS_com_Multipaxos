@@ -121,7 +121,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
 			// CSMR Output Processing: only the leader notifies proxy (avoids 3x duplicate notifications)
 			if inst, ok := o.dispatcher.load(sn); ok && inst != nil && inst.leader == membership.OwnID {
-				GetGlobalMulticastOrderer().NotifyProxy(b, sn)
+				GetGlobalMulticastOrderer().NotifyProxy(b, sn, nil)
 			}
 			if len(b.Requests[0].TouchedGroups) > 1 && b.Requests[0].GSN > 0 {
 				GetGlobalMulticastOrderer().RegisterGSNMetadata(b.Requests[0].GSN, b.Requests[0].TouchedGroups)
@@ -237,13 +237,19 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			case <-stopCh: return
 			case <-commitCh:
 				if currentSN > seg.LastSN() { o.extendSegmentIfReady(seg, gid, numGroups, members); continue }
-				if mirlog.GetEntry(currentSN) != nil { currentSN += numGroups; continue }
+				if entry := mirlog.GetEntry(currentSN); entry != nil {
+					o.applyEntryInOrder(gid, currentSN, entry.Batch)
+					currentSN += numGroups; continue
+				}
 				inst := o.getOrCreateInstance(currentSN, gid, seg, members)
 				inst.ProposeIfDue()
 			case <-t.C:
 				if currentSN > seg.LastSN() { o.extendSegmentIfReady(seg, gid, numGroups, members); continue }
 				now := time.Now()
-				if mirlog.GetEntry(currentSN) != nil { currentSN += numGroups; continue }
+				if entry := mirlog.GetEntry(currentSN); entry != nil {
+					o.applyEntryInOrder(gid, currentSN, entry.Batch)
+					currentSN += numGroups; continue
+				}
 				inst := o.getOrCreateInstance(currentSN, gid, seg, members)
 				inst.tick(now); inst.ProposeIfDue()
 			}
