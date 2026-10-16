@@ -29,6 +29,54 @@ const (
 	reqFanout = 3
 )
 
+// RunBenchmarkClients cria config.Config.ClientsPerProcess clientes, roda todos em paralelo e
+// espera até todos terminarem (envio + dreno) -- extraído do antigo corpo de main() (ver
+// cmd/orderingclient/main.go) pra ser reaproveitado também pelo comando "overload" (apimode.go),
+// que só difere em QUANDO chama isso (sob demanda, não automaticamente no início do processo) e,
+// opcionalmente, em ter setado config.Config.OverloadGroupOverride/ClientRunTime antes de chamar.
+// outPrefix vai pro mesmo lugar que outFilePrefix (var de pacote) já ia: nome base dos arquivos
+// de log/trace de cada cliente.
+func RunBenchmarkClients(outPrefix string) {
+	outFilePrefix = outPrefix
+
+	numClients := config.Config.ClientsPerProcess
+	numRequests := config.Config.RequestsPerClient
+
+	logger.Info().
+		Int("numClients", numClients).
+		Int("numRequests", numRequests).
+		Int("crossOpRatio", config.Config.CrossOpRatio).
+		Msg("Starting clients.")
+
+	wg := sync.WaitGroup{}
+
+	logger.Info().Msg("Initilizing clients.")
+	clients := make([]*client, numClients)
+	wg.Add(numClients)
+	for i := 0; i < numClients; i++ {
+		go func(j int) { clients[j] = newClient(discoveryAddrForClients, numRequests); wg.Done() }(i)
+	}
+	wg.Wait()
+	logger.Info().Msg("Clients initialized.")
+
+	logger.Info().Msg("Launching clients.")
+	wg.Add(numClients)
+	for i := 0; i < numClients; i++ {
+		go clients[i].Run(&wg)
+	}
+
+	logger.Info().Msg("Waiting for clients.")
+	wg.Wait()
+
+	logger.Info().Msg("Done.")
+}
+
+// discoveryAddrForClients é setado uma vez (main.go ou apimode.go) antes de chamar
+// RunBenchmarkClients -- newClient precisa do endereço do discovery server, que antes vinha
+// direto de uma variável local de main(); como a chamada agora pode vir de dois lugares
+// diferentes, vira uma var de pacote, no mesmo espírito de outFilePrefix logo acima.
+var discoveryAddrForClients string
+
 // ===== MINIMAL SAFETY FIX =====
 // safeSendReq sends to a request channel and prevents panics if the channel is closed during teardown.
 // Returns false if the send failed due to a closed channel (or other panic).
@@ -241,7 +289,9 @@ func (c *client) discoverPeers(dServAddr string) {
 // seqNr and the configured CrossOpRatio (percentage of requests that are cross-group).
 func (c *client) createPayload(seqNr int32) []byte {
 	var basePayload string
-	if int(seqNr)%100 < config.Config.CrossOpRatio {
+	if config.Config.ApiWorkingSetSize > 0 {
+		basePayload = c.createAPIPayload(seqNr)
+	} else if int(seqNr)%100 < config.Config.CrossOpRatio {
 		numGroups := config.PickCrossOpGroupCount(seqNr)
 		keys := make([]string, numGroups)
 		for i := 0; i < numGroups; i++ {
@@ -260,6 +310,35 @@ func (c *client) createPayload(seqNr int32) []byte {
 	return []byte(basePayload + " " + strings.Repeat("X", paddingSize))
 }
 
+// createAPIPayload gera o payload REAL da API (APIPUT/APIGET/APIDELETE), usado só quando
+// config.Config.ApiWorkingSetSize > 0 ("overload ... --api"). As primeiras ApiWorkingSetSize
+// requisições (seqNr < ApiWorkingSetSize, enviadas por seedAPIWorkingSet ANTES do laço de envio
+// normal começar -- ver Run()) são a FASE DE SEMEADURA: um APIPUT sequencial, uma chave nova
+// por seqNr. Depois disso (fase medida, i começa em ApiWorkingSetSize no laço principal -- ver
+// Run()), cada requisição escolhe uma chave DENTRE AS JÁ SEMEADAS (seqNr % ApiWorkingSetSize) e
+// decide PUT (sobrescreve a mesma chave, nunca cria chave nova -- não mistura "custo de
+// operação" com "custo do dataset crescer") / DELETE / GET, pela mesma lógica determinística
+// por seqNr que CrossOpRatio já usa (sem aleatoriedade real). found=true garantido de verdade
+// pros GETs da fase medida, porque toda chave consultada foi realmente escrita na semeadura.
+func (c *client) createAPIPayload(seqNr int32) string {
+	n := int32(config.Config.ApiWorkingSetSize)
+	if seqNr < n {
+		key := fmt.Sprintf("K%08d", seqNr)
+		return string(request.EncodePut(key, []byte(fmt.Sprintf("seed-%08d", seqNr))))
+	}
+
+	key := fmt.Sprintf("K%08d", seqNr%n)
+	pct := int(seqNr) % 100
+	switch {
+	case pct < config.Config.ApiWriteRatio:
+		return string(request.EncodePut(key, []byte(fmt.Sprintf("w-%08d", seqNr))))
+	case pct < config.Config.ApiWriteRatio+config.Config.ApiDeleteRatio:
+		return string(request.EncodeDelete(key))
+	default:
+		return string(request.EncodeGet(key))
+	}
+}
+
 // createRequest creates a request with FRESH signature (never reuses precomputed signatures)
 func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	var payload []byte
@@ -270,16 +349,21 @@ func (c *client) createRequest(seqNr int32) *pb.ClientRequest {
 	}
 
 	// Cliente NÃO deve setar GroupId/TouchedGroups - deixa o preprocessor do servidor fazer isso
-	// Servidor vai calcular via ReplicaMapper para garantir determinismo
+	// Servidor vai calcular via ReplicaMapper para garantir determinismo. ÚNICA exceção: o
+	// comando "overload <grupo> <duração>" (apimode.go) seta OverloadGroupOverride em memória
+	// pra pinar toda a carga gerada nesta invocação num grupo só -- fora isso, fica nil/0 como
+	// sempre foi.
 	req := &pb.ClientRequest{
 		RequestId: &pb.RequestID{
 			ClientId: c.ownClientID,
 			ClientSn: seqNr,
 		},
-		Payload:       payload,
-		Signature:     nil,
-		GroupId:       0,          // Sempre 0 - servidor vai setar
-		TouchedGroups: nil,        // Sempre nil - servidor vai calcular
+		Payload:   payload,
+		Signature: nil,
+	}
+	if ov := config.Config.OverloadGroupOverride; ov != nil {
+		req.GroupId = *ov
+		req.TouchedGroups = []uint32{*ov}
 	}
 
 	// ALWAYS sign fresh (never reuse precomputed signatures)
@@ -333,6 +417,20 @@ func (c *client) Run(wg *sync.WaitGroup) {
 		// Returns a wait group waiting for all the handlers to finish.
 		responseHandlerWG = c.startResponseHandlers()
 
+		// Wait for first bucket assignment before submitting -- movido pra ANTES do timer de
+		// ClientRunTime ser armado (ver abaixo), porque a fase de semeadura do modo
+		// "overload --api" (seedAPIWorkingSet) precisa rodar antes do timer começar a contar,
+		// senão consumiria parte da duração pedida pelo usuário em vez de só a fase medida.
+		<-c.bucketAssignmentReady
+		c.log.Info().Msg("Bucket assignment ready.")
+
+		// Fase de semeadura do modo "overload --api" (ver createAPIPayload) -- sem efeito
+		// (startSeqNr fica 0, igual sempre foi) quando ApiWorkingSetSize não está configurado.
+		startSeqNr := int32(0)
+		if config.Config.ApiWorkingSetSize > 0 {
+			startSeqNr = c.seedAPIWorkingSet()
+		}
+
 		// Make client stop after a predefined time, if configured
 		if config.Config.ClientRunTime != 0 {
 			c.log.Info().Int("clientRunTime", config.Config.ClientRunTime).Msg("Setting up client timeout.")
@@ -344,17 +442,16 @@ func (c *client) Run(wg *sync.WaitGroup) {
 
 		c.log.Info().Int("numRequests", c.numRequests).Msg("Starting to submit requests.")
 
-		// Wait for first bucket assignment before submitting
-		<-c.bucketAssignmentReady
-		c.log.Info().Msg("Bucket assignment ready, starting submissions.")
-
 		timeBetweenRequests := int64(1000000 / config.Config.RequestRate)
 		nextSubmitTime := time.Now().UnixNano() / 1000 // Submit first request immediately
 
 		// Submit requests
 		// numRequests == 0 means unlimited: only the ClientRunTime timer stops the client.
+		// i começa em startSeqNr (não 0) pra continuar o ClientSn de onde a semeadura parou,
+		// sem reenviar os mesmos números de sequência (e sem createAPIPayload reinterpretar
+		// essas requisições como semeadura de novo -- ela só semeia enquanto seqNr < N).
 		var i int32
-		for i = int32(0); (c.numRequests == 0 || i < int32(c.numRequests)) && atomic.LoadInt32(&c.stop) == 0; i++ {
+		for i = startSeqNr; (c.numRequests == 0 || i < startSeqNr+int32(c.numRequests)) && atomic.LoadInt32(&c.stop) == 0; i++ {
 
 			if config.Config.RequestRate != -1 {
 				now := time.Now().UnixNano() / 1000
@@ -444,6 +541,41 @@ func (c *client) Run(wg *sync.WaitGroup) {
 
 	// Close log file.
 	_ = c.logFile.Close()
+}
+
+// seedAPIWorkingSet roda a fase de semeadura do modo "overload --api" (ver createAPIPayload):
+// manda ApiWorkingSetSize requisições APIPUT (ClientSn 0..N-1) o mais rápido possível -- sem
+// limite de rate, só o watermark window que submitRequest já respeita sozinho (canal
+// bufferizado, bloqueia quando cheio) -- e espera todas serem confirmadas antes de devolver.
+// Roda ANTES do timer de ClientRunTime ser armado (ver Run()), então não consome a duração
+// pedida pelo usuário -- só a fase medida (que começa logo depois, com ClientSn continuando
+// de N em diante) conta pro throughput/latência reportados. Devolve N, pro chamador saber de
+// onde continuar o ClientSn.
+func (c *client) seedAPIWorkingSet() int32 {
+	n := int32(config.Config.ApiWorkingSetSize)
+	c.log.Info().Int32("workingSetSize", n).Msg("Seeding API working set before measured phase.")
+	for i := int32(0); i < n; i++ {
+		c.submitRequest(i)
+	}
+	// Espera a semeadura comitar de verdade antes da fase medida começar -- sem isso, GETs no
+	// início da fase medida podiam cair em chaves ainda não aplicadas (found=false por atraso
+	// de rede/consenso, não por nunca terem sido escritas).
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		c.Lock()
+		pending := len(c.submittedTo)
+		c.Unlock()
+		if pending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			c.log.Warn().Int("pending", pending).Msg("Seeding deadline reached with pending requests.")
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	c.log.Info().Int32("workingSetSize", n).Msg("Seeding complete.")
+	return n
 }
 
 // Starts all request-sending threads and saves their corresponding input channels in c.reqSinks.

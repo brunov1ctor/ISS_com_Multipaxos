@@ -3,8 +3,10 @@
 package orderer
 
 import (
+	"encoding/base64"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"github.com/hyperledger-labs/mirbft/config"
@@ -164,18 +166,30 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			o.seq.HandleHeartbeat(payload, pm.SenderId)
 			return
 		}
-		// CSMR Output Processing: COMMIT_NOTIFY_BATCH from group replica back to proxy
+		// CSMR Output Processing: COMMIT_NOTIFY_BATCH from group replica back to proxy. Cada
+		// entrada é "clientId,clientSn" (legado, nunca mudou) ou, pra requisições da API de
+		// cliente (ver orderer/statemachine.go), "clientId,clientSn,valorBase64,found,erroBase64"
+		// -- mesmo canal de texto de sempre, só com campos extras opcionais por entrada.
 		if strings.HasPrefix(payload, "SYSTEM:COMMIT_NOTIFY_BATCH:") {
-			// Format: "SYSTEM:COMMIT_NOTIFY_BATCH:orderSn:clientId,clientSn:clientId,clientSn:..."
-			parts := strings.SplitN(payload, ":", 4) // ["SYSTEM", "COMMIT_NOTIFY_BATCH", "orderSn", "id,sn:id,sn:..."]
+			// Format: "SYSTEM:COMMIT_NOTIFY_BATCH:orderSn:entry:entry:..."
+			parts := strings.SplitN(payload, ":", 4)
 			if len(parts) >= 4 {
 				var orderSn int32
 				fmt.Sscanf(parts[2], "%d", &orderSn)
 				entries := strings.Split(parts[3], ":")
 				for _, entry := range entries {
-					var clientId, clientSn int32
-					if n, _ := fmt.Sscanf(entry, "%d,%d", &clientId, &clientSn); n == 2 {
-						o.handleCommitNotify(clientId, clientSn, orderSn)
+					fields := strings.Split(entry, ",")
+					if len(fields) < 2 { continue }
+					clientId64, err1 := strconv.ParseInt(fields[0], 10, 32)
+					clientSn64, err2 := strconv.ParseInt(fields[1], 10, 32)
+					if err1 != nil || err2 != nil { continue }
+					clientId, clientSn := int32(clientId64), int32(clientSn64)
+					if len(fields) >= 5 {
+						value, _ := base64.StdEncoding.DecodeString(fields[2])
+						errBytes, _ := base64.StdEncoding.DecodeString(fields[4])
+						o.handleCommitNotify(clientId, clientSn, orderSn, value, fields[3] == "1", string(errBytes))
+					} else {
+						o.handleCommitNotify(clientId, clientSn, orderSn, nil, false, "")
 					}
 				}
 			}
@@ -185,7 +199,7 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		if strings.HasPrefix(payload, "SYSTEM:COMMIT_NOTIFY:") {
 			var clientId, clientSn, orderSn int32
 			if n, _ := fmt.Sscanf(payload, "SYSTEM:COMMIT_NOTIFY:%d:%d:%d", &clientId, &clientSn, &orderSn); n == 3 {
-				o.handleCommitNotify(clientId, clientSn, orderSn)
+				o.handleCommitNotify(clientId, clientSn, orderSn, nil, false, "")
 			}
 			return
 		}
@@ -267,13 +281,15 @@ func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID 
 	}
 }
 
-// CSMR Output Processing: handle COMMIT_NOTIFY from group replicas
-func (o *MultiPaxosMulticastOrderer) handleCommitNotify(clientId, clientSn, orderSn int32) {
+// CSMR Output Processing: handle COMMIT_NOTIFY from group replicas. value/found/errStr vêm
+// vazios (nil/false/"") pro tráfego de benchmark legado; só a API de cliente (ver
+// orderer/statemachine.go) preenche eles de verdade.
+func (o *MultiPaxosMulticastOrderer) handleCommitNotify(clientId, clientSn, orderSn int32, value []byte, found bool, errStr string) {
 	key := fmt.Sprintf("%d:%d", clientId, clientSn)
 	if _, loaded := o.proxyPending.LoadAndDelete(key); loaded {
 		messenger.RespondToClient(clientId, &pb.ClientResponse{
-			OrderSn:  orderSn,
-			ClientSn: clientSn,
+			OrderSn: orderSn, ClientSn: clientSn,
+			Value: value, Found: found, Error: errStr,
 		})
 		tracing.MainTrace.Event(tracing.RESP_SEND, int64(clientId), int64(clientSn))
 	}
@@ -282,7 +298,12 @@ func (o *MultiPaxosMulticastOrderer) handleCommitNotify(clientId, clientSn, orde
 // CSMR Output Processing: called by group orderer after commit to notify proxy.
 // Sends ONE batched COMMIT_NOTIFY per commit (not per request).
 // Only sends to peers if the proxy is NOT a member of this group.
-func (o *MultiPaxosMulticastOrderer) NotifyProxy(batch *pb.Batch, sn int32) {
+//
+// results é opcional (nil no caminho de benchmark legado, chamado de o.announce): quando
+// presente (vindo de orderer.ApplyBatch via applyEntryInOrder, chaveado por
+// reqKey(clientId,clientSn)), carrega o valor real de cada requisição da API de cliente, e é
+// isso que diferencia uma resposta de verdade de um simples ack de posição de ordem.
+func (o *MultiPaxosMulticastOrderer) NotifyProxy(batch *pb.Batch, sn int32, results map[int64]*pb.ClientResponse) {
 	if batch == nil { return }
 
 	// Determine which group this batch belongs to
@@ -311,17 +332,35 @@ func (o *MultiPaxosMulticastOrderer) NotifyProxy(batch *pb.Batch, sn int32) {
 		}
 	}
 
-	// Handle local proxy responses
-	for _, k := range localKeys {
-		o.handleCommitNotify(k.clientId, k.clientSn, sn)
+	resultFor := func(clientId, clientSn int32) (value []byte, found bool, errStr string) {
+		if results == nil { return nil, false, "" }
+		if r, ok := results[reqKey(clientId, clientSn)]; ok {
+			return r.Value, r.Found, r.Error
+		}
+		return nil, false, ""
 	}
 
-	// Send ONE batched COMMIT_NOTIFY to all peers (instead of N messages)
+	// Handle local proxy responses
+	for _, k := range localKeys {
+		value, found, errStr := resultFor(k.clientId, k.clientSn)
+		o.handleCommitNotify(k.clientId, k.clientSn, sn, value, found, errStr)
+	}
+
+	// Send ONE batched COMMIT_NOTIFY to all peers (instead of N messages). Cada entrada é só
+	// "clientId,clientSn" (igual sempre foi) quando não há valor real; ganha 3 campos extras
+	// em base64 (valor, found, erro) quando há -- ver parsing em HandleMessage.
 	if len(remoteReqs) > 0 {
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "SYSTEM:COMMIT_NOTIFY_BATCH:%d", sn)
 		for _, rid := range remoteReqs {
-			fmt.Fprintf(&sb, ":%d,%d", rid.ClientId, rid.ClientSn)
+			value, found, errStr := resultFor(rid.ClientId, rid.ClientSn)
+			if results != nil {
+				fmt.Fprintf(&sb, ":%d,%d,%s,%d,%s", rid.ClientId, rid.ClientSn,
+					base64.StdEncoding.EncodeToString(value), boolToInt(found),
+					base64.StdEncoding.EncodeToString([]byte(errStr)))
+			} else {
+				fmt.Fprintf(&sb, ":%d,%d", rid.ClientId, rid.ClientSn)
+			}
 		}
 		notifyPayload := sb.String()
 		for _, nodeID := range membership.AllNodeIDs() {
@@ -364,7 +403,58 @@ func (o *MultiPaxosMulticastOrderer) HandleEntry(entry *log.Entry) {
 
 
 
+func containsUint32(list []uint32, v uint32) bool {
+	for _, x := range list { if x == v { return true } }
+	return false
+}
+
+func boolToInt(b bool) int {
+	if b { return 1 }
+	return 0
+}
+
+// topologyDump monta o texto que "orderingclient ls" imprime: todo nó conhecido (com seu
+// endereço, via membership -- preenchido no handshake de discovery, igual pra todo mundo) e
+// todo grupo definido (groups.yml, carregado uma vez no Start() -- ver o.am), com seus membros.
+// Puramente informativo: lê só estado local já carregado neste nó, nunca entra em consenso.
+func (o *MultiPaxosMulticastOrderer) topologyDump() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Orderer: %s\n\n", config.Config.Orderer)
+
+	fmt.Fprintf(&b, "Nos (%d):\n", len(membership.AllNodeIDs()))
+	for _, id := range membership.AllNodeIDs() {
+		if ni := membership.NodeIdentity(id); ni != nil {
+			fmt.Fprintf(&b, "  Node %d: %s (privado %s)\n", id, ni.PublicAddr, ni.PrivateAddr)
+		} else {
+			fmt.Fprintf(&b, "  Node %d\n", id)
+		}
+	}
+
+	fmt.Fprintf(&b, "\nGrupos (%d):\n", len(o.am.GetDefinedGroups()))
+	for _, gid := range o.am.GetDefinedGroups() {
+		label := "dados"
+		if gid == 0 {
+			label = "sequenciador GSN"
+		}
+		fmt.Fprintf(&b, "  G%d (%s): membros %v\n", gid, label, o.am.GetGroupMembers(gid))
+	}
+	return b.String()
+}
+
 func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bool {
+	// "orderingclient ls": consulta de topologia, não é operação da máquina de estados -- não
+	// precisa de consenso nenhum (todo orderer já carregou o MESMO groups.yml estático no
+	// início, não é estado replicado que muda). Respondida direto por QUALQUER nó que receber
+	// (o proxy escolhido por round-robin, igual qualquer outro comando), sem passar por
+	// sendToGroup/ReplicaMapper -- só esse nó bate e volta.
+	if string(req.Payload) == "APILIST" && req.GetRequestId() != nil {
+		messenger.RespondToClient(req.RequestId.ClientId, &pb.ClientResponse{
+			ClientSn: req.RequestId.ClientSn,
+			Value:    []byte(o.topologyDump()),
+			Found:    true,
+		})
+		return true
+	}
 	// System messages bypass preprocessor
 	if strings.HasPrefix(string(req.Payload), SYSTEM_GSN_REQUEST) || strings.HasPrefix(string(req.Payload), SYSTEM_META_STREAM) {
 		return request.AddSystemMessage(req)
@@ -385,6 +475,21 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 
 	// Block other SYSTEM messages
 	if strings.HasPrefix(string(req.Payload), "SYSTEM:") { return true }
+
+	// API de cliente: se o cliente já escolheu os grupos explicitamente (TouchedGroups
+	// preenchido antes de chegar aqui), valida que todos existem de verdade antes de
+	// registrar o proxy -- nada disso roda pro caminho de benchmark existente, que sempre
+	// chega aqui com TouchedGroups vazio.
+	if len(req.TouchedGroups) > 0 {
+		defined := o.am.GetDefinedGroups()
+		for _, g := range req.TouchedGroups {
+			if g == 0 || !containsUint32(defined, g) {
+				logger.Error().Uint32("groupId", g).Int32("clientId", req.RequestId.ClientId).
+					Msg("PreprocessRequest: rejeitando grupo nao definido escolhido pelo cliente")
+				return true
+			}
+		}
+	}
 
 	// CSMR: Register this node as proxy for this request (Output Processing)
 	key := fmt.Sprintf("%d:%d", req.RequestId.ClientId, req.RequestId.ClientSn)

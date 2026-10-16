@@ -9,7 +9,19 @@ from collections import defaultdict
 # (ClientDrainTime) = 90s; 180s da uma folga de 2x sobre isso. Reduzido de 480000ms apos analise
 # mostrar que o overhead real de coordenacao do master ~dobra esse valor (~16min reais por falha
 # com o valor antigo), custando horas de sweep desnecessariamente em experimentos ja saturados.
+# NAO USADO MAIS no fluxo principal (ver EXPERIMENT_IDLE_TIMEOUT) -- generateCommands parou de
+# chamar runClients() (deploy nao sobe cliente nenhum sozinho). Mantido porque runClients() ainda
+# existe no arquivo (sem uso), caso algum fluxo antigo precise ser restaurado.
 CLIENT_TIMEOUT = 180000  # ms
+
+# Quanto tempo o cluster (so os peers) fica de pe, no ar, depois do deploy, esperando comandos
+# manuais ("orderingclient api ... put/get/transfer/overload", rodado a qualquer momento de
+# qualquer no) -- antes do teardown automatico (stopPeers/unsetBandwidth/saveConfig) disparar
+# sozinho. Formato aceito por "wait for <duracao>": qualquer coisa parseavel por
+# time.ParseDuration (discovery/master.go:227-251) -- ex. "2h", "90m". Ajuste aqui se precisar de
+# mais (ou menos) tempo numa campanha especifica; nao ha como estender depois de iniciado sem
+# reemitir os comandos do master.
+EXPERIMENT_IDLE_TIMEOUT = os.environ.get("ISS_EXPERIMENT_IDLE_TIMEOUT", "4h")
 SIGNAL_DELAY = "5s"
 STOP_SLAVES_DELAY_MS = 5000  # exec-wait timeout for pkill (pkill exit=1 when no match is OK)
 SCP_RETRY_COUNT = "10"
@@ -143,6 +155,26 @@ def pushConfigFiles(expID, slaves):
         output("sync {0}".format(s))
     output("")
 
+def writeMasterAddrFile(slaves):
+    """Escreve o endereço do discoverymaster num caminho fixo em todo slave
+    ($BASE_DIR/config/master-addr) -- é o que "orderingclient <verbo> ..." lê sozinho (ver
+    cmd/orderingclient/main.go:resolveConfigAddr) quando você roda sem passar config/addr na
+    mão, de dentro de um nó já deployado. Mesma substituição $own_public_ip:$master_port que
+    startPeers já usa. SEM shell/redirecionamento (">"): o parser do master quebra a linha só
+    por espaço (strings.Fields em discovery/master.go), sem suporte a aspas -- "sh -c "..."
+    quebraria em pedaços errados. Em vez disso reaproveita o jeito que exec-start já redireciona
+    stdout pro <outputFile> (2º campo, mesma mecânica de peer.log/clients.log): "echo <addr>"
+    com outputFile = o arquivo final grava o endereço ali direto, sem shell nenhum."""
+    output("# write master address file (p/ orderingclient resolver config/addr sozinho)")
+    for s in slaves:
+        output(
+            "exec-start {0} {1}/config/master-addr echo $own_public_ip:$master_port"
+            .format(s, BASE_DIR)
+        )
+    for s in slaves:
+        output("exec-wait {0} {1}".format(s, FS_SETTLE_DELAY_MS))
+    output("")
+
 def snapshotConfigNow(expID, slaves):
     output("# snapshot config (per-run)")
     for s in slaves:
@@ -265,6 +297,10 @@ def startPeers(expID, peers):
     output("")
 
 def runClients(expID, clients):
+    """NAO CHAMADA por generateCommands (ver waitForManualCommands) -- deploy nao sobe mais
+    cliente nenhum sozinho; quem gera trafego agora e' "orderingclient api ... overload/put/get",
+    rodado manualmente de qualquer no, a qualquer momento, enquanto o cluster esta de pe. Mantida
+    sem uso pra nao perder a referencia caso precise voltar ao fluxo antigo."""
     output("# run clients")
     for c in clients:
         output(
@@ -280,6 +316,16 @@ def runClients(expID, clients):
             "exec-start {0} {1}/FAILED echo Client failed or timed out; "
             "exec-wait {0} {3}".format(c, _exp_slave_dir(expID), timeout, FS_SETTLE_DELAY_MS)
         )
+    output("")
+
+def waitForManualCommands():
+    """Substitui runClients() no fluxo principal: deploy sobe so os peers (o sistema) e o
+    cluster fica de pe por EXPERIMENT_IDLE_TIMEOUT, esperando comandos manuais
+    ("orderingclient api ... put/get/transfer/overload", de qualquer no, a qualquer momento) --
+    sem nenhum processo de cliente atrelado. "wait for <duracao>" e' um sleep puro do lado do
+    master (discovery/master.go:227-251), nao depende de nenhum slave/processo em execucao."""
+    output("# cluster de pe, esperando comandos manuais (orderingclient api ...)")
+    output("wait for {0}".format(EXPERIMENT_IDLE_TIMEOUT))
     output("")
 
 def stopPeers(peers):
@@ -348,13 +394,14 @@ def generateCommands(expID, peers, clients):
 
     ensureConfigDir(slaves)
     pushConfigFiles(expID, configFiles)
+    writeMasterAddrFile(slaves)
     snapshotConfigNow(expID, slaves)
 
     ensureTlsDataLink(expID, slaves)
 
     setBandwidth(expID, bandwidths)
     startPeers(expID, list(peers))
-    runClients(expID, list(clients))
+    waitForManualCommands()
     stopPeers(list(peers))
     unsetBandwidth(expID, bandwidths)
 

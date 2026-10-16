@@ -5,3 +5,7 @@
 *.coverprofile
 *.tmp
 .idea
+
+# deployment/scripts tem .py (generate-master-commands.py) -- py_compile gera isso ao validar
+__pycache__/
+*.pyc

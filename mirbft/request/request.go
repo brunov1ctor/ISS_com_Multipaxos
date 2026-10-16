@@ -343,6 +343,15 @@ func ReplicaMapper(payload []byte) []uint32 {
 			return []uint32{1}
 		}
 		return keysToGroups(strings.Split(parts[1], ","))
+	// Verbos da API de cliente (clientlib, ver request/command.go), só usados quando o
+	// cliente NÃO escolheu grupo explicitamente (TouchedGroups vazio) -- mesmo mapeamento
+	// por hash que GET/PUT/TX já usam. APITRANSFER não entra aqui: sempre vem com
+	// TouchedGroups explícito (ver clientlib.Transfer), nunca depende do hash automático.
+	case "APIPUT", "APIGET", "APIDELETE":
+		if len(parts) < 2 {
+			return []uint32{1}
+		}
+		return []uint32{keyToGroup(parts[1])}
 	default:
 		return []uint32{1}
 	}

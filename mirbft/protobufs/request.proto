@@ -17,6 +17,9 @@ message ClientRequest {
 message ClientResponse {
     int32 client_sn = 1;
     int32 order_sn = 2;
+    bytes value = 3; // Real result payload (e.g. GET's stored value). Empty for legacy benchmark traffic.
+    bool found = 4;  // GET: whether the key existed.
+    string error = 5; // Non-empty on an application-level error (e.g. unknown group).
 }
 
 message RequestID {
