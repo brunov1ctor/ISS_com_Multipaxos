@@ -74,6 +74,11 @@ class SimState:
         self.group_last_checkpoint_sn: dict[int, int] = {}
         # META stream: historico de publicacoes GSN -> grupos
         self.meta_stream: list[dict] = []  # [{gsn, groups, published_by}]
+        # GroupState.data da API de cliente (ver orderer/statemachine.go) -- UM mapa chave->valor
+        # POR GRUPO, aplicado só depois do commit (phase_commit_notify), nunca antes. Separado de
+        # group_commit_count/checkpoints: aquilo é o LOG (quantos SNs já comitaram), isto é a
+        # MÁQUINA DE ESTADOS (o que os APIPUT/APITRANSFER já commitados gravaram).
+        self.group_kv: dict[int, dict[str, str]] = {}
 
     def _init_control(self):
         # Ticks da simulação que de fato avançaram (não conta enquanto pausada):
@@ -158,6 +163,15 @@ class SimState:
         # Visual flash events: paineis consomem para gerar efeitos
         # [{"type": "bucket_in"|"batch_cut"|"commit", "bucket": int, "sn": int, "ttl": int}]
         self.visual_events: list[dict] = []
+        # Overload (ver tick.py:handle_overload_command) -- fiel ao sistema real: o deploy só
+        # sobe o sistema, NINGUÉM gera tráfego sozinho até "overload" ser digitado. Enquanto
+        # overload_active for False, _spawn_requests não gera nada (nem GET nem TX
+        # automáticos) -- dar play só avança o protocolo das instâncias já abertas, não cria
+        # pedido novo nenhum.
+        self.overload_active: bool = False
+        self.overload_group_override: int | None = None  # grupo pinado, ou None = "all"/hash
+        self.overload_label: str = ""       # o que foi digitado (ex. "all", "1", "multipaxos")
+        self.overload_end_tick: int = 0     # tick em que desliga sozinho (duração expirou)
 
     def rebuild_managers(self):
         """(Re)cria os managers do protocolo com base na topologia atual."""

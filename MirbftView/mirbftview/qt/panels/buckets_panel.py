@@ -275,10 +275,13 @@ class BucketsPanel(QWidget):
                 pulse = max(pulse, 1 - t)
 
         # Contador do BatchTimeout ao lado do badge: só na visão do LÍDER do grupo dono, enquanto
-        # o CutBatch espera pedidos (some quando o batch é cortado).
+        # o CutBatch espera pedidos (some quando o batch é cortado) -- E só quando tem pelo
+        # menos 1 pedido de verdade na fila (_wait_queued > 0). Sem isso, com bucket vazio, o
+        # relógio ficava rodando e resetando pra sempre (nunca corta nada mesmo), dando a
+        # impressão enganosa de que algo estava prestes a acontecer.
         inst = self.sim.instances.get(owner)
         if (member and inst is not None and inst.leader == nid and inst.phase == Phase.BATCH_CUT
-                and getattr(inst, "_waiting", False)):
+                and getattr(inst, "_waiting", False) and getattr(inst, "_wait_queued", 0) > 0):
             limit = getattr(inst, "_wait_limit", 0) or 1
             left = max(limit - getattr(inst, "_wait_elapsed", 0.0), 0) / TICKS_PER_SEC
             p.setPen(QColor(C["gold"]))

@@ -7,6 +7,7 @@ from mirbftview.qt.panels.commit_chain_panel import CommitChainPanel
 from mirbftview.qt.panels.event_log_panel import EventLogPanel
 from mirbftview.qt.panels.global_order_panel import GlobalOrderPanel
 from mirbftview.qt.panels.sn_table_panel import SnTablePanel
+from mirbftview.qt.panels.group_state_panel import GroupStatePanel
 
 __all__ = [
     "InfoPanel",
@@ -16,4 +17,5 @@ __all__ = [
     "EventLogPanel",
     "GlobalOrderPanel",
     "SnTablePanel",
+    "GroupStatePanel",
 ]
