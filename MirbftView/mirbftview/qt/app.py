@@ -11,10 +11,16 @@ from PySide6.QtGui import QResizeEvent
 from mirbftview.qt.theme import STYLESHEET, C
 from mirbftview.qt.widgets import GlassPanel, AmbientBackground
 from mirbftview.qt.canvas import NetworkCanvas
-from mirbftview.qt.panels import InfoPanel, BucketsPanel, ExecutionPanel, CommitChainPanel, EventLogPanel, GlobalOrderPanel
+from mirbftview.qt.panels import InfoPanel, BucketsPanel, ExecutionPanel, CommitChainPanel, EventLogPanel, GroupStatePanel
 from mirbftview.qt.config_panel import ConfigPanel
 from mirbftview.qt.control_bar import ControlBar
 from mirbftview.qt.simulation import Simulation
+
+# Todo divisor de splitter (vertical ou horizontal) usa o MESMO estilo invisível em toda a
+# janela -- antes alguns usavam uma barra branca semi-opaca (rgba(255,255,255,20)) e outros
+# já eram transparentes, inconsistente e visualmente ruidoso. Arraste continua funcionando
+# igual (o handle existe, só não é pintado).
+_TRANSPARENT_SPLITTER_QSS = "QSplitter{background:transparent;} QSplitter::handle{background:transparent;}"
 
 
 class MirBFTViewWindow(QMainWindow):
@@ -50,7 +56,7 @@ class MirBFTViewWindow(QMainWindow):
         # ── Middle: Graph + Info panels ───────────────────────────────────────
         h_splitter = QSplitter(Qt.Horizontal)
         h_splitter.setHandleWidth(6)
-        h_splitter.setStyleSheet("QSplitter{background:transparent;} QSplitter::handle{background:transparent;}")
+        h_splitter.setStyleSheet(_TRANSPARENT_SPLITTER_QSS)
 
         # Left: Network graph with config overlay
         graph_shell = GlassPanel(radius=16, border_opacity=40)
@@ -90,22 +96,50 @@ class MirBFTViewWindow(QMainWindow):
         log_inner.addWidget(log_scroll)
         self._log_shell.setVisible(False)
 
-        h_splitter.addWidget(graph_shell)
+        # Esquerda = UM splitter vertical só: canvas em cima, Cadeia de Commits embaixo --
+        # assim a borda esquerda/direita da Cadeia de Commits segue a MESMA largura do canvas
+        # por construção (é o mesmo widget), não duas larguras calculadas separadamente que
+        # podiam (e ficavam) desalinhadas.
+        left_v_splitter = QSplitter(Qt.Vertical)
+        left_v_splitter.setHandleWidth(5)
+        left_v_splitter.setStyleSheet(_TRANSPARENT_SPLITTER_QSS)
+        left_v_splitter.addWidget(graph_shell)
+
+        self._commit_chain = CommitChainPanel(self.sim)
+        self._commit_chain.setMinimumHeight(60)
+        self._commit_chain.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        left_v_splitter.addWidget(self._commit_chain)
+        left_v_splitter.setSizes([600, 120])
+        left_v_splitter.setStretchFactor(0, 5)
+        left_v_splitter.setStretchFactor(1, 1)
+
+        h_splitter.addWidget(left_v_splitter)
         self._graph_shell = graph_shell
 
-        # Right: Info panels in vertical splitter
+        # Direita = UM splitter vertical só: os painéis de sempre em cima, GroupState.data
+        # embaixo -- mesma ideia, a borda segue a largura da coluna direita por construção.
         right_splitter = QSplitter(Qt.Vertical)
         right_splitter.setHandleWidth(5)
-        right_splitter.setStyleSheet("QSplitter{background:transparent;} QSplitter::handle{background:rgba(255,255,255,20); border-radius:2px;}")
+        right_splitter.setStyleSheet(_TRANSPARENT_SPLITTER_QSS)
         right_splitter.setMinimumWidth(240)
 
         right_splitter.addWidget(self._wrap(InfoPanel(self.sim)))
         right_splitter.addWidget(self._wrap(ExecutionPanel(self.sim), scrollable=True))
         right_splitter.addWidget(self._wrap(BucketsPanel(self.sim), scrollable=True))
-        right_splitter.setSizes([200, 200, 150])
+
+        # GroupStatePanel no lugar do antigo GlobalOrderPanel (ADeliver) neste slot -- a pedido,
+        # o que fica visível por padrão agora é o dado de verdade que put/get/transfer grava
+        # (GroupState.data), não o mecanismo de entrega cross-group. GlobalOrderPanel continua
+        # existindo (global_order_panel.py), só não está mais aqui.
+        self._group_state = GroupStatePanel(self.sim)
+        self._group_state.setMinimumHeight(60)
+        right_splitter.addWidget(self._group_state)
+
+        right_splitter.setSizes([200, 200, 150, 120])
         right_splitter.setStretchFactor(0, 2)
         right_splitter.setStretchFactor(1, 2)
         right_splitter.setStretchFactor(2, 1)
+        right_splitter.setStretchFactor(3, 1)
 
         h_splitter.addWidget(right_splitter)
 
@@ -113,34 +147,7 @@ class MirBFTViewWindow(QMainWindow):
         h_splitter.setStretchFactor(0, 3)
         h_splitter.setStretchFactor(1, 1)
 
-        # ── Vertical splitter: middle area + bottom commit chain ──────────────
-        v_splitter = QSplitter(Qt.Vertical)
-        v_splitter.setHandleWidth(5)
-        v_splitter.setStyleSheet("QSplitter{background:transparent;} QSplitter::handle{background:rgba(255,255,255,20); border-radius:2px;}")
-        v_splitter.addWidget(h_splitter)
-
-        self._commit_chain = CommitChainPanel(self.sim)
-        self._commit_chain.setMinimumHeight(60)
-        self._commit_chain.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-
-        self._global_order = GlobalOrderPanel(self.sim)
-        self._global_order.setMinimumHeight(60)
-        self._global_order.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-
-        # Bottom: commit chain + global order side by side
-        bottom_splitter = QSplitter(Qt.Horizontal)
-        bottom_splitter.setHandleWidth(5)
-        bottom_splitter.setStyleSheet("QSplitter{background:transparent;} QSplitter::handle{background:rgba(255,255,255,20); border-radius:2px;}")
-        bottom_splitter.addWidget(self._commit_chain)
-        bottom_splitter.addWidget(self._global_order)
-        bottom_splitter.setSizes([460, 380])
-
-        v_splitter.addWidget(bottom_splitter)
-
-        v_splitter.setSizes([600, 120])
-        v_splitter.setStretchFactor(0, 5)
-        v_splitter.setStretchFactor(1, 1)
-        root.addWidget(v_splitter, 1)
+        root.addWidget(h_splitter, 1)
 
         # Refresh timer
         self._tl_timer = QTimer(self)

@@ -106,6 +106,11 @@ class Simulation:
     @property
     def group_commit_count(self): return self._st.group_commit_count
 
+    # GroupState.data por grupo (API de cliente -- ver orderer/statemachine.go), exposto pro
+    # GroupStatePanel
+    @property
+    def group_kv(self): return self._st.group_kv
+
     # Epoch manager exposto para painéis
     @property
     def epoch_mgr(self): return self._st.epoch_mgr
@@ -186,6 +191,38 @@ class Simulation:
 
     def tick(self):
         _tick(self._st)
+
+    def inject_client_command(self, client_id: int, raw_text: str) -> str:
+        """Comando manual digitado na bolinha de um cliente (ver NetworkCanvas, duplo-clique).
+        Devolve "" em caso de sucesso, ou uma mensagem de erro pra mostrar na UI."""
+        from mirbftview.engine.tick import inject_client_command as _inject
+        return _inject(self._st, client_id, raw_text)
+
+    def handle_overload_command(self, raw_text: str):
+        """"overload <protocolo|grupo> <duração>" -- liga a geração automática de GET/TX por um
+        tempo (ver tick.py:handle_overload_command). Devolve (linhas, erro); (None, None) se
+        raw_text não é um comando overload."""
+        from mirbftview.engine.tick import handle_overload_command as _overload
+        return _overload(self._st, raw_text)
+
+    @property
+    def overload_active(self) -> bool:
+        return self._st.overload_active
+
+    def simulate_api_response(self, group_id: int, payload: str, result=None):
+        """O que "orderingclient put/get/delete/transfer" realmente imprimiria pra essa
+        resposta -- usado pro popup de inspeção da mensagem COMMIT_NOTIFY (ver NetworkCanvas).
+        `result`: ver tick.py:simulate_api_response (só importa pro APIDELETE). None se o
+        payload não é um comando da API (tráfego normal do benchmark)."""
+        from mirbftview.engine.tick import simulate_api_response as _sim
+        return _sim(self._st, group_id, payload, result)
+
+    def local_command_output(self, raw_text: str):
+        """"ls"/"help" digitados no campo de comando -- não entram no pipeline de protocolo
+        (não existem na vida real como tal: "help" não conecta, "ls" não usa consenso). Devolve
+        as linhas de saída (lista de str) se raw_text é um desses, ou None senão."""
+        from mirbftview.engine.tick import local_command_output as _local
+        return _local(self._st, raw_text)
 
     # ─── Ações especiais ──────────────────────────────────────────────────
 

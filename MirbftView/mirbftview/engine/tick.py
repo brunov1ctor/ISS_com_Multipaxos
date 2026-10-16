@@ -59,6 +59,13 @@ def tick(st: SimState):
         return
     st.advance_flag = False
     st.tick_count += 1
+
+    # overload desliga sozinho quando a duração pedida expira -- mesma semântica do
+    # ClientRunTime/time.AfterFunc do Go (client.go), só que em ticks simulados.
+    if st.overload_active and st.tick_count >= st.overload_end_tick:
+        st.overload_active = False
+        st.info_text = f"overload {st.overload_label} terminou -- carga automática desligada."
+
     _advance_batch_timers(st)
     # Envelhece brilhos e balões dos buckets A CADA tick (não só ao fim de cada fase).
     _decay_visual_events(st)
@@ -143,10 +150,17 @@ def _advance_batch_timers(st: SimState):
     for inst in st.instances.values():
         if not (inst.phase == Phase.BATCH_CUT and getattr(inst, "_waiting", False)):
             continue
-        inst._wait_elapsed += dt * st.speed * phases.TICKS_PER_SEC
         singles, cross = phases._queued(st, inst.leader, st.epoch_mgr.buckets_of_group(inst.group_id))
         inst._wait_queued = singles + cross
         inst._wait_limit = st.batch_timeout_ticks
+        if inst._wait_queued == 0:
+            # Bucket vazio: não tem pedido nenhum esperando, então não tem cronômetro de
+            # verdade rodando -- fica zerado (e o painel nem desenha, ver buckets_panel.py)
+            # em vez de ficar contando e resetando pra sempre sem nunca cortar nada (ver
+            # try_cut: com singles=0 ele só zera _wait_elapsed e volta a esperar).
+            inst._wait_elapsed = 0.0
+            continue
+        inst._wait_elapsed += dt * st.speed * phases.TICKS_PER_SEC
         inst._wait_size = st.batch_size
 
 
@@ -252,10 +266,15 @@ def _spawn_batch(st: SimState):
 def _spawn_requests(st: SimState, new_messages: list):
     """Chegada de pedidos. Didático: um por vez (só quando o anterior foi respondido).
     Contínuo: `arrival_burst` pedidos a cada `arrival_every` rodadas, até `max_pending`
-    sem resposta, independente de as instâncias terem terminado (é isso que enche os buckets)."""
+    sem resposta, independente de as instâncias terem terminado (é isso que enche os buckets).
+
+    SÓ gera algo enquanto st.overload_active -- fiel ao sistema real: deploy sobe o sistema e
+    ele fica parado, nada de tráfego sozinho, até "overload <protocolo|grupo> <duração>" ser
+    digitado (ver handle_overload_command). Sem isso, dar play só anima o que já existe
+    (PREPARE/PROMISE das instâncias), não cria pedido novo nenhum."""
     from mirbftview.qt.canvas._constants import MSG_COLOR_POOL
 
-    if not st.instances or not st.prepared:
+    if not st.instances or not st.prepared or not st.overload_active:
         return
     pending = len(st.pending_info)
     in_flight = any(r.kind == "request" for r in st.active_requests)
@@ -328,8 +347,19 @@ def _advance_instance(st: SimState, req: RequestInfo):
         req.phase = Phase.BATCH_CUT
         req._waiting = True
         req._prepared_once = True
-        if all(getattr(i, '_prepared_once', False) for i in st.instances.values()):
+        if all(getattr(i, '_prepared_once', False) for i in st.instances.values()) and not st.prepared:
             st.prepared = True
+            # Fiel ao sistema real: o sistema subiu e está pronto, mas ocioso -- nada de
+            # tráfego sozinho até "overload" ou um put/get/transfer manual (ver
+            # _spawn_requests/handle_overload_command).
+            st.info_text = (
+                "Sistema pronto, esperando comandos.\n\n"
+                "Nada de tráfego acontece sozinho -- dê duplo-clique na bolinha de um "
+                "cliente e digite:\n"
+                "  overload all 30   -- liga carga sintética automática por 30s\n"
+                "  put chave valor    -- grava um valor de verdade\n"
+                "  ls / help          -- topologia / ajuda"
+            )
         phases.try_cut(st, req)
         return
 
@@ -526,6 +556,13 @@ def _generate_client_request(st: SimState, color: str) -> RequestInfo:
         payload = f"GET {k1}"
         touched = [key_to_group(k1, num_data_groups)]
 
+    # overload com grupo pinado (não "all"): força TouchedGroups pro grupo escolhido, GET ou
+    # TX tanto faz -- mesmo comportamento de config.Config.OverloadGroupOverride em
+    # createRequest() (client.go): quem pina ignora o hash, até pra TX (que vira single-group
+    # de fato, perde o cross-op -- ver a conversa sobre essa pegadinha).
+    if st.overload_active and st.overload_group_override is not None:
+        touched = [st.overload_group_override]
+
     is_cross = len(touched) > 1
     group_id = touched[0]
     group = st.groups[group_id]
@@ -554,6 +591,321 @@ def _generate_client_request(st: SimState, color: str) -> RequestInfo:
         st.gsn += 1
         req.gsn = st.gsn
     return req
+
+
+# Transcrição literal de cmd/orderingclient/apimode.go (printTopLevelHelp + apiUsage) -- mantida
+# em sincronia À MÃO com o texto real do Go (não dá pra importar Go daqui). Se o CLI real mudar,
+# atualizar aqui também. É o que "orderingclient help"/"-h"/"--help" simula no campo de comando.
+HELP_TEXT = """orderingclient -- cliente do sistema (MirBFT/ISS), dois modos:
+
+1) BENCHMARK (gerador de carga automático, sem comando na frente):
+   orderingclient <config_file> <discovery_addr:port> <out_file_prefix> [profiler_output_prefix]
+
+   Conecta, espera a 1a atribuição de bucket e começa a mandar tráfego sintético sozinho,
+   conforme RequestRate/CrossOpRatio/ClientRunTime etc. do config.yml. Ainda existe por causa
+   dos sweeps automatizados (generate-local-config.sh) e porque "overload" (abaixo) usa esse
+   MESMO motor por dentro -- no fluxo normal (deploy só sobe o sistema, fica esperando), você
+   usa "overload" em vez de chamar isso direto.
+
+2) COMANDOS (um processo por invocação, você decide quando rodar cada um):
+   orderingclient <comando> [config_file] [discovery_addr:port] [args...]
+
+   config/addr são OPCIONAIS rodando num nó que já participou de um deploy (ex. node-0): o
+   binário acha os dois sozinho em $ISS_BASE_DIR/config/config.yml e .../master-addr (escritos
+   pelo próprio deploy). Fora disso (ex. do seu laptop), digite os dois na mão, ou exporte
+   ORDERINGCLIENT_CONFIG/ORDERINGCLIENT_ADDR uma vez por sessão de terminal.
+
+uso: orderingclient <comando> [config_file] [discovery_addr:port] [args...]
+     (config/addr opcionais num nó já deployado -- ver acima; ou forma antiga:
+     orderingclient api <config_file> <discovery_addr:port> <comando> [args...])
+
+comandos:
+  help                                      -- mostra esta ajuda (tambem "-h"/"--help", ou so
+                                            -- "orderingclient" sozinho quando config/addr nao
+                                            -- resolvem sozinhos -- ver "repl" abaixo)
+  ls                                        -- mostra a topologia (nos conhecidos e grupos
+                                            -- definidos) -- so bate no proxy e volta, sem consenso
+  put [groupID] <key> <value>              -- grava value na key. Com groupID: nesse grupo
+                                            -- escolhido. Sem groupID: servidor escolhe por hash
+  get [groupID] <key>                      -- le key. Com groupID: desse grupo escolhido.
+                                            -- Sem groupID: servidor escolhe por hash
+  delete [groupID] <key>                   -- apaga key (idempotente -- nao e erro apagar
+                                            -- chave inexistente). Com/sem groupID: mesma
+                                            -- regra de put/get
+  transfer <fromGroup> <fromKey> <toGroup> <toKey> <amount>
+                                            -- move amount de fromKey (fromGroup) pra toKey (toGroup)
+  overload <protocolo|grupo> <duracaoSegundos> [--api <tamanhoConjunto> [--write <pct>]
+           [--delete <pct>]] [outPrefix]
+                                            -- liga o gerador de carga continua por
+                                            -- duracaoSegundos. <protocolo|grupo> aceita um nome
+                                            -- (multipaxos/pbft/hotstuff/raft/all) so como rotulo
+                                            -- de confirmacao contra o Orderer do config.yml, OU
+                                            -- um numero de grupo (MultiPaxosMulticast) pra pinar
+                                            -- toda a carga gerada nesse grupo.
+                                            -- Sem --api: payload sintetico de sempre (GET/TX,
+                                            -- RequestRate/CrossOpRatio do config.yml -- nunca
+                                            -- toca o estado real da API).
+                                            -- Com --api <N>: semeia N chaves de verdade
+                                            -- (APIPUT) ANTES de comecar a medir, depois GET
+                                            -- (padrao) / PUT (sobrescreve, --write <pct>) /
+                                            -- DELETE (--delete <pct>) so sobre essas N chaves
+                                            -- ja semeadas -- found=true garantido de verdade.
+  repl                                      -- conecta uma vez e fica lendo comando por comando
+                                            -- do terminal (ls/put/get/delete/transfer/overload/
+                                            -- exit),
+                                            -- reaproveitando a mesma conexao -- evita pagar o
+                                            -- handshake (discovery + TLS com todo orderer) a
+                                            -- cada comando, que o modo normal paga toda vez.
+                                            -- "orderingclient" sozinho (sem nenhum argumento) ja
+                                            -- entra direto no repl quando config/addr resolvem
+                                            -- sozinhos -- nao precisa nem digitar "repl".
+
+exemplos (de dentro de um nó já deployado -- config/addr resolvidos sozinhos):
+  orderingclient ls
+  orderingclient put 1 saldo:alice 100
+  orderingclient get 1 saldo:alice
+  orderingclient put pedido-42 "dados do pedido"
+  orderingclient delete 1 saldo:alice
+  orderingclient overload all 30
+  orderingclient overload 1 30 --api 10000 --delete 10   # carga real no G1, 10k chaves, 10% delete
+  orderingclient repl                           # vários comandos, uma conexão só
+  orderingclient                                # idem -- "repl" nem precisa ser digitado
+
+exemplos (de fora do Emulab, ou config/addr explícitos):
+  orderingclient config.yml 155.98.38.100:9999 ./out
+  orderingclient put config.yml 155.98.38.100:9999 1 saldo:alice 100"""
+
+
+def simulate_ls_output(st: SimState) -> list[str]:
+    """Mesmo formato de orderer/multipaxosmulticastorderer.go:topologyDump() -- o que
+    "orderingclient ls" devolve na vida real (nós conhecidos + grupos definidos, sem consenso,
+    só o proxy respondendo com o que já tem carregado localmente). Aqui, construído a partir do
+    estado da PRÓPRIA simulação (st.nodes/st.groups), não de uma rede de verdade."""
+    lines = ["Orderer: MultiPaxosMulticast", ""]
+    lines.append(f"Nos ({len(st.nodes)}):")
+    for n in st.nodes:
+        lines.append(f"  Node {n.id} (simulado)")
+    lines.append("")
+    lines.append(f"Grupos ({len(st.groups)}):")
+    for g in st.groups:
+        label = "sequenciador GSN" if g.id == 0 else "dados"
+        lines.append(f"  G{g.id} ({label}): membros {g.members}")
+    return lines
+
+
+def simulate_api_response(st: SimState, group_id: int, payload: str, result=None) -> list[str] | None:
+    """O que "orderingclient put/get/delete/transfer" REALMENTE imprimiria como resposta, pra
+    essa requisição -- usado só pra enriquecer o popup de inspeção da mensagem COMMIT_NOTIFY
+    (ver network_canvas.py:_msg_detail_lines), no lugar do "COMMITTED" genérico que não diz nada
+    do resultado de verdade. A aplicação em si já aconteceu antes (phase_commit_notify chama
+    _apply_committed_payload no momento do commit, bem antes dessa mensagem de resposta existir
+    e poder ser inspecionada) -- isto aqui só LÊ o que já foi gravado, não aplica nada de novo.
+    `result`: pro APIDELETE, o "existia antes de apagar" já calculado na hora do apply (ver
+    Message.api_snapshot/phase_commit_notify) -- depois de apagado não dá mais pra saber lendo
+    o mapa (a chave já não está lá de jeito nenhum, existindo ou não antes). Devolve None se o
+    payload não é um comando da API (tráfego normal do benchmark, GET/TX)."""
+    parts = payload.split(maxsplit=2) if payload else []
+    if not parts or not parts[0].startswith("API"):
+        return None
+    verb = parts[0]
+    kv = st.group_kv.get(group_id, {})
+    if verb == "APIPUT" and len(parts) == 3:
+        return [f'OK -- gravou {parts[1]!r} = {parts[2]!r} no G{group_id}']
+    if verb == "APIGET" and len(parts) == 2:
+        key = parts[1]
+        if key in kv:
+            return [f'found=true value="{kv[key]}"']
+        return ['found=false value=""']
+    if verb == "APIDELETE" and len(parts) == 2:
+        deleted = result if result is not None else (parts[1] in kv)
+        return [f"deleted={str(bool(deleted)).lower()}"]
+    if verb == "APITRANSFER":
+        fields = payload.split()
+        if len(fields) == 6:
+            _, fg, fk, tg, tk, amt = fields
+            return [f"OK -- transfer aplicado (G{fg}→G{tg}, valor {amt})"]
+    return [f"OK ({verb})"]
+
+
+def handle_overload_command(st: SimState, raw_text: str):
+    """"overload <protocolo|grupo> <duração>" digitado no campo de comando -- espelha
+    cmd/orderingclient/apimode.go:runOverload, mas aqui não dispara nenhum pedido na hora: só
+    LIGA st.overload_active por `duração` segundos simulados (convertidos em ticks via
+    TICKS_PER_SEC), o que faz _spawn_requests voltar a gerar GET/TX sozinho nesse intervalo --
+    desliga sozinho quando o tempo acaba (ver tick()). Diferente de ls/help (que só mostram
+    texto), overload muda estado de verdade, então NÃO passa por local_command_output.
+    Devolve (linhas, erro) -- exatamente um dos dois é None. (None, None) se raw_text nem
+    começa com "overload" (deixa o chamador tentar outro caminho)."""
+    parts = raw_text.strip().split()
+    if not parts or parts[0].lower() != "overload":
+        return None, None
+    if len(parts) != 3:
+        return None, "uso: overload <protocolo|grupo> <duração_segundos>"
+    target = parts[1]
+    try:
+        duration_sec = float(parts[2])
+    except ValueError:
+        return None, f"duração inválida: {parts[2]!r}"
+    if duration_sec <= 0:
+        return None, "duração precisa ser maior que zero"
+
+    data_groups = [g.id for g in st.groups if g.id != 0]
+    group_override = None
+    try:
+        gid = int(target)
+    except ValueError:
+        gid = None
+    if gid is not None:
+        if gid not in data_groups:
+            return None, f"grupo {gid} não existe (grupos de dados: {data_groups})"
+        group_override = gid
+    elif target.lower() != "all":
+        known = {"multipaxos", "pbft", "hotstuff", "raft"}
+        if target.lower() not in known:
+            return None, (f"protocolo/grupo desconhecido: {target!r} "
+                           f"(use multipaxos/pbft/hotstuff/raft/all ou um número de grupo)")
+        if target.lower() != "multipaxos":
+            # Esta simulação É sempre MultiPaxosMulticast -- mesmo aviso que o Go dá quando o
+            # rótulo pedido não bate com o Orderer do config.yml carregado.
+            pass  # segue mesmo assim, igual o Go faz (só rotula, não muda roteamento)
+
+    st.overload_active = True
+    st.overload_group_override = group_override
+    st.overload_label = target
+    st.overload_end_tick = st.tick_count + int(duration_sec * phases.TICKS_PER_SEC)
+
+    pin_txt = f" -- pinado no G{group_override}" if group_override is not None else " -- roteamento automático (hash)"
+    return [f"overload: {target} por {duration_sec:.0f}s{pin_txt}",
+            "", "Carga automática (GET/TX) ligada -- desliga sozinha quando o tempo acabar."], None
+
+
+def local_command_output(st: SimState, raw_text: str) -> list[str] | None:
+    """"ls" e "help" não passam pelo pipeline de protocolo (balõezinho indo e voltando) porque
+    NA VIDA REAL eles também não passam: "help" nem chega a conectar (main.go intercepta antes
+    de tudo), e "ls" só bate no proxy e volta, sem consenso (ver PreprocessRequest). Devolve None
+    se raw_text não é um desses dois -- a UI então cai pro caminho normal
+    (inject_client_command), que SIMULA o pipeline de verdade pra put/get/transfer/overload."""
+    first = raw_text.strip().split()[0].lower() if raw_text.strip() else ""
+    if first in ("help", "-h", "--help"):
+        return HELP_TEXT.splitlines()
+    if first == "ls":
+        return simulate_ls_output(st)
+    return None
+
+
+def _api_payload_and_groups(st: SimState, parts: list[str]):
+    """Traduz o comando digitado (mesma sintaxe de 'orderingclient api ... <comando>', ver
+    cmd/orderingclient/apimode.go) para o payload de verdade que trafega na rede
+    (request/command.go: EncodePut/EncodeGet/EncodeTransfer) e os grupos tocados -- fiel ao
+    sistema real (o groupID NUNCA vai dentro do payload de Put/Get, só em TouchedGroups; já
+    o Transfer embute fromGroup/toGroup no próprio payload, porque cada réplica precisa ler
+    isso pra saber se ela é o lado "from" ou "to"). Devolve (payload, touched_groups, erro) --
+    erro não vazio se o comando não é reconhecido ou tem argumento inválido."""
+    data_groups = [g.id for g in st.groups if g.id != 0]
+    verb = parts[0].lower() if parts else ""
+    try:
+        # put/get: grupo OPCIONAL -- tamanho de parts já desambigua (igual apimode.go: 3 args
+        # sem verbo = automático/hash, 4 = grupo explícito na frente). Antes eram 4 verbos
+        # (put/putauto/get/getauto); mesclado pra bater com a simplificação feita no CLI real.
+        if verb == "put" and len(parts) == 3:
+            gid = key_to_group(parts[1], len(data_groups))
+            return f"APIPUT {parts[1]} {parts[2]}", [gid], ""
+        if verb == "put" and len(parts) == 4:
+            gid = int(parts[1])
+            if gid not in data_groups:
+                return None, None, f"grupo {gid} não existe (grupos de dados: {data_groups})"
+            return f"APIPUT {parts[2]} {parts[3]}", [gid], ""
+        if verb == "get" and len(parts) == 2:
+            gid = key_to_group(parts[1], len(data_groups))
+            return f"APIGET {parts[1]}", [gid], ""
+        if verb == "get" and len(parts) == 3:
+            gid = int(parts[1])
+            if gid not in data_groups:
+                return None, None, f"grupo {gid} não existe (grupos de dados: {data_groups})"
+            return f"APIGET {parts[2]}", [gid], ""
+        if verb == "delete" and len(parts) == 2:
+            gid = key_to_group(parts[1], len(data_groups))
+            return f"APIDELETE {parts[1]}", [gid], ""
+        if verb == "delete" and len(parts) == 3:
+            gid = int(parts[1])
+            if gid not in data_groups:
+                return None, None, f"grupo {gid} não existe (grupos de dados: {data_groups})"
+            return f"APIDELETE {parts[2]}", [gid], ""
+        if verb == "transfer" and len(parts) == 6:
+            fg, tg = int(parts[1]), int(parts[3])
+            if fg not in data_groups or tg not in data_groups:
+                return None, None, f"grupo inexistente (grupos de dados: {data_groups})"
+            amount = int(parts[5])
+            return f"APITRANSFER {fg} {parts[2]} {tg} {parts[4]} {amount}", sorted({fg, tg}), ""
+    except ValueError:
+        return None, None, "argumento numérico inválido"
+    return None, None, (
+        "comando não reconhecido. Use:\n"
+        "  put [grupo] <chave> <valor>\n"
+        "  get [grupo] <chave>\n"
+        "  delete [grupo] <chave>\n"
+        "  transfer <deGrupo> <deChave> <paraGrupo> <paraChave> <valor>"
+    )
+
+
+def inject_client_command(st: SimState, client_id: int, raw_text: str) -> str:
+    """Pedido manual: o usuário digita um comando (mesma sintaxe de
+    'orderingclient api ... put/get/transfer' -- ver apimode.go) na bolinha de um cliente,
+    pra simular a execução DESSE comando específico no sistema, em vez de esperar o gerador
+    de carga aleatório (_generate_client_request) produzir um GET/TX por conta própria.
+    Devolve "" em caso de sucesso, ou uma mensagem de erro para mostrar na UI."""
+    from mirbftview.qt.canvas._constants import MSG_COLOR_POOL
+
+    if not st.instances or not st.prepared:
+        return "Sistema ainda não preparado -- inicie a simulação antes de mandar um comando."
+    parts = raw_text.strip().split()
+    if not parts:
+        return "comando vazio"
+    payload, touched, err = _api_payload_and_groups(st, parts)
+    if err:
+        return err
+
+    color = MSG_COLOR_POOL[st.spawn_counter % len(MSG_COLOR_POOL)]
+    st.spawn_counter += 1
+    seq_nr = st.client_seq.get(client_id, 0)
+    st.client_seq[client_id] = seq_nr + 1
+
+    group_id = touched[0]
+    group = st.groups[group_id]
+    quorum = len(group.members) // 2 + 1
+    inst = st.instances.get(group_id)
+    sn = inst.sn if inst else st.epoch_mgr.next_sn_for(group_id)
+    leader = inst.leader if inst else st.epoch_mgr.leader_for_group(group_id, sn)
+
+    req = RequestInfo(
+        client_id=client_id,
+        client_sn=seq_nr,
+        payload=payload,
+        group_id=group_id,
+        sn=sn,
+        leader=leader,
+        ballot=0,
+        quorum=quorum,
+        is_cross_group=len(touched) > 1,
+        touched_groups=touched,
+        phase=Phase.CLIENT_SEND,
+        color=color,
+        kind="request",
+    )
+    if req.is_cross_group:
+        st.gsn += 1
+        req.gsn = st.gsn
+
+    st.active_requests.append(req)
+    st.current_request = req
+    # Preserva mensagens já em vôo (outros pedidos/instâncias animando) -- esta injeção
+    # acontece fora do laço normal de tick(), então não pode simplesmente sobrescrever
+    # st.messages como _do_client_send faz quando chamado de dentro do tick.
+    pending_msgs = list(st.messages)
+    _do_client_send(st, req)
+    _tag_messages(st, req)
+    st.messages = pending_msgs + st.messages
+    return ""
 
 
 def _do_client_send(st: SimState, req: RequestInfo):

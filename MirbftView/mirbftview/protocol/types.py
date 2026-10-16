@@ -89,6 +89,13 @@ class Message:
     # esta mensagem foi emitida — permite o popup mostrar a evolução da
     # struct como um teste de mesa visual dinâmico.
     req_snapshot: Optional[dict] = None
+    # {group_id, payload} do PEDIDO ESPECÍFICO que esta resposta (COMMIT_NOTIFY) está
+    # respondendo -- diferente de req_snapshot (que é da INSTÂNCIA/batch inteiro, sempre
+    # reescrito por _tag_messages e sem payload próprio, já que uma instância não tem UM
+    # payload, tem vários membros). Setado uma vez na criação (phase_commit_notify) e nunca
+    # mais tocado -- é o que permite o popup de inspeção mostrar o resultado de verdade
+    # (found=.../OK...) de um put/get/transfer específico, não um "COMMITTED" genérico.
+    api_snapshot: Optional[dict] = None
     # Mensagem que só começa a voar depois que esta (e todas as demais em
     # trânsito) chegarem: encadeia dois saltos, ex.: líder -> proxy e depois
     # proxy -> cliente (COMMIT_NOTIFY_BATCH seguido de RespondToClient).

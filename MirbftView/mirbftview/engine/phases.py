@@ -697,6 +697,51 @@ def phase_commit(st: SimState):
     ) for nid in group.members]
 
 
+def _apply_committed_payload(st: SimState, group_id: int, payload: str):
+    """Aplica um payload JÁ COMMITADO (APIPUT/APIDELETE/APITRANSFER) no GroupState.data do grupo
+    que está aplicando -- espelha orderer/statemachine.go:ApplyBatch/applyEntryInOrder, chamado
+    só daqui (depois do commit), nunca antes. APIGET não muda nada (só leitura, sem efeito no
+    mapa). Formato do payload aqui é o que _api_payload_and_groups (tick.py) gera -- mais simples
+    que o Go real (sem base64 no valor), porque aqui é só pra round-trip dentro do próprio
+    simulador. Devolve um "resultado" pra guardar em Message.api_snapshot (ver
+    phase_commit_notify) -- só o APIDELETE usa isso de verdade (precisa saber se a chave existia
+    ANTES de apagar; depois de apagada não dá mais pra saber lendo o mapa). None pros outros."""
+    parts = payload.split(maxsplit=2)
+    if not parts:
+        return None
+    verb = parts[0]
+    kv = st.group_kv.setdefault(group_id, {})
+    if verb == "APIPUT" and len(parts) == 3:
+        kv[parts[1]] = parts[2]
+    elif verb == "APIDELETE" and len(parts) == 2:
+        existed = parts[1] in kv
+        kv.pop(parts[1], None)  # idempotente -- apagar chave ausente não é erro
+        return existed
+    elif verb == "APITRANSFER":
+        fields = payload.split()
+        if len(fields) == 6:
+            _, fg, fkey, tg, tkey, amt = fields
+            fg, tg = int(fg), int(tg)
+            try:
+                amount = int(amt)
+            except ValueError:
+                return None
+            if group_id == fg:
+                try:
+                    bal = int(kv.get(fkey, "0"))
+                except ValueError:
+                    bal = 0  # mesma pegadinha documentada do Go: valor não-numérico vira 0
+                kv[fkey] = str(bal - amount)
+            if group_id == tg:
+                try:
+                    bal = int(kv.get(tkey, "0"))
+                except ValueError:
+                    bal = 0
+                kv[tkey] = str(bal + amount)
+    # APIGET: nada a fazer -- leitura pura.
+    return None
+
+
 def phase_commit_notify(st: SimState):
     """COMMIT_NOTIFY — o líder avisa o proxy de cada pedido do batch; o proxy responde ao
     cliente na PRIMEIRA confirmação (LoadAndDelete em proxyPending)."""
@@ -706,6 +751,14 @@ def phase_commit_notify(st: SimState):
     if members:
         st.committed += 1
         st.group_commit_count[req.group_id] = st.group_commit_count.get(req.group_id, 0) + 1
+        for m in members:
+            payload = m.get("payload") or ""
+            if payload.startswith("API"):
+                # Guarda o resultado no PRÓPRIO dict do membro (mutado in-place -- é o mesmo
+                # objeto referenciado por req.members) pra chegar até Message.api_snapshot lá
+                # embaixo, quando a mensagem de resposta é criada. Só importa de verdade pro
+                # APIDELETE (ver _apply_committed_payload).
+                m["_api_result"] = _apply_committed_payload(st, req.group_id, payload)
 
     answered = []      # pedidos que ESTA instância respondeu
     for m in members:
@@ -764,6 +817,11 @@ def phase_commit_notify(st: SimState):
             detail=f"sn={req.sn} committed",
             sn=req.sn, batch_digest=req.batch_digest,
             color=m.get("color", ""),
+            # payload/grupo DESTE pedido específico (não da instância/batch inteiro) -- ver
+            # Message.api_snapshot em protocol/types.py. "result" só vem preenchido pro
+            # APIDELETE (ver _apply_committed_payload/comentário logo acima, no laço do apply).
+            api_snapshot={"group_id": req.group_id, "payload": m.get("payload") or "",
+                          "result": m.get("_api_result")},
         ) for m in ms if m in answered]
         if proxy == leader:
             st.messages.extend(responses)
