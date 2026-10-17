@@ -22,7 +22,16 @@ CLIENT_TIMEOUT = 180000  # ms
 # mais (ou menos) tempo numa campanha especifica; nao ha como estender depois de iniciado sem
 # reemitir os comandos do master.
 EXPERIMENT_IDLE_TIMEOUT = os.environ.get("ISS_EXPERIMENT_IDLE_TIMEOUT", "4h")
-SIGNAL_DELAY = "5s"
+
+# Tempo entre SIGINT e o SIGKILL forcado em stopPeers() -- tracing/bufferedtrace.go:Stop()
+# escreve o buffer de eventos inteiro de uma vez, uma linha de cada vez (zerolog, sem bulk
+# write), ao receber SIGINT. Pra sessoes longas de muitos pontos (overload --api repetido por
+# uma janela ociosa grande -- ver EXPERIMENT_IDLE_TIMEOUT), o buffer acumula milhoes de
+# eventos e a escrita pode levar bem mais que os 5s default -- confirmado rodando de
+# verdade: peer logou "events=1818358" mas o arquivo .trc final só tinha ~95 mil linhas,
+# truncado pelo SIGKILL no meio da escrita. Aumentar aqui (ou via env) da tempo da escrita
+# terminar antes do kill forcado chegar.
+SIGNAL_DELAY = os.environ.get("ISS_SIGNAL_DELAY", "5s")
 STOP_SLAVES_DELAY_MS = 5000  # exec-wait timeout for pkill (pkill exit=1 when no match is OK)
 SCP_RETRY_COUNT = "10"
 

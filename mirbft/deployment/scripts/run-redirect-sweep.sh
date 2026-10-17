@@ -58,19 +58,38 @@ client_ip="$(awk '$4=="slave" && $5!="peers"{print $2; exit}' "$instance_info_fi
 [ -n "$client_ip" ] || { echo "nao achei no 1client (tag != peers) em $instance_info_file" >&2; exit 1; }
 
 remote_work_dir="/tmp/iss-${remote_user}"
+remote_base_dir="/users/${remote_user}/iss"
+remote_bin_dir="${remote_work_dir}/bin"
 remote_out_dir="${remote_work_dir}/experiment-output/${out_sub}"
-ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+# ServerAlive* detecta conexao morta/travada (ex. rede caiu no meio do dreno) e fecha em vez
+# de ficar pendurado pra sempre -- sem isso, uma rodada travada nunca retorna e o sweep nao
+# avanca nem com o timeout abaixo (o timeout mata o processo local do ssh, mas so o
+# keepalive detecta a conexao morta de verdade).
+ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
+# Teto por rodada: duracao pedida + folga generosa (semeadura + dreno + handshake). Uma
+# rodada que passar disso e considerada travada -- morta e registrada como falha, sem
+# abortar o sweep inteiro (ver run_point abaixo, que nunca propaga erro pra cima).
+point_timeout=$((duration + 180))
 
 echo "[sweep] cliente: ${remote_user}@${client_ip}"
 echo "[sweep] destino dos .trc: ${remote_out_dir}"
 ssh $ssh_opts "${remote_user}@${client_ip}" "mkdir -p '${remote_out_dir}'"
 
+failures=0
+
 run_point() {
   local target="$1" rep="$2"
   local prefix="${remote_out_dir}/${target}-rep${rep}"
   echo "[sweep] target=${target} rep=${rep}/${reps}"
-  ssh $ssh_opts "${remote_user}@${client_ip}" \
-    "orderingclient overload ${target} ${duration} --api ${api_size} --write ${write_pct} --delete ${delete_pct} '${prefix}'"
+  # cd pro BASE_DIR: tls-data/config.yml sao relativos a ele (mesma convencao do exec-start
+  # dos peers). PATH precisa apontar pro bin do deploy -- SSH nao-interativo nao carrega
+  # .bashrc, "orderingclient" nao resolve sem isso.
+  if ! timeout "$point_timeout" ssh $ssh_opts "${remote_user}@${client_ip}" \
+    "cd '${remote_base_dir}' && PATH='${remote_bin_dir}:/usr/bin:/bin' orderingclient overload ${target} ${duration} --api ${api_size} --write ${write_pct} --delete ${delete_pct} '${prefix}'"
+  then
+    echo "[sweep] FALHOU (timeout ${point_timeout}s ou erro): target=${target} rep=${rep}/${reps}"
+    failures=$((failures + 1))
+  fi
 }
 
 for rep in $(seq 1 "$reps"); do
@@ -83,4 +102,5 @@ for g in $groups; do
 done
 
 n_groups=$(echo $groups | wc -w)
-echo "[sweep] feito: $((reps * (1 + n_groups))) rodadas em ${client_ip}:${remote_out_dir}"
+total=$((reps * (1 + n_groups)))
+echo "[sweep] feito: ${total} rodadas tentadas (${failures} falharam) em ${client_ip}:${remote_out_dir}"
