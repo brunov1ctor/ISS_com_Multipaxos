@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -257,10 +256,13 @@ func newClient(dServAddr string, numRequests int) *client {
 	return cl
 }
 
-// Loads private key for signing requests
+// Loads private key for signing requests. Relativo ao CWD, igual CACertFile/KeyFile/CertFile
+// (messenger/tls.go, messenger/peers.go) -- nao prefixar com nada: um "experiment-output/"
+// hardcoded aqui so valia pra uma convencao antiga de CWD do exec-start, que ja nao bate com
+// o layout atual (BASE_DIR = CWD de quem chama, mesma pasta de tls-data/).
 func (c *client) loadPrivKey(privKeyFile string) {
 	var err error
-	c.privKey, err = crypto.PrivateKeyFromFile(filepath.Join("experiment-output", privKeyFile))
+	c.privKey, err = crypto.PrivateKeyFromFile(privKeyFile)
 	if err != nil {
 		c.log.Fatal().
 			Err(err).

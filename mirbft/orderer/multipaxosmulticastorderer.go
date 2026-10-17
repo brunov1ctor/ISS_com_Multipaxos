@@ -463,14 +463,26 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	if strings.HasPrefix(string(req.Payload), "SYSTEM:COMMIT_NOTIFY") { return true }
 	if req.GetRequestId() == nil { return true }
 
-	// Já foi preprocessada antes — cada guard cobre um caso de requisição que já foi roteada
-	// por este método anteriormente (ex: reenviada de outro nó) e não deve ser processada de novo:
-	//   1) cross-group que já tem GSN (já passou pelo sequenciador e foi despachada);
-	//   2) single-group que já foi roteada pro seu único grupo;
-	//   3) cross-group que ainda não tem GSN, mas já foi marcada com GroupId (está em trânsito
-	//      pra um grupo específico, aguardando o GSN chegar por outro caminho).
+	// Já foi preprocessada antes NESTE MESMO nó (registrado em proxyPending) — evita
+	// redespachar/registrar proxy de novo se a mesma requisição passar por aqui outra vez.
+	// NÃO cobre reencaminhamento remoto: isso é tratado inteiramente em HandleMessage/
+	// GsnReqForward (AddDirectToBucket direto), que nunca chama PreprocessRequest — confirmado
+	// lendo o código. Por isso o caso single-group precisa checar proxyPending de verdade, em
+	// vez de inferir "já processada" só pela forma de GroupId/TouchedGroups: um cliente que já
+	// define o grupo sozinho (overload <grupo>, ou Put/Get/Delete com grupo explícito) chega
+	// aqui com GroupId>0 e TouchedGroups=[grupo] na PRIMEIRA vez — sem essa checagem, caía
+	// direto no "return false" como se já tivesse sido roteada, nunca chegando a sendToGroup/
+	// AddDirectToBucket, e a requisição nunca entrava em nenhum lote (bug real, achado rodando
+	// overload --api de verdade no Emulab: commit contínuo com nReq=0, pending nunca zera).
 	if req.GroupId > 0 && req.GSN > 0 { return false }
-	if req.GroupId > 0 && len(req.TouchedGroups) == 1 { return false }
+	if req.GroupId > 0 && len(req.TouchedGroups) == 1 {
+		key := fmt.Sprintf("%d:%d", req.RequestId.ClientId, req.RequestId.ClientSn)
+		if _, already := o.proxyPending.Load(key); already {
+			return false
+		}
+		// primeira vez vendo esta requisição aqui -- cai pro fluxo normal abaixo, que
+		// registra o proxy e despacha via sendToGroup/AddDirectToBucket.
+	}
 	if req.GroupId > 0 && len(req.TouchedGroups) > 1 && req.GSN == 0 { return false }
 
 	// Block other SYSTEM messages
