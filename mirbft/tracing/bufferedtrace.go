@@ -15,6 +15,7 @@
 package tracing
 
 import (
+	"bufio"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -218,7 +219,16 @@ func (bt *BufferedTrace) Stop() {
 	}
 	defer outFile.Close()
 
-	traceLogger := zerolog.New(outFile)
+	// Sem bufio aqui, cada chamada de traceLogger.Log() era uma write() syscall separada --
+	// pra sessoes longas (muitos eventos acumulados num cluster que fica de pe por um tempo
+	// ocioso grande, nao so o benchmark curto de sempre), isso e lento o bastante pra nunca
+	// terminar antes do SIGKILL que stopPeers() manda depois do SIGINT (confirmado rodando
+	// de verdade: 1.6M eventos, so ~75 mil linhas escritas em 120s de prazo -- ~43min pra
+	// escrever tudo nesse ritmo). bufio.Writer agrupa as escritas, poucas syscalls no total.
+	bufWriter := bufio.NewWriterSize(outFile, 4*1024*1024)
+	defer bufWriter.Flush()
+
+	traceLogger := zerolog.New(bufWriter)
 
 	nEvents := atomic.LoadInt32(&bt.offset)
 	//nProtocolEvents := atomic.LoadInt32(&bt.protocolOffset)
