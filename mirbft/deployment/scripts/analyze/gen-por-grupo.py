@@ -17,6 +17,26 @@ HEADER = """-- Throughput/batch-size por grupo de dados, via seqNr % numGroups (
 --   python3 scripts/analyze/gen-por-grupo.py --num-groups <N> --out queries/por-grupo.sql
 --
 -- Um bloco por grupo/metrica (nao GROUP BY) porque summarize.sh exige um escalar por .val.
+--
+-- CREATE TABLE protocol_truncated proprio (copiado de aggregates.sql): cada arquivo passado
+-- em "-q" ao run-queries.py roda numa transacao PROPRIA, com rollback no final -- a tabela
+-- que aggregates.sql cria nao sobrevive pra esta execucao separada (descoberto rodando de
+-- verdade: "no such table: protocol_truncated"). Por isso este arquivo precisa criar a dele
+-- mesmo, nao pode depender de rodar sempre junto com aggregates.sql na mesma invocacao.
+CREATE TABLE protocol_truncated as
+SELECT *
+FROM protocol
+WHERE
+  ts - 5000000 >= (SELECT max(t)
+    FROM (SELECT min(ts) as t
+      FROM request
+      WHERE event = 'REQ_FINISHED'
+      GROUP BY nodeId))
+  AND ts + 5000000 <= (SELECT min(t)
+    FROM (SELECT max(ts) as t
+      FROM request
+      WHERE event = 'REQ_SEND'
+      GROUP BY nodeId))
 """
 
 FOOTER = """-- request.clSn nao carrega grupo/SN -- latencia por grupo so e direta em rodadas
