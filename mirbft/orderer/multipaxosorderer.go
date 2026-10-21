@@ -119,7 +119,10 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			ShouldRespond: &shouldRespond, ProposeTs: proposeTs, CommitTs: commitTs})
 		o.recordGroupCommit(sn)
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
-			// CSMR Output Processing: only the leader notifies proxy (avoids 3x duplicate notifications)
+			// CSMR Output Processing: only the leader notifies proxy (avoids 3x duplicate notifications).
+			// NotifyProxy (multipaxosmulticastorderer.go) já filtra requisições da API de cliente
+			// quando chamada com results=nil como aqui -- essas já são notificadas com o valor real
+			// por applyEntryInOrder/ApplyBatch (statemachine.go), em toda réplica.
 			if inst, ok := o.dispatcher.load(sn); ok && inst != nil && inst.leader == membership.OwnID {
 				GetGlobalMulticastOrderer().NotifyProxy(b, sn, nil)
 			}

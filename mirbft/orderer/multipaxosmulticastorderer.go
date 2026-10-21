@@ -320,6 +320,15 @@ func (o *MultiPaxosMulticastOrderer) NotifyProxy(batch *pb.Batch, sn int32, resu
 	for _, req := range batch.Requests {
 		if req == nil || req.RequestId == nil { continue }
 		if strings.HasPrefix(string(req.Payload), "SYSTEM:") { continue }
+		// results == nil só acontece na chamada do benchmark legado (o.announce,
+		// multipaxosorderer.go), que não sabe o valor real. Requisições da API de cliente já
+		// são notificadas com o valor certo por applyEntryInOrder/ApplyBatch (statemachine.go),
+		// em toda réplica -- pular aqui evita a notificação vazia competir (e às vezes vencer)
+		// contra a notificação com o valor de verdade pra chegar primeiro no proxy remoto (bug
+		// real: cliente recebia found=false numa chave que existia).
+		if results == nil {
+			if _, ok := request.DecodeAPICommand(req.Payload); ok { continue }
+		}
 		clientId := req.RequestId.ClientId
 		clientSn := req.RequestId.ClientSn
 		key := fmt.Sprintf("%d:%d", clientId, clientSn)
