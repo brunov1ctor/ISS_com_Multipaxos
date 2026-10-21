@@ -67,6 +67,15 @@ func resolveConfigAddr() (configFile, addr string, ok bool) {
 	if addr == "" {
 		return "", "", false
 	}
+	// config.yml tem paths relativos (tls-data/ca.pem etc.) resolvidos contra o CWD do
+	// processo, não contra ISS_BASE_DIR -- sem isso, resolver config/addr sozinho não bastava,
+	// ainda exigia "cd $ISS_BASE_DIR" manual antes de chamar orderingclient. So faz sentido
+	// mudar pra "base" aqui (fonte ISS_BASE_DIR): quem usou ORDERINGCLIENT_CONFIG/_ADDR acima
+	// já escolheu os caminhos à mão e pode estar rodando de fora do Emulab, onde não existe
+	// essa convenção de diretório.
+	if err := os.Chdir(base); err != nil {
+		logger.Warn().Err(err).Str("dir", base).Msg("Could not chdir into ISS_BASE_DIR; relative paths (tls-data/...) may fail.")
+	}
 	return configFile, addr, true
 }
 
