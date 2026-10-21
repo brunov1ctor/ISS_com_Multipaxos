@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/hyperledger-labs/mirbft/clientlib"
 	"github.com/hyperledger-labs/mirbft/config"
@@ -241,6 +242,37 @@ func dispatchCommand(c *clientlib.Client, cmd string, rest []string) error {
 	return nil
 }
 
+// splitReplLine tokeniza a linha digitada no repl, respeitando aspas duplas como um token só
+// (ex. put 1 pedido-42 "dados do pedido" -> 4 tokens, nao 6). Fora do repl isso nao e um
+// problema porque o shell do SO ja faz essa tokenizacao antes do programa receber argv --
+// aqui, lendo a linha crua via bufio.Scanner, ninguem faz isso por nos.
+func splitReplLine(line string) []string {
+	var tokens []string
+	var cur strings.Builder
+	inQuotes := false
+	hasToken := false
+	for _, r := range line {
+		switch {
+		case r == '"':
+			inQuotes = !inQuotes
+			hasToken = true
+		case unicode.IsSpace(r) && !inQuotes:
+			if hasToken {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+				hasToken = false
+			}
+		default:
+			cur.WriteRune(r)
+			hasToken = true
+		}
+	}
+	if hasToken {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens
+}
+
 // "overload" dentro do REPL não reaproveita a conexão do REPL -- usa seu próprio motor
 // (RunBenchmarkClients), igual fora do REPL; a linha fica bloqueada até a duração acabar.
 func runREPL(configFile, discoveryAddr string) {
@@ -265,7 +297,7 @@ func runREPL(configFile, discoveryAddr string) {
 		if line == "exit" || line == "quit" {
 			break
 		}
-		parts := strings.Fields(line)
+		parts := splitReplLine(line)
 		cmd, rest := parts[0], parts[1:]
 		if cmd == "overload" {
 			if err := runOverload(configFile, discoveryAddr, rest); err != nil {
