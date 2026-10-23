@@ -251,6 +251,16 @@ class ConfigPanel(QWidget):
         policy_hint.setWordWrap(True)
         layout.addWidget(policy_hint)
 
+        self._total_order = _NoScrollComboBox()
+        self._total_order.addItems(["local", "global"])
+        self._total_order.setCurrentText(self.sim._st.total_order)
+        layout.addLayout(_row("TotalOrder:", self._total_order))
+        order_hint = _label("local: so cross-op recebe GSN + META (mesma ordem so dentro de "
+                            "cada grupo). global: todo pedido recebe GSN + META (uma ordem "
+                            "unica entre grupos). No deploy: --order local|global.")
+        order_hint.setWordWrap(True)
+        layout.addWidget(order_hint)
+
         self._batch_size = _NoScrollSpinBox()
         self._batch_size.setRange(1, 65536)
         self._batch_size.setValue(4096)
@@ -451,6 +461,7 @@ class ConfigPanel(QWidget):
 
         self.sim.apply_config(
             leader_policy=self._leader_policy.currentText(),
+            total_order=self._total_order.currentText(),
             cross_op_group_weights=weights_spec,
             num_buckets=self._num_buckets.value(),
             segment_length=self._segment_length.value(),
@@ -482,6 +493,7 @@ class ConfigPanel(QWidget):
             "groups": self._groups_text.toPlainText(),
             "orderer": self._orderer.currentText(),
             "leader_policy": self._leader_policy.currentText(),
+            "total_order": self._total_order.currentText(),
             "batch_size": self._batch_size.value(),
             "batch_timeout_s": self._batch_timeout.value(),
             "num_buckets": self._num_buckets.value(),
@@ -500,6 +512,7 @@ class ConfigPanel(QWidget):
         self._groups_text.setPlainText(cfg.get("groups", ""))
         self._orderer.setCurrentText(cfg.get("orderer", "MultiPaxosMulticast"))
         self._leader_policy.setCurrentText(cfg.get("leader_policy", "Single"))
+        self._total_order.setCurrentText(cfg.get("total_order", "local"))
         self._batch_size.setValue(cfg.get("batch_size", 4096))
         self._batch_timeout.setValue(cfg.get("batch_timeout_s", 10))
         self._num_buckets.setValue(cfg.get("num_buckets", 16))
@@ -622,7 +635,7 @@ class ConfigPanel(QWidget):
         card.mousePressEvent = _on_card_click
 
         # Details row
-        details = f"{cfg.get('num_nodes','?')} nos | {cfg.get('num_groups','?')} grupos | {cfg.get('orderer','?')} | batch {cfg.get('batch_size','?')}"
+        details = f"{cfg.get('num_nodes','?')} nos | {cfg.get('num_groups','?')} grupos | {cfg.get('orderer','?')} | ordem {cfg.get('total_order','local')} | batch {cfg.get('batch_size','?')}"
         det_lbl = QLabel(details)
         det_lbl.setStyleSheet(f"color: {C['text3']}; font-size: 7pt; border: none; background: transparent;")
         det_lbl.setWordWrap(True)

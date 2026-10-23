@@ -307,7 +307,7 @@ def _advance_request(st: SimState, req: RequestInfo):
 
 def _advance_pedido(st: SimState, req: RequestInfo):
     """Pedido de cliente: CLIENT_SEND -> [GSN_ASSIGN] -> BUCKET_ASSIGN -> (sai do pipeline)."""
-    seq = REQUEST_CROSS_SEQUENCE if (req.is_cross_group and req.gsn > 0) else REQUEST_SEQUENCE
+    seq = REQUEST_CROSS_SEQUENCE if req.gsn > 0 else REQUEST_SEQUENCE  # tem GSN -> passa pelo sequenciador
     try:
         idx = seq.index(req.phase)
     except ValueError:
@@ -587,7 +587,7 @@ def _generate_client_request(st: SimState, color: str) -> RequestInfo:
         color=color,
         kind="request",
     )
-    if is_cross:
+    if is_cross or st.total_order == "global":  # GSN: cross-op sempre; single só em global
         st.gsn += 1
         req.gsn = st.gsn
     return req
@@ -892,7 +892,7 @@ def inject_client_command(st: SimState, client_id: int, raw_text: str) -> str:
         color=color,
         kind="request",
     )
-    if req.is_cross_group:
+    if req.is_cross_group or st.total_order == "global":  # GSN: cross-op sempre; single só em global
         st.gsn += 1
         req.gsn = st.gsn
 

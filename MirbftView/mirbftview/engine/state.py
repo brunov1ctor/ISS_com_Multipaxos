@@ -50,6 +50,9 @@ class SimState:
         # em checkpoints, só permite truncar o log.
         self.checkpoint_interval = 16 * num_peers
         self.cross_op_pct = 0.3  # workload param (não no generate-config)
+        # TotalOrder do config (deploy.sh --order): "local" = só cross-op recebe GSN + META;
+        # "global" = TODO pedido, inclusive de um grupo só, recebe GSN + META (Défago et al. 2004).
+        self.total_order = "local"
         # crossOpGroupWeightsList do generate-local-config.sh ("2:100" = todo cross-op
         # toca exatamente 2 grupos; ex.: "2:70,3:25,4:5" mistura 2, 3 e 4 grupos).
         self.cross_op_group_weights = "2:100"
