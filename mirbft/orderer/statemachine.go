@@ -152,6 +152,13 @@ func (o *MultiPaxosOrderer) applyEntryInOrder(groupID uint32, sn int32, batch *p
 	if batch == nil || len(batch.Requests) == 0 {
 		return
 	}
+	if mo := GetGlobalMulticastOrderer(); mo != nil && mo.gdeliver != nil {
+		for _, req := range batch.Requests {
+			if req != nil && req.GSN > 0 {
+				mo.gdeliver.OnCommit(req)
+			}
+		}
+	}
 	results := ApplyBatch(groupID, sn, batch)
 	if len(results) > 0 && GetGlobalMulticastOrderer() != nil {
 		GetGlobalMulticastOrderer().NotifyProxy(batch, sn, results)

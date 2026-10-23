@@ -223,4 +223,20 @@ func (c *Client) Transfer(fromGroup uint32, fromKey string, toGroup uint32, toKe
 	return err
 }
 
+// Multicast envia payload para o grupo. A ordem (local ou global) é do sistema, definida no
+// deploy (TotalOrder no config dos nós), não pelo cliente. Payloads no formato
+// da API (PUT/GET...) são aplicados na máquina de estados; os demais só são ordenados e
+// entregues (log GDELIVER nos nós, no modo global).
+func (c *Client) Multicast(groupID uint32, payload []byte) (*pb.ClientResponse, error) {
+	return c.MulticastGroups([]uint32{groupID}, payload)
+}
+
+// MulticastGroups envia payload para vários grupos ao mesmo tempo.
+func (c *Client) MulticastGroups(groups []uint32, payload []byte) (*pb.ClientResponse, error) {
+	if len(groups) == 0 {
+		return nil, fmt.Errorf("multicast sem grupo de destino")
+	}
+	return c.call(groups, payload)
+}
+
 func (c *Client) Close() {}

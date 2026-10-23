@@ -576,7 +576,7 @@ func (b *Bucket) FindMinCrossOpByGSN() *Request {
 
 	r := b.FirstRequest
 	for r != nil {
-		if len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 && r.Msg.GSN < minGSN {
+		if r.Msg.GSN > 0 && r.Msg.GSN < minGSN {
 			minGSN = r.Msg.GSN
 			minReq = r
 		}
@@ -591,7 +591,7 @@ func (b *Bucket) FindAllCrossOps() []*Request {
 	var result []*Request
 	r := b.FirstRequest
 	for r != nil {
-		if len(r.Msg.TouchedGroups) > 1 && r.Msg.GSN > 0 {
+		if r.Msg.GSN > 0 { // multi-grupo ou modo global
 			result = append(result, r)
 		}
 		r = r.Next

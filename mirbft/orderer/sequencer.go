@@ -81,6 +81,9 @@ type Sequencer struct {
 	votes           map[int32]bool
 	electionTimer   *time.Timer
 
+	// Chamado a cada META novo (entrega global por nó, ver globaldeliver.go)
+	onMeta func(gsn uint64, touchedGroups []uint32)
+
 	// Running state
 	started bool
 	stopCh  chan struct{}
@@ -414,6 +417,10 @@ func (s *Sequencer) RegisterMetadata(gsn uint64, touchedGroups []uint32) {
 	}
 	s.groupQueueMu.Unlock()
 
+	if s.onMeta != nil {
+		s.onMeta(gsn, touchedGroups)
+	}
+
 	// Tenta drenar buffers pendentes
 	for _, gid := range touchedGroups {
 		s.drainBuffer(gid)
@@ -558,7 +565,7 @@ func (s *Sequencer) drainBuffer(groupID uint32) {
 		allDelivered := true
 		if pending.batch != nil {
 			for _, req := range pending.batch.Requests {
-				if len(req.TouchedGroups) > 1 && req.GSN > nextCandidate {
+				if req.GSN > nextCandidate {
 					if s.aDeliverUnlocked(req.GSN, groupID) {
 						continue
 					}

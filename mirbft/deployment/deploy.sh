@@ -142,6 +142,9 @@ Uso:
   $0 remote <instance-info> <exp_data_dir>
   $0 cloud <instance-info> new [config_generator]
   $0 cloud <instance-info> <exp_data_dir>
+
+Opções (em qualquer posição):
+  --order local|global   ordem total do multicast (padrão: local; "local global" gera os dois)
 EOF
   exit 1
 }
@@ -167,6 +170,29 @@ pick_next_experiment_dir() {
     return 0
   done
 }
+
+# --order local|global (opcional, em qualquer posição): ordem total do multicast. Repassada ao
+# gerador de config via TOTAL_ORDER (aceita lista: --order "local global" gera os dois).
+args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --order)
+      [ "$#" -ge 2 ] || { log_err "--order precisa de um valor (local|global)"; exit 1; }
+      for o in $2; do
+        case "$o" in local|global) ;; *) log_err "--order inválido: '$o' (use local ou global)"; exit 1 ;; esac
+      done
+      export TOTAL_ORDER="$2"; shift 2 ;;
+    --order=*)
+      v="${1#--order=}"
+      for o in $v; do
+        case "$o" in local|global) ;; *) log_err "--order inválido: '$o' (use local ou global)"; exit 1 ;; esac
+      done
+      export TOTAL_ORDER="$v"; shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
+[ -n "${TOTAL_ORDER:-}" ] && log_info "Ordem total do multicast: $TOTAL_ORDER"
 
 init_only=false
 if [ "${1:-}" = "-i" ] || [ "${1:-}" = "--init-only" ]; then

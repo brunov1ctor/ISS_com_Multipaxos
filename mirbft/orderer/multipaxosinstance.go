@@ -419,7 +419,7 @@ func (i *mpxInstance) deliverCommit() {
 	// Cross-group: verifica ordem GSN para cada cross-op no batch
 	var crossOps []*pb.ClientRequest
 	for _, req := range b.Requests {
-		if len(req.TouchedGroups) > 1 && req.GSN > 0 {
+		if req.GSN > 0 { // multi-grupo ou modo global
 			crossOps = append(crossOps, req)
 		}
 	}
