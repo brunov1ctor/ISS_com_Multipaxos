@@ -23,6 +23,7 @@ import (
 
 const (
 	SYSTEM_META_STREAM = "SYSTEM:META_STREAM:"
+	SYSTEM_META_SKIP   = "SYSTEM:META_SKIP:" // faixa de GSNs pulada por um novo líder (ver resumeGSNCounterOnBecomingLeader)
 	SYSTEM_GSN_REQUEST = "SYSTEM:GSN_REQUEST:"
 
 	// GSN sequencer leader election (failover)
@@ -78,6 +79,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 		func(gid uint32) bool { return gid != 0 && o.am.IsMember(gid, membership.OwnID) },
 		logGlobalDelivery(membership.OwnID))
 	o.seq.onMeta = o.gdeliver.OnMeta
+	o.seq.onSkip = o.gdeliver.OnSkip
 	o.seq.Start()
 	// Create group orderers for DATA groups only (not group 0)
 	for _, gid := range o.am.GetDefinedGroups() {
@@ -151,6 +153,11 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		// GSN_REQUEST -> Sequencer (leader processes)
 		if strings.HasPrefix(payload, SYSTEM_GSN_REQUEST) {
 			o.seq.HandleGSNRequest(payload, pm.SenderId)
+			return
+		}
+		// META_SKIP -> Sequencer (GSNs que nunca vão existir)
+		if strings.HasPrefix(payload, SYSTEM_META_SKIP) {
+			o.seq.HandleMETASkip(payload)
 			return
 		}
 		// META_STREAM -> Sequencer

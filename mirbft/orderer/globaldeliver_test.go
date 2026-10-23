@@ -100,3 +100,20 @@ func TestCrossedBatchesNoDeadlock(t *testing.T) {
 		t.Fatalf("entregue %v, esperado [1 2 3 4]", got)
 	}
 }
+
+// Novo líder do sequenciador pula GSNs 1..100 (folga de segurança): a entrega não pode travar.
+func TestSkipRangeAfterElection(t *testing.T) {
+	var got []uint64
+	d := newTestDeliverer(&got)
+	d.OnMeta(102, []uint32{1})
+	d.OnCommit(req(102, 1))
+	d.OnMeta(101, []uint32{2})
+	d.OnCommit(req(101, 2))
+	if len(got) != 0 {
+		t.Fatalf("entregou %v antes de saber dos GSNs 1..100", got)
+	}
+	d.OnSkip(1, 100)
+	if !reflect.DeepEqual(got, []uint64{101, 102}) {
+		t.Fatalf("entregue %v, esperado [101 102]", got)
+	}
+}

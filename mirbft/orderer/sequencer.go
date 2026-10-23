@@ -83,6 +83,8 @@ type Sequencer struct {
 
 	// Chamado a cada META novo (entrega global por nó, ver globaldeliver.go)
 	onMeta func(gsn uint64, touchedGroups []uint32)
+	// Chamado quando um novo líder anuncia uma faixa de GSNs pulada [from, to]
+	onSkip func(from, to uint64)
 
 	// Running state
 	started bool
@@ -382,6 +384,46 @@ func (s *Sequencer) PublishMETA(gsn uint64, touchedGroups []uint32) {
 				},
 			}},
 		}, nodeID)
+	}
+}
+
+// PublishMETASkip avisa todos os nós (e este) que os GSNs [from, to] nunca serão atribuídos.
+// Usado pelo novo líder ao retomar o contador com folga (gsnRecoverySafetyMargin): sem esse
+// aviso, a entrega em ordem global (globaldeliver.go) esperaria para sempre pelo META deles.
+func (s *Sequencer) PublishMETASkip(from, to uint64) {
+	if from == 0 || to < from {
+		return
+	}
+	fmt.Printf("[SEQUENCER][META-SKIP] publicando faixa pulada [%d..%d]\n", from, to)
+	if s.onSkip != nil {
+		s.onSkip(from, to)
+	}
+	payload := fmt.Sprintf("%s%d:%d", SYSTEM_META_SKIP, from, to)
+	for _, nodeID := range membership.AllNodeIDs() {
+		if nodeID == membership.OwnID {
+			continue
+		}
+		messenger.EnqueuePriorityMsg(&pb.ProtocolMessage{
+			SenderId: membership.OwnID, Sn: -1,
+			Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
+				Req: &pb.ClientRequest{
+					RequestId: &pb.RequestID{ClientId: membership.OwnID, ClientSn: int32(atomic.AddUint32(&s.metaCounter, 1))},
+					Payload:   []byte(payload),
+				},
+			}},
+		}, nodeID)
+	}
+}
+
+// HandleMETASkip processa um META_SKIP recebido de outro nó.
+func (s *Sequencer) HandleMETASkip(payload string) {
+	var from, to uint64
+	if n, _ := fmt.Sscanf(payload, SYSTEM_META_SKIP+"%d:%d", &from, &to); n < 2 {
+		return
+	}
+	fmt.Printf("[SEQUENCER][META-SKIP-RECV] [%d..%d]\n", from, to)
+	if s.onSkip != nil {
+		s.onSkip(from, to)
 	}
 }
 

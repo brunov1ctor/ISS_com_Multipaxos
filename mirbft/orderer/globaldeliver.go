@@ -66,11 +66,36 @@ func (g *GlobalDeliverer) OnMeta(gsn uint64, groups []uint32) {
 		return
 	}
 	g.mu.Lock()
+	if prev, ok := g.meta[gsn]; ok && len(prev) == 0 && len(groups) > 0 {
+		fmt.Printf("[GDELIVER] AVISO: META do gsn=%d chegou depois de a faixa ser declarada pulada; ignorado\n", gsn)
+	}
 	if _, ok := g.meta[gsn]; !ok && gsn > g.lastDelivered {
 		g.meta[gsn] = append([]uint32{}, groups...)
 		for g.meta[g.metaPrefix+1] != nil {
 			g.metaPrefix++
 		}
+	}
+	out := g.drainLocked()
+	g.mu.Unlock()
+	g.emit(out)
+}
+
+// OnSkip registra que os GSNs [from, to] nunca vão existir (novo líder do sequenciador pulou a
+// faixa). Ficam como "não tocam nenhum grupo deste nó". Se o META real de um desses GSNs chegar
+// depois (o líder antigo chegou a atribuí-lo), ele é ignorado e avisado no log -- limitação
+// conhecida do failover sem log replicado.
+func (g *GlobalDeliverer) OnSkip(from, to uint64) {
+	if from == 0 || to < from {
+		return
+	}
+	g.mu.Lock()
+	for gsn := from; gsn <= to; gsn++ {
+		if _, ok := g.meta[gsn]; !ok && gsn > g.lastDelivered {
+			g.meta[gsn] = []uint32{}
+		}
+	}
+	for g.meta[g.metaPrefix+1] != nil {
+		g.metaPrefix++
 	}
 	out := g.drainLocked()
 	g.mu.Unlock()
