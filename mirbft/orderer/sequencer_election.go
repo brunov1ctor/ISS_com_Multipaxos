@@ -180,11 +180,24 @@ func (s *Sequencer) resumeGSNCounterOnBecomingLeader() {
 	resumeFrom := maxGSN + 1 + gsnRecoverySafetyMargin
 
 	s.gsnMu.Lock()
+	oldNext := s.nextGSN
 	if resumeFrom > s.nextGSN {
 		s.nextGSN = resumeFrom
 	}
 	newNext := s.nextGSN
 	s.gsnMu.Unlock()
+
+	// GSNs [maxGSN+1 .. newNext-1] nunca serão atribuídos por este líder: avisa todo mundo,
+	// senão a entrega em ordem global fica esperando o META deles. Começa do maior entre
+	// maxGSN+1 e o que este nó já numerou antes (oldNext), para não declarar pulado um GSN
+	// que ele mesmo atribuiu num mandato anterior.
+	skipFrom := maxGSN + 1
+	if oldNext > skipFrom {
+		skipFrom = oldNext
+	}
+	if newNext > skipFrom {
+		s.PublishMETASkip(skipFrom, newNext-1)
+	}
 
 	fmt.Printf("[SEQUENCER][ELECTION] nextGSN retomado em %d (maxGSN observado via META=%d)\n", newNext, maxGSN)
 	logger.Info().Uint64("nextGSN", newNext).Uint64("maxObservedGSN", maxGSN).Msg("Sequencer resumed GSN counter after election")
