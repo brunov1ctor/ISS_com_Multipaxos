@@ -485,9 +485,12 @@ def phase_gsn_assign(st: SimState):
         st.delivery.hold_meta(req.gsn, late_group)
         st.meta_late.append({"gsn": req.gsn, "group": late_group, "nodes": late_nodes,
                              "state": "held", "wait": 0, "age": 0})
-    for gid in req.touched_groups:
-        if gid != late_group:
-            st.delivery.register_touch(req.gsn, gid)
+    if len(req.touched_groups) > 1:  # fila do ADeliver por grupo: só multi-grupo (como no Go)
+        for gid in req.touched_groups:
+            if gid != late_group:
+                st.delivery.register_touch(req.gsn, gid)
+    # META chega a todos os nós: alimenta a entrega global por nó (GlobalDeliverer)
+    _gdeliver(st, lambda gd: gd.on_meta(req.gsn, req.touched_groups))
 
     st.phase = Phase.GSN_ASSIGN
     st.log_event(Phase.GSN_ASSIGN, "GSN Atribuido",
@@ -746,6 +749,24 @@ def _apply_committed_payload(st: SimState, group_id: int, payload: str):
     return None
 
 
+def _gdeliver(st: SimState, fn, only=None):
+    """Aplica fn ao GlobalDeliverer de cada nó (ou só dos nós em `only`) e registra as
+    entregas no log de eventos -- equivalente às linhas [GDELIVER] do peer.log real."""
+    from mirbftview.protocol.delivery import GlobalDeliverer
+    if not hasattr(st, "global_deliver"):
+        st.global_deliver = {}
+    for node in st.nodes:
+        if only is not None and node.id not in only:
+            continue
+        gd = st.global_deliver.get(node.id)
+        if gd is None:
+            gd = st.global_deliver[node.id] = GlobalDeliverer([g for g in node.groups if g != 0])
+        for d in fn(gd):
+            st.log_event(Phase.ADELIVER, "GDELIVER",
+                         f"node={node.id} gsn={d['gsn']} groups={d['groups']} {d['label']}",
+                         "accent")
+
+
 def phase_commit_notify(st: SimState):
     """COMMIT_NOTIFY — o líder avisa o proxy de cada pedido do batch; o proxy responde ao
     cliente na PRIMEIRA confirmação (LoadAndDelete em proxyPending)."""
@@ -763,6 +784,12 @@ def phase_commit_notify(st: SimState):
                 # embaixo, quando a mensagem de resposta é criada. Só importa de verdade pro
                 # APIDELETE (ver _apply_committed_payload).
                 m["_api_result"] = _apply_committed_payload(st, req.group_id, payload)
+
+    # Entrega global por nó: cada membro do grupo recebe os pedidos com GSN deste batch.
+    gmembers = set(st.groups[req.group_id].members)
+    for m in members:
+        if m.get("gsn", 0) > 0:
+            _gdeliver(st, lambda gd, m=m: gd.on_commit(m["gsn"], m), only=gmembers)
 
     answered = []      # pedidos que ESTA instância respondeu
     for m in members:
@@ -844,7 +871,8 @@ def phase_adeliver(st: SimState):
     entregar todo GSN anterior que também o toca; se alguma bloqueia, o batch INTEIRO fica
     em BufferCommit (inclusive os single-group que estão nele)."""
     req = st.current_request
-    crosses = sorted((m for m in req.members if m.get("gsn", 0) > 0), key=lambda m: m.get("gsn", 0))
+    # Só multi-grupo (como no Go): a ordem global de pedidos de um grupo só fica no GlobalDeliverer.
+    crosses = sorted((m for m in req.members if m.get("cross")), key=lambda m: m.get("gsn", 0))
     if crosses:
         entries = [DeliveryEntry(sn=req.sn, gsn=m["gsn"], group_id=req.group_id,
                                  batch_digest=req.batch_digest) for m in crosses]

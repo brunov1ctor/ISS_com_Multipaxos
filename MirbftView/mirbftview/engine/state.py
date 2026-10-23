@@ -77,6 +77,8 @@ class SimState:
         self.group_last_checkpoint_sn: dict[int, int] = {}
         # META stream: historico de publicacoes GSN -> grupos
         self.meta_stream: list[dict] = []  # [{gsn, groups, published_by}]
+        # Entrega em ordem global por nó (GlobalDeliverer, ver protocol/delivery.py)
+        self.global_deliver: dict = {}
         # GroupState.data da API de cliente (ver orderer/statemachine.go) -- UM mapa chave->valor
         # POR GRUPO, aplicado só depois do commit (phase_commit_notify), nunca antes. Separado de
         # group_commit_count/checkpoints: aquilo é o LOG (quantos SNs já comitaram), isto é a
@@ -212,6 +214,7 @@ class SimState:
         self.commit_history = []
         self.meta_stream = []
         self.meta_late = []
+        self.global_deliver = {}
         self.batch_fill = {}
         self.batch_timeout_counter = {}
         self.batch_ready = {}
