@@ -122,6 +122,8 @@ BatchVerifier: BATCHVERIFIER # Determines how the requests in a batch are verifi
                              #                  A separate set of verifier threads (RequestHandlerThreads of them)
                              #                  verifies the requests. Communication is through buffered channels.
 CrossOpBatchMaxBytes: 32768 # Maximum size (bytes) of a cross-op batch proposed by CutBatchWithMode. Default 32KB.
+TotalOrder: local           # local | global -- ordem total do multicast (Défago et al. 2004, Seção 3.2.3).
+                            # global: toda mensagem, mesmo de um grupo só, recebe GSN + META.
 
 # GSN sequencer leader election (failover)
 SequencerHeartbeatMs: 100       # Leader heartbeat period. Default 100ms.

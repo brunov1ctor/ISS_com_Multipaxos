@@ -71,6 +71,8 @@ comandos:
   delete [groupID] <key>                   -- apaga key (idempotente -- nao e erro apagar
                                             -- chave inexistente). Com/sem groupID: mesma
                                             -- regra de put/get
+  multicast <grupo[,grupo...]> <mensagem>  -- multicast da mensagem para o(s) grupo(s). A ordem
+                                            -- (local/global) e do sistema: --order no deploy
   transfer <fromGroup> <fromKey> <toGroup> <toKey> <amount>
                                             -- move amount de fromKey (fromGroup) pra toKey (toGroup)
   overload <protocolo|grupo> <duracaoSegundos> [--api <tamanhoConjunto> [--write <pct>]
@@ -215,6 +217,23 @@ func dispatchCommand(c *clientlib.Client, cmd string, rest []string) error {
 		}
 		fmt.Printf("deleted=%v\n", existed)
 
+	case "multicast":
+		if len(rest) < 2 {
+			return fmt.Errorf("uso: multicast <grupo[,grupo...]> <mensagem>")
+		}
+		var groups []uint32
+		for _, g := range strings.Split(rest[0], ",") {
+			gid, err := parseUint32(g)
+			if err != nil {
+				return err
+			}
+			groups = append(groups, gid)
+		}
+		if _, err := c.MulticastGroups(groups, []byte(strings.Join(rest[1:], " "))); err != nil {
+			return fmt.Errorf("multicast failed: %w", err)
+		}
+		fmt.Println("OK")
+
 	case "transfer":
 		if len(rest) != 5 {
 			return fmt.Errorf("uso: transfer <fromGroup> <fromKey> <toGroup> <toKey> <amount>")
@@ -237,7 +256,7 @@ func dispatchCommand(c *clientlib.Client, cmd string, rest []string) error {
 		fmt.Println("OK")
 
 	default:
-		return fmt.Errorf("comando desconhecido: %q (use ls/put/get/transfer/overload/help)", cmd)
+		return fmt.Errorf("comando desconhecido: %q (use ls/put/get/delete/multicast/transfer/overload/help)", cmd)
 	}
 	return nil
 }
@@ -283,7 +302,7 @@ func runREPL(configFile, discoveryAddr string) {
 	}
 	defer c.Close()
 
-	fmt.Println("orderingclient repl -- conectado. Comandos: ls / put / get / transfer / overload / exit")
+	fmt.Println("orderingclient repl -- conectado. Comandos: ls / put / get / delete / multicast / transfer / overload / exit")
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("> ")

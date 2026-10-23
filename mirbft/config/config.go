@@ -151,6 +151,12 @@ type configuration struct {
 	// Maximum size (bytes) of a cross-op batch proposed by CutBatchWithMode. 0 (or unset) falls back to 32KB.
 	CrossOpBatchMaxBytes int `yaml:"CrossOpBatchMaxBytes"`
 
+	// Ordem total do serviço de multicast (Défago, Schiper & Urbán 2004, Seção 3.2.3):
+	// "local" (padrão) = mesma ordem só entre mensagens do mesmo grupo;
+	// "global" = uma única ordem para todas as mensagens (toda mensagem recebe GSN + META).
+	// Vale para o sistema inteiro; não é escolhido por cliente.
+	TotalOrder string `yaml:"TotalOrder"`
+
 	// Sequencer leader election (GSN sequencer failover)
 	SequencerHeartbeatMs       int           `yaml:"SequencerHeartbeatMs"`       // Leader heartbeat period. 0 (or unset) falls back to 100ms.
 	SequencerHeartbeat         time.Duration // Derived from SequencerHeartbeatMs.
@@ -236,6 +242,15 @@ func LoadFile(configFileName string) {
 	if Config.CrossOpBatchMaxBytes <= 0 {
 		Config.CrossOpBatchMaxBytes = 32 * 1024
 	}
+
+	switch Config.TotalOrder {
+	case "":
+		Config.TotalOrder = "local"
+	case "local", "global":
+	default:
+		logger.Fatal().Str("TotalOrder", Config.TotalOrder).Msg("TotalOrder deve ser 'local' ou 'global'")
+	}
+	logger.Info().Str("TotalOrder", Config.TotalOrder).Msg("Ordem total do multicast")
 
 	if Config.SequencerHeartbeatMs <= 0 {
 		Config.SequencerHeartbeatMs = 100

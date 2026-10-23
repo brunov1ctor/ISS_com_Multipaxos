@@ -100,6 +100,9 @@ segmentLengths="16"         # [entries] (Single policy overrides this to singleL
 viewChangeTimeouts="60000"  # [ms]
 drain_time_ms="60000"       # [ms]  Should be >= viewChangeTimeout to allow all responses to arrive
 nodeToLeaderRatios="1"      # How many nodes are initally leaders, set to 1 to have initially all nodes in the leaderset
+totalOrders="${TOTAL_ORDER:-local}"  # local | global -- ordem total do multicast (TotalOrder no config).
+                                # Lista separada por espaço ("local global") gera um experimento de cada.
+                                # Pode vir do deploy: ./deploy.sh ... --order global
 crossOpBatchBytesList="32768"  # [bytes] Max size of a cross-op consensus batch (CrossOpBatchMaxBytes). Space-separated list to sweep.
 crossOpRatios="5 10 20 50 75"  # [%] Percentage of client requests that are cross-group (TX), written directly into
                                 # each generated config-$exp.yml's CrossOpRatio field. Space-separated list to sweep.
@@ -372,7 +375,7 @@ clientWatermarks() {
 }
 
 dplLines() {
-    echo "# $exp,$numPeers,$numFailures,$viewChangeTimeout,$numLocations,$bandwidth,$numConnections,$orderer,$cpt,$machines,$instances,$totalclients,$segmentLength,$leaderPolicy,$epoch,$batchsize,$batchtimeout,$batchrate,$msgBatchPeriod,$numBuckets,$leaderBuckets,$auth,$verifyEarly,$throughputCap,$thr,$rate,$hardRateLimit,$requests,$watermark,$batchVerifier,$requestHandlers,$requestBufferSize" >> $deployment_file
+    echo "# $exp,$numPeers,$numFailures,$viewChangeTimeout,$numLocations,$bandwidth,$numConnections,$orderer,$cpt,$machines,$instances,$totalclients,$segmentLength,$leaderPolicy,$epoch,$batchsize,$batchtimeout,$batchrate,$msgBatchPeriod,$numBuckets,$leaderBuckets,$auth,$verifyEarly,$throughputCap,$thr,$rate,$hardRateLimit,$requests,$watermark,$batchVerifier,$requestHandlers,$requestBufferSize,$totalOrder" >> $deployment_file
     echo -n "run $exp config: config-$exp.yml   peers: $peerTag   clients: $clientTags" >> $deployment_file
     if [ $numFailures -gt 0 ] && ! $reuseFaulty; then
       echo -n " config: config-$exp-faulty.yml   peers: $faultyPeerTag" >> $deployment_file # Space at the start is crucial.
@@ -389,12 +392,13 @@ config() {
   # mir-modular.yml continua com valores literais/default, intocado para os
   # outros geradores que não fazem esse sweep).
   sed -i "s#CrossOpBatchMaxBytes: 32768#CrossOpBatchMaxBytes: $crossOpBatchBytes#" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
+  sed -i "s#TotalOrder: local #TotalOrder: $totalOrder #" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
   sed -i "s#CrossOpRatio: CROSSOPRATIO#CrossOpRatio: $crossOpRatio#" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
   sed -i "s#CrossOpGroupWeights: \"2:100\"#CrossOpGroupWeights: \"$crossOpGroupWeights\"#" $exp_data_dir/config/config-$exp.yml $exp_data_dir/config/config-$exp-faulty.yml
 }
 
 csvLine() {
-    echo "$exp,$numPeers,$nlr,$numFailures,$crashTiming,$viewChangeTimeout,$numLocations,$bandwidth,$numConnections,$orderer,$machines,$instances,$totalclients,$segmentLength,$leaderPolicy,$epoch,$batchsize,$batchtimeout,$batchrate,$msgBatchPeriod,$numBuckets,$leaderBuckets,$auth,$verifyEarly,$throughputCap,$thr,$rate,$hardRateLimit,$requests,$watermark,$batchVerifier,$requestHandlers,$requestBufferSize" >> $csv_file
+    echo "$exp,$numPeers,$nlr,$numFailures,$crashTiming,$viewChangeTimeout,$numLocations,$bandwidth,$numConnections,$orderer,$machines,$instances,$totalclients,$segmentLength,$leaderPolicy,$epoch,$batchsize,$batchtimeout,$batchrate,$msgBatchPeriod,$numBuckets,$leaderBuckets,$auth,$verifyEarly,$throughputCap,$thr,$rate,$hardRateLimit,$requests,$watermark,$batchVerifier,$requestHandlers,$requestBufferSize,$totalOrder" >> $csv_file
 }
 
 generate() {
@@ -504,6 +508,7 @@ function generateCombinations() {
                                   for batchVerifier in $batchVerifiers; do
                                     for requestHandlers in $requestHandlerThreadNums; do
                                       for requestBufferSize in $requestBufferSizes; do
+                                        for totalOrder in $totalOrders; do
                                         for crossOpBatchBytes in $crossOpBatchBytesList; do
                                         for crossOpGroupWeights in $crossOpGroupWeightsList; do
                                         for crossOpRatio in $crossOpRatios; do
@@ -625,6 +630,7 @@ function generateCombinations() {
                                           done
                                         done
                                         done
+                                        done
                                       done
                                     done
                                   done
@@ -721,7 +727,7 @@ fi
 
 
 # Generate CSV file header.
-echo "exp,peers,nlr,failures,crash-timing,vctimeout,datacenters,bandwidth,num-connections,orderer,clients,instances,client-threads,segment,leader-policy,epoch,batchsize,batchtimeout,batchrate,msgbatchperiod,buckets,leader-buckets,authentication,verify-early,throughput-cap,target-throughput,rate-per-client,hard-rate-limit,requests,cl-watermarks,batch-verifier,request-handlers,req-buffer-size" > $csv_file
+echo "exp,peers,nlr,failures,crash-timing,vctimeout,datacenters,bandwidth,num-connections,orderer,clients,instances,client-threads,segment,leader-policy,epoch,batchsize,batchtimeout,batchrate,msgbatchperiod,buckets,leader-buckets,authentication,verify-early,throughput-cap,target-throughput,rate-per-client,hard-rate-limit,requests,cl-watermarks,batch-verifier,request-handlers,req-buffer-size,total-order" > $csv_file
 echo -e "\n# Parameters: exp,peers,nlr,failures,crash-timing,vctimeout,datacenters,bandwidth,num-connections,orderer,clients,instances,client-threads,leader-policy,segment,epoch,batchsize,batchtimeout,batchrate,msgbatchperiod,buckets,leader-buckets,authentication,verify-early,throughput-cap,target-throughput,rate-per-client,hard-rate-limit,requests,cl-watermarks,batch-verifier,request-handlers,req-buffer-size\n" >> $deployment_file
 
 deployedCorrect=0

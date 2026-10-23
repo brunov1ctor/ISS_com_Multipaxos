@@ -26,7 +26,7 @@ var (
 // apiVerbs são os comandos despachados direto como "orderingclient <verbo> <config> <addr>
 // [args...]" (ver main() e apimode.go) -- mesma lista que o switch de runAPIMode reconhece.
 var apiVerbs = map[string]bool{
-	"ls": true, "put": true, "get": true, "delete": true, "transfer": true, "overload": true, "repl": true,
+	"ls": true, "put": true, "get": true, "delete": true, "transfer": true, "multicast": true, "overload": true, "repl": true,
 }
 
 // resolveConfigAddr acha config.yml e o endereço do discovery SEM exigir que venham na linha

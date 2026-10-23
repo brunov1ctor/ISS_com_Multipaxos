@@ -44,6 +44,8 @@ type MultiPaxosMulticastOrderer struct {
 	groupsFilePath string                        // caminho do YAML com a definição dos grupos (groups.yml)
 	// CSMR Output Processing: proxy tracks pending requests
 	proxyPending   sync.Map // key: "clientId:clientSn" -> int32 (proxyNodeID)
+	// Entrega em ordem total global, uma por nó (ver globaldeliver.go)
+	gdeliver       *GlobalDeliverer
 }
 
 // PendingCommit é um commit já decidido pelo grupo mas ainda esperando o META (ver
@@ -72,6 +74,10 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	fmt.Printf("[MULTICAST] Groups loaded: %v group0=%v\n", o.am.GetDefinedGroups(), o.am.GetGroupMembers(0))
 	// Create standalone sequencer (independent from ISS)
 	o.seq = NewSequencer(o.am.GetGroupMembers(0))
+	o.gdeliver = NewGlobalDeliverer(
+		func(gid uint32) bool { return gid != 0 && o.am.IsMember(gid, membership.OwnID) },
+		logGlobalDelivery(membership.OwnID))
+	o.seq.onMeta = o.gdeliver.OnMeta
 	o.seq.Start()
 	// Create group orderers for DATA groups only (not group 0)
 	for _, gid := range o.am.GetDefinedGroups() {
@@ -428,7 +434,7 @@ func boolToInt(b bool) int {
 // Puramente informativo: lê só estado local já carregado neste nó, nunca entra em consenso.
 func (o *MultiPaxosMulticastOrderer) topologyDump() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Orderer: %s\n\n", config.Config.Orderer)
+	fmt.Fprintf(&b, "Orderer: %s\nOrdem total: %s\n\n", config.Config.Orderer, config.Config.TotalOrder)
 
 	fmt.Fprintf(&b, "Nos (%d):\n", len(membership.AllNodeIDs()))
 	for _, id := range membership.AllNodeIDs() {
@@ -484,7 +490,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	// AddDirectToBucket, e a requisição nunca entrava em nenhum lote (bug real, achado rodando
 	// overload --api de verdade no Emulab: commit contínuo com nReq=0, pending nunca zera).
 	if req.GroupId > 0 && req.GSN > 0 { return false }
-	if req.GroupId > 0 && len(req.TouchedGroups) == 1 {
+	if req.GroupId > 0 && len(req.TouchedGroups) == 1 && config.Config.TotalOrder != "global" {
 		key := fmt.Sprintf("%d:%d", req.RequestId.ClientId, req.RequestId.ClientSn)
 		if _, already := o.proxyPending.Load(key); already {
 			return false
@@ -527,8 +533,10 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 	req.TouchedGroups = filtered
 	if len(req.TouchedGroups) == 0 { return true }
 
-	// Single-group
-	if len(req.TouchedGroups) == 1 {
+	// Single-group (modo local). No modo global cai no caminho GSN abaixo, mesmo com um
+	// grupo só: sem GSN, um nó em vários grupos não tem como intercalar as filas na mesma
+	// ordem que os outros nós (ordem total global, Défago et al. 2004, Seção 3.2.3).
+	if len(req.TouchedGroups) == 1 && config.Config.TotalOrder != "global" {
 		req.GroupId = req.TouchedGroups[0]
 		// All paths use AddDirectToBucket (bypass Buffer/watermark)
 		// Watermark is managed by PROXY-RESPOND/COMMIT_NOTIFY, not by peer Buffer

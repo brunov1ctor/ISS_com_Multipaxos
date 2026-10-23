@@ -126,7 +126,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			if inst, ok := o.dispatcher.load(sn); ok && inst != nil && inst.leader == membership.OwnID {
 				GetGlobalMulticastOrderer().NotifyProxy(b, sn, nil)
 			}
-			if len(b.Requests[0].TouchedGroups) > 1 && b.Requests[0].GSN > 0 {
+			if b.Requests[0].GSN > 0 {
 				GetGlobalMulticastOrderer().RegisterGSNMetadata(b.Requests[0].GSN, b.Requests[0].TouchedGroups)
 			}
 		}
