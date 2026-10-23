@@ -17,6 +17,7 @@ package orderer
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,6 +87,11 @@ type Sequencer struct {
 	onMeta func(gsn uint64, touchedGroups []uint32)
 	// Chamado quando um novo líder anuncia uma faixa de GSNs pulada [from, to]
 	onSkip func(from, to uint64)
+	// Faixas de GSN puladas já conhecidas (publicadas por este nó ou recebidas). O líder as
+	// repete em todo heartbeat: um META_SKIP avulso pode se perder (ex.: enviado logo após a
+	// eleição, antes de a conexão com algum nó estar pronta).
+	skipMu     sync.Mutex
+	skipRanges map[[2]uint64]bool
 
 	// Running state
 	started bool
@@ -396,9 +402,7 @@ func (s *Sequencer) PublishMETASkip(from, to uint64) {
 		return
 	}
 	fmt.Printf("[SEQUENCER][META-SKIP] publicando faixa pulada [%d..%d]\n", from, to)
-	if s.onSkip != nil {
-		s.onSkip(from, to)
-	}
+	s.recordSkip(from, to)
 	payload := fmt.Sprintf("%s%d:%d", SYSTEM_META_SKIP, from, to)
 	for _, nodeID := range membership.AllNodeIDs() {
 		if nodeID == membership.OwnID {
@@ -422,9 +426,57 @@ func (s *Sequencer) HandleMETASkip(payload string) {
 	if n, _ := fmt.Sscanf(payload, SYSTEM_META_SKIP+"%d:%d", &from, &to); n < 2 {
 		return
 	}
+	s.recordSkip(from, to)
+}
+
+// recordSkip registra uma faixa pulada (idempotente) e repassa ao GlobalDeliverer.
+func (s *Sequencer) recordSkip(from, to uint64) {
+	if from == 0 || to < from {
+		return
+	}
+	s.skipMu.Lock()
+	if s.skipRanges == nil {
+		s.skipRanges = make(map[[2]uint64]bool)
+	}
+	isNew := !s.skipRanges[[2]uint64{from, to}]
+	s.skipRanges[[2]uint64{from, to}] = true
+	s.skipMu.Unlock()
+	if !isNew {
+		return
+	}
 	fmt.Printf("[SEQUENCER][META-SKIP-RECV] [%d..%d]\n", from, to)
 	if s.onSkip != nil {
 		s.onSkip(from, to)
+	}
+}
+
+// skipSuffix devolve as faixas puladas conhecidas no formato ":a-b,c-d" (vazio se nenhuma),
+// anexado ao payload do heartbeat.
+func (s *Sequencer) skipSuffix() string {
+	s.skipMu.Lock()
+	defer s.skipMu.Unlock()
+	if len(s.skipRanges) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(s.skipRanges))
+	for r := range s.skipRanges {
+		parts = append(parts, fmt.Sprintf("%d-%d", r[0], r[1]))
+	}
+	sort.Strings(parts)
+	return ":" + strings.Join(parts, ",")
+}
+
+// parseSkipSuffix lê as faixas anexadas ao heartbeat (terceiro campo em diante).
+func (s *Sequencer) parseSkipSuffix(payload string) {
+	fields := strings.Split(strings.TrimPrefix(payload, SYSTEM_SEQ_HEARTBEAT), ":")
+	if len(fields) < 3 || fields[2] == "" {
+		return
+	}
+	for _, r := range strings.Split(fields[2], ",") {
+		var from, to uint64
+		if n, _ := fmt.Sscanf(r, "%d-%d", &from, &to); n == 2 {
+			s.recordSkip(from, to)
+		}
 	}
 }
 

@@ -214,7 +214,7 @@ func (s *Sequencer) leaderHeartbeatLoop(term int32) {
 			return
 		}
 
-		payload := fmt.Sprintf("%s%d:%d", SYSTEM_SEQ_HEARTBEAT, term, membership.OwnID)
+		payload := fmt.Sprintf("%s%d:%d", SYSTEM_SEQ_HEARTBEAT, term, membership.OwnID) + s.skipSuffix() // + faixas de GSN puladas
 		s.broadcastToMembers(payload)
 
 		time.Sleep(config.Config.SequencerHeartbeat)
@@ -237,6 +237,8 @@ func (s *Sequencer) HandleHeartbeat(payload string, senderID int32) {
 	if n, _ := fmt.Sscanf(payload, SYSTEM_SEQ_HEARTBEAT+"%d:%d", &term, &leaderID); n < 2 {
 		return
 	}
+
+	s.parseSkipSuffix(payload) // faixas de GSN puladas (valem mesmo vindas de um termo antigo)
 
 	s.electMu.Lock()
 	if int32(term) < s.term {
