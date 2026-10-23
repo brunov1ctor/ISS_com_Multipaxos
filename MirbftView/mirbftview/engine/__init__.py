@@ -263,6 +263,8 @@ class Simulation:
             self._st.checkpoint_interval = kwargs['checkpoint_interval']
         if 'cross_op_pct' in kwargs:
             self._st.cross_op_pct = kwargs['cross_op_pct']
+        if 'total_order' in kwargs:
+            self._st.total_order = kwargs['total_order']
         if 'leader_policy' in kwargs:
             self._st.leader_policy = kwargs['leader_policy']
         if 'cross_op_group_weights' in kwargs:

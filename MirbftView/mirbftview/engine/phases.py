@@ -71,7 +71,7 @@ def _take_singles(st, bucket, n):
     taken = []
     i = 0
     while i < len(bucket) and len(taken) < n:
-        if st.bucket_meta.get(bucket[i], {}).get("cross"):
+        if st.bucket_meta.get(bucket[i], {}).get("gsn", 0) > 0:
             i += 1
             continue
         taken.append(bucket.pop(i))
@@ -93,7 +93,7 @@ def _cut_items(st, leader, gid, skip_cross=False):
     batch = []
     cross = [] if skip_cross else sorted(
         (meta.get(l, {}).get("gsn", 0), b, l)
-        for b in bids for l in lists[b] if meta.get(l, {}).get("cross"))
+        for b in bids for l in lists[b] if meta.get(l, {}).get("gsn", 0) > 0)
     for _gsn, b, l in cross:
         if len(batch) >= size:
             break
@@ -160,7 +160,7 @@ def _queued(st, leader, bids):
     singles = cross = 0
     for b in bids:
         for l in lists[b]:
-            if st.bucket_meta.get(l, {}).get("cross"):
+            if st.bucket_meta.get(l, {}).get("gsn", 0) > 0:
                 cross += 1
             else:
                 singles += 1
@@ -225,7 +225,7 @@ def try_cut(st, inst):
         st.bucket_born.pop((inst.leader, b, l), None)
     inst.members = members
     inst.batch_requests = len(members)
-    crosses = sorted((m for m in members if m.get("cross")), key=lambda m: m.get("gsn", 0))
+    crosses = sorted((m for m in members if m.get("gsn", 0) > 0), key=lambda m: m.get("gsn", 0))
     inst.is_cross_group = bool(crosses)
     inst.gsn = crosses[0]["gsn"] if crosses else 0
     inst.touched_groups = list(crosses[0].get("touched", [gid])) if crosses else [gid]
@@ -309,10 +309,13 @@ def phase_client_send(st: SimState):
     is_cross = st.scenarios.get('cross_group', False) or random.random() < st.cross_op_pct
     if is_cross:
         touched = [1, 2]
+    else:
+        touched = [random.choice([g.id for g in st.groups if g.id != 0])]
+    # GSN: cross-op sempre; single-group só em TotalOrder=global (PreprocessRequest no Go).
+    if is_cross or st.total_order == "global":
         st.gsn += 1
         gsn = st.gsn
     else:
-        touched = [random.choice([g.id for g in st.groups if g.id != 0])]
         gsn = 0
 
     # Grupo primario (onde a request sera proposta via Paxos)
@@ -357,7 +360,8 @@ def phase_client_send(st: SimState):
                  f"Payload: \"{payload}\" | Hash: {payload_hash[:8]}\n"
                  f"Grupo: G{group_id} membros={group.members}\n"
                  f"Lider do grupo: Node {leader}\n"
-                 f"Cross-group: {'Sim -> GSN=' + str(gsn) if is_cross else 'Nao'}",
+                 f"Cross-group: {'Sim' if is_cross else 'Nao'} | "
+                 f"GSN: {gsn if gsn else '-'} (TotalOrder={st.total_order})",
                  "orange")
 
     st.info_text = (
@@ -450,7 +454,7 @@ def phase_bucket_assign(st: SimState):
 
 
 def phase_gsn_assign(st: SimState):
-    """Sequenciador atribui GSN para cross-group ops."""
+    """Sequenciador atribui GSN: cross-ops sempre; todo pedido em TotalOrder=global."""
     req = st.current_request
     seq_leader = min(st.groups[0].members) if st.groups[0].members else 0
 
@@ -840,7 +844,7 @@ def phase_adeliver(st: SimState):
     entregar todo GSN anterior que também o toca; se alguma bloqueia, o batch INTEIRO fica
     em BufferCommit (inclusive os single-group que estão nele)."""
     req = st.current_request
-    crosses = sorted((m for m in req.members if m.get("cross")), key=lambda m: m.get("gsn", 0))
+    crosses = sorted((m for m in req.members if m.get("gsn", 0) > 0), key=lambda m: m.get("gsn", 0))
     if crosses:
         entries = [DeliveryEntry(sn=req.sn, gsn=m["gsn"], group_id=req.group_id,
                                  batch_digest=req.batch_digest) for m in crosses]
