@@ -189,3 +189,56 @@ class ProxyState:
 
     def has_pending(self, client_id: int, client_sn: int) -> bool:
         return (client_id, client_sn) in self.pending_responses
+
+
+class GlobalDeliverer:
+    """Entrega em ordem total GLOBAL, uma por nó -- espelha orderer/globaldeliver.go.
+
+    O consenso de cada grupo só garante ordem LOCAL. Um nó em vários grupos junta as filas de
+    todos os seus grupos e entrega cada mensagem com GSN só quando todo GSN menor que toca
+    algum grupo dele já foi entregue (ou pulado por não ser dele). Trabalha por MENSAGEM, não
+    por lote, então não trava com lotes cruzados entre grupos.
+    """
+
+    def __init__(self, my_groups):
+        self.my_groups = set(my_groups)
+        self.meta: dict[int, list[int]] = {}      # gsn -> grupos tocados (META)
+        self.meta_prefix = 0                      # maior k com META de 1..k conhecido
+        self.committed: dict[int, dict] = {}      # gsn -> item decidido num grupo deste nó
+        self.last_delivered = 0
+        self.log: list[dict] = []                 # entregas, em ordem ([GDELIVER] do Go)
+
+    def on_meta(self, gsn: int, groups) -> list[dict]:
+        if gsn > self.last_delivered and gsn not in self.meta:
+            self.meta[gsn] = list(groups)
+            while (self.meta_prefix + 1) in self.meta:
+                self.meta_prefix += 1
+        return self._drain()
+
+    def on_commit(self, gsn: int, item: dict) -> list[dict]:
+        if gsn > self.last_delivered:
+            self.committed.setdefault(gsn, item)
+        return self._drain()
+
+    def _drain(self) -> list[dict]:
+        out = []
+        while self.last_delivered < self.meta_prefix:
+            nxt = self.last_delivered + 1
+            groups = self.meta.get(nxt, [])
+            if not self.my_groups.intersection(groups):
+                self.meta.pop(nxt, None)
+                self.committed.pop(nxt, None)
+                self.last_delivered = nxt
+                continue
+            if nxt not in self.committed:
+                break  # ainda não decidido em nenhum grupo deste nó
+            item = self.committed.pop(nxt)
+            self.meta.pop(nxt, None)
+            self.last_delivered = nxt
+            d = {"gsn": nxt, "groups": groups, "label": item.get("label", ""),
+                 "payload": item.get("payload", "")}
+            self.log.append(d)
+            out.append(d)
+        if len(self.log) > 200:
+            self.log = self.log[-200:]
+        return out

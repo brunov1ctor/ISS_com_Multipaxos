@@ -272,6 +272,7 @@ class Simulation:
         if 'view_change_timeout' in kwargs:
             self._st.view_change_timeout = kwargs['view_change_timeout']
         self._st.node_buckets = {}
+        self._st.global_deliver = {}
         self._st.bucket_born.clear()
         self._st.rebuild_managers()
 

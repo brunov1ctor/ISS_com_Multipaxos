@@ -831,6 +831,14 @@ def _api_payload_and_groups(st: SimState, parts: list[str]):
             if gid not in data_groups:
                 return None, None, f"grupo {gid} não existe (grupos de dados: {data_groups})"
             return f"APIDELETE {parts[2]}", [gid], ""
+        # multicast <grupo[,grupo...]> <mensagem> -- igual cmd/orderingclient/apimode.go.
+        # A ordem (local/global) é do sistema (TotalOrder), não do comando.
+        if verb == "multicast" and len(parts) >= 3:
+            groups = sorted({int(g) for g in parts[1].split(",")})
+            bad = [g for g in groups if g not in data_groups]
+            if bad:
+                return None, None, f"grupo {bad} não existe (grupos de dados: {data_groups})"
+            return " ".join(parts[2:]), groups, ""
         if verb == "transfer" and len(parts) == 6:
             fg, tg = int(parts[1]), int(parts[3])
             if fg not in data_groups or tg not in data_groups:
@@ -844,7 +852,8 @@ def _api_payload_and_groups(st: SimState, parts: list[str]):
         "  put [grupo] <chave> <valor>\n"
         "  get [grupo] <chave>\n"
         "  delete [grupo] <chave>\n"
-        "  transfer <deGrupo> <deChave> <paraGrupo> <paraChave> <valor>"
+        "  transfer <deGrupo> <deChave> <paraGrupo> <paraChave> <valor>\n"
+        "  multicast <grupo[,grupo...]> <mensagem>"
     )
 
 
