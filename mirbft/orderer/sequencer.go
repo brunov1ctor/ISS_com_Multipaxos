@@ -16,6 +16,7 @@ package orderer
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -452,12 +453,21 @@ func (s *Sequencer) RegisterMetadata(gsn uint64, touchedGroups []uint32) {
 	copy(s.metadata[gsn], touchedGroups)
 	s.metaMu.Unlock()
 
-	// Append to per-group GSN queue (already sorted since GSNs arrive in order)
-	s.groupQueueMu.Lock()
-	for _, gid := range touchedGroups {
-		s.groupGSNQueue[gid] = append(s.groupGSNQueue[gid], gsn)
+	// Fila por grupo do ADeliver: só GSNs multi-grupo (os de um grupo só, do modo global, são
+	// ordenados pelo GlobalDeliverer). Inserção ORDENADA: o META chega fora de ordem (cada
+	// proxy publica o seu), e a fila desordenada fazia o ADeliver esperar pelo GSN errado.
+	if len(touchedGroups) > 1 {
+		s.groupQueueMu.Lock()
+		for _, gid := range touchedGroups {
+			q := s.groupGSNQueue[gid]
+			pos := sort.Search(len(q), func(k int) bool { return q[k] >= gsn })
+			q = append(q, 0)
+			copy(q[pos+1:], q[pos:])
+			q[pos] = gsn
+			s.groupGSNQueue[gid] = q
+		}
+		s.groupQueueMu.Unlock()
 	}
-	s.groupQueueMu.Unlock()
 
 	if s.onMeta != nil {
 		s.onMeta(gsn, touchedGroups)
@@ -607,7 +617,7 @@ func (s *Sequencer) drainBuffer(groupID uint32) {
 		allDelivered := true
 		if pending.batch != nil {
 			for _, req := range pending.batch.Requests {
-				if req.GSN > nextCandidate {
+				if len(req.TouchedGroups) > 1 && req.GSN > nextCandidate {
 					if s.aDeliverUnlocked(req.GSN, groupID) {
 						continue
 					}

@@ -4,6 +4,7 @@ package orderer
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 	"github.com/hyperledger-labs/mirbft/config"
@@ -419,10 +420,16 @@ func (i *mpxInstance) deliverCommit() {
 	// Cross-group: verifica ordem GSN para cada cross-op no batch
 	var crossOps []*pb.ClientRequest
 	for _, req := range b.Requests {
-		if req.GSN > 0 { // multi-grupo ou modo global
+		// Só multi-grupo: a ordem global de mensagens de um grupo só (TotalOrder=global) é
+		// feita por nó, por mensagem, no GlobalDeliverer -- segurar o lote inteiro aqui trava
+		// quando a ordem do consenso do grupo difere da ordem dos GSNs.
+		if len(req.TouchedGroups) > 1 && req.GSN > 0 {
 			crossOps = append(crossOps, req)
 		}
 	}
+	// Testa em ordem crescente de GSN: na ordem do lote, um GSN maior testado antes de um menor
+	// do MESMO lote bloqueava e guardava o lote inteiro com o menor dentro (deadlock).
+	sort.Slice(crossOps, func(a, b int) bool { return crossOps[a].GSN < crossOps[b].GSN })
 	if len(crossOps) > 0 && GetGlobalMulticastOrderer() != nil {
 		fmt.Printf("[MPX] sn=%d CROSS-OP-BATCH count=%d gsn_range=[%d..%d] group=%d\n",
 			i.sn, len(crossOps), crossOps[0].GSN, crossOps[len(crossOps)-1].GSN, i.bucketId)
@@ -441,6 +448,11 @@ func (i *mpxInstance) deliverCommit() {
 	if i.announce != nil {
 		fmt.Printf("[MPX] sn=%d DELIVER group=%d nReq=%d\n", i.sn, i.bucketId, len(b.Requests))
 		i.announce(i.sn, b, i.lastDigest[:])
+	}
+	// Entregar estes GSNs pode destravar lotes guardados (BufferCommit) que esperavam por eles;
+	// antes só a chegada de um META novo disparava essa verificação.
+	if len(crossOps) > 0 && GetGlobalMulticastOrderer() != nil {
+		GetGlobalMulticastOrderer().seq.drainBuffer(i.bucketId)
 	}
 	i.closed = true; traceCommit(i.sn, len(b.Requests))
 }
