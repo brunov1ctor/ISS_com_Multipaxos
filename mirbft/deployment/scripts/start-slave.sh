@@ -57,7 +57,7 @@ mkdir -p \
   "${remote_work_dir}/logs" \
   "${remote_work_dir}/bin"
 
-# diretórios leves (configs/TLS) em /users/<user>/iss
+# diretórios leves (configs/TLS) em /tmp/iss-<user>-base
 mkdir -p \
   "${remote_base_dir}/config" \
   "${remote_base_dir}/tls-data"

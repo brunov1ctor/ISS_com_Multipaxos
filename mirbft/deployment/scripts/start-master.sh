@@ -43,7 +43,7 @@ exp_data_dir="${5:?exp_data_dir local requerido}"
 local_master_cmd="${6:?local_master_cmd local requerido}"
 
 # Base estável (configs/TLS) no remoto
-remote_base_dir="/users/${remote_user}/iss"
+remote_base_dir="${remote_base_dir:-/tmp/iss-${remote_user}-base}"
 remote_config_dir="${remote_base_dir}/experiment-config"
 
 master_port="${master_port:-9999}"
@@ -95,7 +95,7 @@ log_i "Enviando master-commands.cmd para o master..."
 rsync -az "${local_master_cmd}" "${remote_user}@${master_ip}:${cmd_file}"
 
 # -----------------------------------------------------------------------------
-# Publicar configs do experimento no master (local config -> /users/<user>/iss/experiment-config/)
+# Publicar configs do experimento no master (local config -> /tmp/iss-<user>-base/experiment-config/)
 # -----------------------------------------------------------------------------
 log_i "Publicando configs do experimento no master: ${exp_data_dir}/config -> ${remote_config_dir}/"
 rsync -az "${exp_data_dir}/config/" "${remote_user}@${master_ip}:${remote_config_dir}/"
