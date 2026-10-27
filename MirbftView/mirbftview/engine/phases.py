@@ -512,9 +512,11 @@ def phase_gsn_assign(st: SimState):
         f"Grupos envolvidos: {req.touched_groups}"
     )
 
-    # Reserva de bloco / votos da eleição ocorridos ao numerar este pedido aparecem antes do META
-    st.messages = list(st.seq_visual)
+    # Votos da eleição / reserva de bloco ocorridos ao numerar este pedido saem ANTES do META,
+    # em ondas: cada onda só começa quando a anterior chega (Message.then).
+    waves = [w for w in st.seq_visual if w]
     st.seq_visual = []
+    st.messages = []
     held_nodes = set(st.meta_late[-1]["nodes"]) if late_group is not None else set()
     for nid in st.groups[0].members:
         if nid != seq_leader and nid not in held_nodes and nid not in st.seq_down:
@@ -523,6 +525,12 @@ def phase_gsn_assign(st: SimState):
                 label=f"META gsn={req.gsn}",
                 detail=f"groups={req.touched_groups}",
             ))
+    if waves:
+        meta_wave = st.messages
+        chain = waves + ([meta_wave] if meta_wave else [])
+        for cur, nxt in zip(chain, chain[1:]):
+            cur[0].then = nxt
+        st.messages = chain[0]
     if late_group is not None:
         st.log_event(Phase.GSN_ASSIGN, "Cenario: META atrasado",
                      f"O META do GSN={req.gsn} ainda nao chegou ao G{late_group}\n"
