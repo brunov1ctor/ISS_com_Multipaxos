@@ -174,7 +174,9 @@ def _late_meta_step(st: SimState, new_messages: list):
     """Cenário 'ADeliver bloqueado': quando o grupo atrasado já está com o commit retido (falta o
     META), espera algumas rodadas para o bloqueio ficar visível e então envia o META aos nós
     dele. Quando a mensagem chega, o RegisterMetadata registra o GSN e o drainBuffer libera."""
-    seq_leader = min(st.groups[0].members) if st.groups and st.groups[0].members else 0
+    from mirbftview.engine.sequencer import ensure_seq
+    ensure_seq(st)
+    seq_leader = st.seq_leader
     for item in list(st.meta_late):
         if item["state"] != "held":
             continue
