@@ -313,8 +313,8 @@ def phase_client_send(st: SimState):
         touched = [random.choice([g.id for g in st.groups if g.id != 0])]
     # GSN: cross-op sempre; single-group só em TotalOrder=global (PreprocessRequest no Go).
     if is_cross or st.total_order == "global":
-        st.gsn += 1
-        gsn = st.gsn
+        from mirbftview.engine.sequencer import next_gsn
+        gsn = next_gsn(st)
     else:
         gsn = 0
 
@@ -456,7 +456,9 @@ def phase_bucket_assign(st: SimState):
 def phase_gsn_assign(st: SimState):
     """Sequenciador atribui GSN: cross-ops sempre; todo pedido em TotalOrder=global."""
     req = st.current_request
-    seq_leader = min(st.groups[0].members) if st.groups[0].members else 0
+    from mirbftview.engine.sequencer import ensure_seq
+    ensure_seq(st)
+    seq_leader = st.seq_leader
 
     # Registra META stream publication
     st.meta_stream.append({
@@ -510,10 +512,12 @@ def phase_gsn_assign(st: SimState):
         f"Grupos envolvidos: {req.touched_groups}"
     )
 
-    st.messages = []
+    # Reserva de bloco / votos da eleição ocorridos ao numerar este pedido aparecem antes do META
+    st.messages = list(st.seq_visual)
+    st.seq_visual = []
     held_nodes = set(st.meta_late[-1]["nodes"]) if late_group is not None else set()
     for nid in st.groups[0].members:
-        if nid != seq_leader and nid not in held_nodes:
+        if nid != seq_leader and nid not in held_nodes and nid not in st.seq_down:
             st.messages.append(Message(
                 MsgType.META_STREAM, seq_leader, nid,
                 label=f"META gsn={req.gsn}",

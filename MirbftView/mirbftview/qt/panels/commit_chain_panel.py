@@ -136,10 +136,20 @@ class CommitChainPanel(QWidget):
         """Variáveis do Sequencer (sequencer.go) na ordem de exibição: (chave, texto)."""
         sim = self.sim
         members = sim.groups[0].members if sim.groups and sim.groups[0].members else []
-        leader = min(members) if members else 0
+        st = sim._st
+        leader = st.seq_leader if getattr(st, "seq_leader", None) is not None else (min(members) if members else 0)
+        term = getattr(st, "seq_term", 0)
         metas = list(sim.meta_stream)
         out = [("nextGSN", str(sim.gsn + 1)),
-               ("leader", f"N{leader}  term 0"),
+               ("leader", f"N{leader}  term {term}"),
+               ("reserva", f"≤{getattr(st, 'seq_confirmed', 0)} (maioria)")]
+        acc = getattr(st, "seq_accepted", {})
+        if acc:
+            down = getattr(st, "seq_down", set())
+            out.append(("aceito", " ".join(f"N{n}{'✗' if n in down else ''}={v}" for n, v in sorted(acc.items()))))
+        for a, b in getattr(st, "seq_skips", [])[-1:]:
+            out.append(("skip", f"{a}..{b}"))
+        out += [
                ("metadata", f"{len(metas)} GSN(s)" if metas else "vazio")]
         for m in reversed(metas[-3:]):
             out.append((f"meta{m['gsn']}", f"{m['gsn']} \u2192 " + ",".join(f"G{g}" for g in m["groups"])))

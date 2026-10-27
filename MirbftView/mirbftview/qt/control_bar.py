@@ -146,6 +146,13 @@ class ControlBar(QWidget):
              "ACCEPT e dispara um View Change: os demais membros elegem um\n"
              "novo lider com ballot maior. Mecanismo real de tolerancia a\n"
              "falhas do MultiPaxos."),
+            ("seq_failover", "Falha do lider do sequenciador (G0)",
+             "Na proxima numeracao de GSN, o lider do grupo 0 para de\n"
+             "responder. Os demais elegem um novo lider: cada voto leva a\n"
+             "maior reserva de GSN que o no confirmou e o maior META que viu.\n"
+             "O novo lider retoma logo apos a maior reserva da maioria (sem\n"
+             "palpite) e declara pulados os GSNs sem META (META_SKIP).\n"
+             "Marque de novo para derrubar tambem o novo lider."),
             ("cross_group", "Forcar cross-group",
              "Forca toda nova requisicao a ser cross-group (tocar 2 grupos\n"
              "distintos), em vez de sortear aleatoriamente pela taxa\n"
