@@ -588,8 +588,8 @@ def _generate_client_request(st: SimState, color: str) -> RequestInfo:
         kind="request",
     )
     if is_cross or st.total_order == "global":  # GSN: cross-op sempre; single só em global
-        st.gsn += 1
-        req.gsn = st.gsn
+        from mirbftview.engine.sequencer import next_gsn
+        req.gsn = next_gsn(st)
     return req
 
 
@@ -902,8 +902,8 @@ def inject_client_command(st: SimState, client_id: int, raw_text: str) -> str:
         kind="request",
     )
     if req.is_cross_group or st.total_order == "global":  # GSN: cross-op sempre; single só em global
-        st.gsn += 1
-        req.gsn = st.gsn
+        from mirbftview.engine.sequencer import next_gsn
+        req.gsn = next_gsn(st)
 
     st.active_requests.append(req)
     st.current_request = req

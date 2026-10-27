@@ -242,3 +242,12 @@ class GlobalDeliverer:
         if len(self.log) > 200:
             self.log = self.log[-200:]
         return out
+
+    def on_skip(self, frm: int, to: int) -> list[dict]:
+        """META_SKIP: GSNs [frm, to] nunca terão META (novo líder do sequenciador pulou a faixa)."""
+        for gsn in range(frm, to + 1):
+            if gsn > self.last_delivered and gsn not in self.meta:
+                self.meta[gsn] = []
+        while (self.meta_prefix + 1) in self.meta:
+            self.meta_prefix += 1
+        return self._drain()

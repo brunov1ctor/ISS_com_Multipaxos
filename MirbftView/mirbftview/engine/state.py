@@ -64,6 +64,7 @@ class SimState:
     def _init_counters(self):
         self.client_sn = 0
         self.gsn = 0
+        self.seq_leader = None  # sequenciador (grupo 0) re-inicializado em engine/sequencer.ensure_seq
         self.committed = 0
         self.last_checkpoint_sn = -1
         self.checkpoints_done = 0
