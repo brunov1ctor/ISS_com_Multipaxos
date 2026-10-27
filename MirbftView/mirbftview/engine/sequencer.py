@@ -22,7 +22,7 @@ def ensure_seq(st):
         st.seq_accepted = {}          # nó -> acceptedUpTo
         st.seq_down = set()           # nós que deixaram de responder como sequenciador
         st.seq_skips = []             # faixas META_SKIP publicadas
-        st.seq_visual = []            # mensagens a mostrar na próxima fase GSN Atribuído
+        st.seq_visual = []            # ondas de mensagens (listas) para a fase GSN Atribuído
         st.seq_failover_pending = False
         st.seq_events = []            # histórico curto para o painel
 
@@ -39,13 +39,12 @@ def _reserve(st, upto, reason):
         st.seq_accepted[n] = max(st.seq_accepted.get(n, 0), upto)
     leader = st.seq_leader
     ok = len(alive) > len(members) // 2
-    for n in members:
-        if n == leader or n in st.seq_down:
-            continue
-        st.seq_visual.append(Message(MsgType.GSN_REQUEST, leader, n,
-                                     label=f"RESERVE ≤{upto}", detail=f"SEQ_RESERVE term={st.seq_term}"))
-        st.seq_visual.append(Message(MsgType.GSN_RESPONSE, n, leader,
-                                     label=f"ACK ≤{upto}", detail="SEQ_RESERVE_ACK"))
+    others = [n for n in members if n != leader and n not in st.seq_down]
+    # 1ª onda: líder -> membros (SEQ_RESERVE); 2ª onda: membros -> líder (SEQ_RESERVE_ACK)
+    st.seq_visual.append([Message(MsgType.GSN_REQUEST, leader, n, label=f"RESERVE ≤{upto}",
+                                  detail=f"SEQ_RESERVE term={st.seq_term}") for n in others])
+    st.seq_visual.append([Message(MsgType.GSN_RESPONSE, n, leader, label=f"ACK ≤{upto}",
+                                  detail="SEQ_RESERVE_ACK") for n in others])
     if ok:
         st.seq_confirmed = upto
     st.log_event(Phase.GSN_ASSIGN, "Reserva de GSN" + (" CONFIRMADA" if ok else " SEM MAIORIA"),
@@ -77,11 +76,10 @@ def _failover(st):
     max_acc = max(votes.values(), default=0)
     resume = max_acc + 1
 
-    for n in alive:
-        if n != new:
-            st.seq_visual.append(Message(MsgType.VIEW_CHANGE, n, new,
-                                         label=f"VOTO reserva≤{votes[n]} META≤{max_meta}",
-                                         detail=f"SEQ_VOTE term={st.seq_term}"))
+    # Onda de votos (cada voto leva a reserva aceita e o maior META visto) -- antes da reserva nova
+    st.seq_visual.append([Message(MsgType.VIEW_CHANGE, n, new,
+                                  label=f"VOTO reserva≤{votes[n]} META≤{max_meta}",
+                                  detail=f"SEQ_VOTE term={st.seq_term}") for n in alive if n != new])
     st.log_event(Phase.GSN_ASSIGN, "Eleicao do sequenciador",
                  f"Node {old} parou de enviar heartbeat. Node {new} vira candidato (term {st.seq_term}).\n"
                  f"Votos (reserva aceita): " + ", ".join(f"N{n}={v}" for n, v in sorted(votes.items())) + "\n"
