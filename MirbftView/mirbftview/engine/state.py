@@ -65,6 +65,10 @@ class SimState:
         self.client_sn = 0
         self.gsn = 0
         self.seq_leader = None  # sequenciador (grupo 0) re-inicializado em engine/sequencer.ensure_seq
+        self.down_nodes: set = set()   # nós que caíram (crash-stop), ver engine/failure.py
+        self.fail_anim: dict = {}      # nó -> tick em que caiu (animação tremer/sumir)
+        for n in getattr(self, "nodes", []):
+            n.is_alive = True
         self.committed = 0
         self.last_checkpoint_sn = -1
         self.checkpoints_done = 0
@@ -200,6 +204,7 @@ class SimState:
         self.delivery = AtomicDelivery()
         self.proxy = ProxyState()
         self.view_change_mgr = ViewChangeManager(all_node_ids, self.view_change_timeout)
+        self.epoch_mgr.down = getattr(self, "down_nodes", set())
 
     def reset(self):
         """Reset completo.

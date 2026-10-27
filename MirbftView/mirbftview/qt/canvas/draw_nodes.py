@@ -1,5 +1,7 @@
 """Renderização de nós e clientes."""
 
+import math
+
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import (
     QPainter, QPainterPath, QPainterPathStroker, QPolygonF, QColor,
@@ -238,9 +240,25 @@ def draw_nodes(p, sim, node_pos, msg_color):
             (f"\U0001f4ec PROXY \u00b7 {info['name']} #{csn}", _color(info.get("color"), "#FF5A5A")))
     proxy_nodes = {info["proxy"] for info in pending.values()}
 
+    st = sim._st
+    down = getattr(st, "down_nodes", set())
     for node in sim.nodes:
         pos = node_pos.get(node.id)
         if pos is None:
+            continue
+        if node.id in down:
+            # Caiu (crash-stop): treme em vermelho, desbota e some -- parou de responder.
+            from mirbftview.engine.failure import SHAKE_TICKS, FADE_TICKS
+            age = st.tick_count - st.fail_anim.get(node.id, st.tick_count)
+            if age >= SHAKE_TICKS + FADE_TICKS or age < 0:
+                continue
+            shake = 6 * math.sin(age * 1.7) if age < SHAKE_TICKS else 0
+            opacity = 1.0 if age < SHAKE_TICKS else 1.0 - (age - SHAKE_TICKS) / FADE_TICKS
+            p.save()
+            p.setOpacity(max(0.0, opacity))
+            _draw_single_node(p, sim, node, QPointF(pos.x() + shake, pos.y()), False, False,
+                              C["red"], True, [("✖ CAIU", QColor(C["red"]))])
+            p.restore()
             continue
         is_leader = node.id in leader_nodes
         is_in_group = any(g.id in family_groups and node.id in g.members for g in sim.groups)

@@ -77,6 +77,9 @@ class EpochManager:
         sob Single.
         """
         members = self.groups.get(group_id) or [0]
+        # Nós caídos (crash-stop) não lideram: equivale ao resultado do view change.
+        down = getattr(self, "down", set())
+        members = [m for m in members if m not in down] or members
         if self.leader_policy == "Single":
             return members[0]
         if sn is None:
