@@ -10,6 +10,9 @@ foi usado) e declara pulados os números entre o maior META e a marca (META_SKIP
 from mirbftview.protocol.types import Message, MsgType, Phase
 
 SEQ_BLOCK = 100  # gsnBlockSize no Go
+# Cenário "Falha do líder do sequenciador": o líder cai ao numerar este GSN (contado desde o
+# início da execução ou desde a última falha), para dar tempo de ver a reserva antes.
+FAILOVER_AT_NTH_GSN = 3
 
 
 def ensure_seq(st):
@@ -23,7 +26,8 @@ def ensure_seq(st):
         st.seq_down = set()           # nós que deixaram de responder como sequenciador
         st.seq_skips = []             # faixas META_SKIP publicadas
         st.seq_visual = []            # ondas de mensagens (listas) para a fase GSN Atribuído
-        st.seq_failover_pending = False
+        st.seq_failover_done = False   # falha do cenário já aplicada nesta execução/armação
+        st.seq_gsn_since_leader = 0    # GSNs numerados pelo líder atual
         st.seq_events = []            # histórico curto para o painel
 
 
@@ -110,15 +114,18 @@ def _failover(st):
 def next_gsn(st):
     """allocateGSN: numera só dentro da reserva confirmada pela maioria."""
     ensure_seq(st)
-    if st.seq_failover_pending:
-        st.seq_failover_pending = False
+    if (st.scenarios.get("seq_failover", False) and not st.seq_failover_done
+            and st.seq_gsn_since_leader >= FAILOVER_AT_NTH_GSN - 1):
+        st.seq_failover_done = True
         _failover(st)
+        st.seq_gsn_since_leader = 0
     if st.gsn + 1 > st.seq_confirmed:
         if not _reserve(st, max(st.seq_confirmed, st.gsn) + SEQ_BLOCK,
                         "contador chegou ao fim da reserva confirmada"):
             return 0
     st.gsn += 1
     gsn = st.gsn
+    st.seq_gsn_since_leader += 1
     # Pede o próximo bloco na metade, fora do caminho das mensagens.
     if st.seq_confirmed - gsn == SEQ_BLOCK // 2 - 1:
         _reserve(st, st.seq_confirmed + SEQ_BLOCK, f"metade do bloco usada (GSN {gsn})")

@@ -290,10 +290,11 @@ class Simulation:
     def set_scenario(self, key: str, enabled: bool, label: str = ""):
         self._st.scenarios[key] = enabled
         if key == "seq_failover" and enabled:
-            # Uma falha do líder do grupo 0, aplicada na próxima numeração de GSN.
+            # (Re)arma a falha: o líder ATUAL do grupo 0 cai na 3ª numeração de GSN dele.
+            # Sobrevive a Reset/Aplicar (o cenário fica em st.scenarios).
             from mirbftview.engine.sequencer import ensure_seq
             ensure_seq(self._st)
-            self._st.seq_failover_pending = True
+            self._st.seq_failover_done = False
         status = "LIGADO" if enabled else "DESLIGADO"
         name = label or key
         self._st.log_event(Phase.SCENARIO, "Cenario", f"[{status}] {name}", "accent")
