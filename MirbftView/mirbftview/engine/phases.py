@@ -332,7 +332,7 @@ def phase_client_send(st: SimState):
 
     # Proxy = no que recebe do cliente: rodizio por ClientSn entre TODOS os nos
     # (guessTargetOrderers real), pode ser de fora do grupo.
-    proxy_node = st.proxy.pick_proxy(st.client_sn, [n.id for n in st.nodes])
+    proxy_node = st.proxy.pick_proxy(st.client_sn, [n.id for n in st.nodes if n.id not in st.down_nodes])
 
     st.current_request = RequestInfo(
         client_id=client.id,
@@ -579,7 +579,7 @@ def phase_promise(st: SimState):
     """PROMISE — Fase 1b."""
     req = st.current_request
     group = st.groups[req.group_id] if req.group_id < len(st.groups) else st.groups[1]
-    req.promises_received = len(group.members)
+    req.promises_received = len([n for n in group.members if n not in st.down_nodes])
 
     st.phase = Phase.PROMISE
     st.log_event(Phase.PROMISE, "PROMISE (Fase 1b)",
@@ -645,7 +645,7 @@ def phase_accepted(st: SimState):
     """ACCEPTED — Fase 2b."""
     req = st.current_request
     group = st.groups[req.group_id] if req.group_id < len(st.groups) else st.groups[1]
-    req.accepted_received = len(group.members)
+    req.accepted_received = len([n for n in group.members if n not in st.down_nodes])
 
     st.phase = Phase.ACCEPTED
     st.log_event(Phase.ACCEPTED, "ACCEPTED (Fase 2b)",
@@ -769,6 +769,8 @@ def _gdeliver(st: SimState, fn, only=None):
         st.global_deliver = {}
     for node in st.nodes:
         if only is not None and node.id not in only:
+            continue
+        if node.id in st.down_nodes:
             continue
         gd = st.global_deliver.get(node.id)
         if gd is None:

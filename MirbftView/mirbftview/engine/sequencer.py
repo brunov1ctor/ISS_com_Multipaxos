@@ -23,7 +23,7 @@ def ensure_seq(st):
         st.seq_term = 0
         st.seq_confirmed = 0          # confirmedUpTo do líder
         st.seq_accepted = {}          # nó -> acceptedUpTo
-        st.seq_down = set()           # nós que deixaram de responder como sequenciador
+        st.seq_down = st.down_nodes   # mesmo conjunto dos nós caídos (crash-stop)
         st.seq_skips = []             # faixas META_SKIP publicadas
         st.seq_visual = []            # ondas de mensagens (listas) para a fase GSN Atribuído
         st.seq_failover_done = False   # falha do cenário já aplicada nesta execução/armação
@@ -65,8 +65,9 @@ def _failover(st):
     """O líder do grupo 0 para de responder; um novo líder é eleito por maioria."""
     from mirbftview.engine.phases import _gdeliver
 
+    from mirbftview.engine.failure import kill_node
     old = st.seq_leader
-    st.seq_down.add(old)
+    kill_node(st, old, "Cenario 'Falha do lider do sequenciador (G0)'")
     alive = _alive_members(st)
     members = st.groups[0].members
     if len(alive) <= len(members) // 2:
@@ -117,6 +118,10 @@ def next_gsn(st):
     if (st.scenarios.get("seq_failover", False) and not st.seq_failover_done
             and st.seq_gsn_since_leader >= FAILOVER_AT_NTH_GSN - 1):
         st.seq_failover_done = True
+        _failover(st)
+        st.seq_gsn_since_leader = 0
+    elif st.seq_leader in st.down_nodes:
+        # O líder do grupo 0 caiu por outro cenário (ex.: "Falha de nó"): elege outro.
         _failover(st)
         st.seq_gsn_since_leader = 0
     if st.gsn + 1 > st.seq_confirmed:

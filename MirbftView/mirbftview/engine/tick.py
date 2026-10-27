@@ -70,6 +70,10 @@ def tick(st: SimState):
     # Envelhece brilhos e balões dos buckets A CADA tick (não só ao fim de cada fase).
     _decay_visual_events(st)
 
+    # Nó caído (crash-stop) não envia nem recebe: some o que estiver indo/vindo dele.
+    if st.down_nodes:
+        st.messages = [m for m in st.messages if not _touches_down(st, m)]
+
     # Avança TODAS as mensagens em trânsito
     speed = st.speed * 0.02
     all_arrived = True
@@ -98,6 +102,8 @@ def tick(st: SimState):
                 nxt.color = nxt.color or msg.color
                 nxt.req_snapshot = nxt.req_snapshot or msg.req_snapshot
                 followups.append(nxt)
+    if st.down_nodes:
+        followups = [m for m in followups if not _touches_down(st, m)]
     if followups:
         st.messages = followups
         return
@@ -334,6 +340,19 @@ def _advance_instance(st: SimState, req: RequestInfo):
     if idx + 1 >= len(INSTANCE_SEQUENCE):
         return
     next_phase = INSTANCE_SEQUENCE[idx + 1]
+
+    # Grupo sem maioria viva (crash-stop): nenhuma decisão é possível, a instância para.
+    if st.down_nodes:
+        from mirbftview.engine.failure import has_quorum
+        if not has_quorum(st, req.group_id):
+            if not getattr(req, '_noquorum_logged', False):
+                req._noquorum_logged = True
+                g = st.groups[req.group_id]
+                vivos = [n for n in g.members if n not in st.down_nodes]
+                st.log_event(Phase.VIEW_CHANGE, f"G{req.group_id} SEM MAIORIA",
+                             f"Vivos {vivos} de {g.members}: precisa de {len(g.members)//2 + 1}.\n"
+                             f"O grupo para de decidir (nenhum quorum possivel).", "red")
+            return
 
     # Instância preparada mas sem pedidos: waitForRequests (sem timeout). A cada rodada
     # tenta cortar de novo; quando corta, a próxima rodada segue para o ACCEPT.
@@ -929,7 +948,7 @@ def _do_client_send(st: SimState, req: RequestInfo):
     req.bucket_id = st.epoch_mgr.get_request_bucket(client.id, req.client_sn, req.group_id)
 
     group = st.groups[req.group_id]
-    req.proxy_node = st.proxy.pick_proxy(req.client_sn, [n.id for n in st.nodes])
+    req.proxy_node = st.proxy.pick_proxy(req.client_sn, [n.id for n in st.nodes if n.id not in st.down_nodes])
     st.proxy.register_request(client.id, req.client_sn, req.proxy_node)
     st.pending_info[(client.id, req.client_sn)] = {
         "proxy": req.proxy_node, "color": req.color, "name": client.name}
@@ -967,15 +986,29 @@ def _do_client_send(st: SimState, req: RequestInfo):
     )]
 
 
+def _touches_down(st: SimState, m) -> bool:
+    return ((not m.from_is_client and m.from_id in st.down_nodes)
+            or (not m.to_is_client and m.to_id in st.down_nodes))
+
+
 def _trigger_node_failure(st: SimState, req: RequestInfo):
-    """Simula falha de nó e inicia view change."""
+    """Cenário "Falha de nó": o líder desta instância cai DE VEZ (crash-stop) e o grupo faz
+    view change para o próximo membro vivo."""
+    from mirbftview.engine.failure import kill_node, has_quorum
     old_leader = req.leader
-    all_ids = [n.id for n in st.nodes]
-    old_idx = all_ids.index(old_leader) if old_leader in all_ids else 0
-    new_leader = all_ids[(old_idx + 1) % len(all_ids)]
-    new_ballot = req.ballot + len(all_ids)
+    group = st.groups[req.group_id]
+    # Só derruba se TODO grupo do nó (inclusive o grupo 0) continuar com maioria viva.
+    for g in st.groups:
+        if old_leader in g.members:
+            remaining = [n for n in g.members if n != old_leader and n not in st.down_nodes]
+            if len(remaining) < len(g.members) // 2 + 1:
+                return  # deixaria G{g.id} sem maioria: não aplica
+    kill_node(st, old_leader, f"Cenario 'Falha de no': lider de G{req.group_id} caiu antes do ACCEPT")
+    new_leader = st.epoch_mgr.leader_for_group(req.group_id)
+    new_ballot = req.ballot + len(st.nodes)
     phases.phase_view_change(st, old_leader, new_leader, new_ballot)
     req.phase = Phase.VIEW_CHANGE
+    # Se ele também era o sequenciador, o grupo 0 elege outro na próxima numeração.
 
 
 def _handle_special(st: SimState, req: RequestInfo):
