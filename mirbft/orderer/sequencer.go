@@ -41,6 +41,23 @@ type Sequencer struct {
 	// GSN counter (monotonicamente crescente)
 	nextGSN uint64
 	gsnMu   sync.Mutex
+	gsnCond *sync.Cond // sinaliza reserva confirmada (allocateGSN espera nela)
+
+	// Reserva de blocos de GSN (recuperação sem palpite): o líder só numera até confirmedUpTo,
+	// uma marca que a MAIORIA do grupo 0 confirmou (SEQ_RESERVE/SEQ_RESERVE_ACK). Todo nó guarda
+	// acceptedUpTo, a maior marca que já confirmou; na eleição o voto leva esse valor, e como
+	// toda reserva confirmada foi vista por uma maioria, o novo líder (eleito por maioria) sabe
+	// com certeza que nenhum GSN acima da maior marca recebida foi usado.
+	confirmedUpTo  uint64         // líder: pode numerar até aqui
+	acceptedUpTo   uint64         // todo nó: maior reserva que confirmou
+	reservePending uint64         // líder: marca pedida, aguardando maioria (0 = nenhuma)
+	reserveTerm    int32          // termo da reserva pendente
+	reserveAcks    map[int32]bool // quem confirmou a reserva pendente
+	reserveSentAt  time.Time      // para reenviar se as confirmações se perderem
+
+	// Eleição: maiores valores informados pelos votos recebidos neste termo
+	voteMaxAccepted uint64
+	voteMaxMeta     uint64
 
 	// Pending GSN requests (aguardando resposta do líder)
 	requestsPending map[uint64]chan uint64
@@ -146,6 +163,7 @@ func NewSequencer(members []int32) *Sequencer {
 		Int("numMembers", len(members)).
 		Msg("Sequencer initialized")
 
+	s.gsnCond = sync.NewCond(&s.gsnMu)
 	return s
 }
 
@@ -163,10 +181,19 @@ func (s *Sequencer) Start() {
 		s.currentLeader(), membership.OwnID, s.IsLeader(), s.nextGSN)
 
 	if s.IsLeader() {
-		// Termo 0: líder de bootstrap já começa emitindo heartbeats.
+		// Termo 0: líder de bootstrap já começa emitindo heartbeats e reserva o 1º bloco.
 		go s.leaderHeartbeatLoop(0)
+		go func() {
+			s.gsnMu.Lock()
+			s.requestReservationLocked()
+			s.gsnMu.Unlock()
+		}()
 	}
-	s.startElectionTimer()
+	// Carência na largada: os primeiros heartbeats se perdem enquanto as conexões ainda estão
+	// subindo; com o timer normal (0,5-1 s) um seguidor disparava eleição sem falha nenhuma.
+	s.electMu.Lock()
+	s.startElectionTimerLockedFor(startupElectionGrace())
+	s.electMu.Unlock()
 }
 
 // IsLeader retorna true se este nó é o líder do sequenciador.
@@ -230,6 +257,9 @@ func (s *Sequencer) GetNextGSN() uint64 {
 
 		select {
 		case gsn := <-respChan:
+			if gsn == 0 {
+				continue // líder sem reserva confirmada: tenta de novo
+			}
 			s.reqMu.Lock()
 			delete(s.requestsPending, reqID)
 			s.reqMu.Unlock()
@@ -252,13 +282,137 @@ func (s *Sequencer) GetNextGSN() uint64 {
 	return 0
 }
 
-// allocateGSN atribui um GSN localmente (só o líder chama).
+// gsnBlockSize é o tamanho de cada reserva de GSN confirmada pela maioria.
+const gsnBlockSize = 100
+
+// allocateGSN atribui um GSN localmente (só o líder chama). Só numera dentro da reserva
+// confirmada pela maioria; se ela acabou, pede a próxima e espera (até 3 s). Devolve 0 se não
+// conseguiu (sem maioria) -- quem chamou trata como falha e o pedido é refeito por timeout.
 func (s *Sequencer) allocateGSN() uint64 {
+	deadline := time.Now().Add(3 * time.Second)
 	s.gsnMu.Lock()
+	defer s.gsnMu.Unlock()
+	for s.nextGSN > s.confirmedUpTo {
+		s.requestReservationLocked()
+		if time.Now().After(deadline) {
+			fmt.Printf("[SEQUENCER][RESERVE] sem reserva confirmada (next=%d confirmed=%d)\n", s.nextGSN, s.confirmedUpTo)
+			return 0
+		}
+		t := time.AfterFunc(200*time.Millisecond, func() {
+			s.gsnMu.Lock()
+			s.gsnCond.Broadcast()
+			s.gsnMu.Unlock()
+		})
+		s.gsnCond.Wait()
+		t.Stop()
+	}
 	gsn := s.nextGSN
 	s.nextGSN++
-	s.gsnMu.Unlock()
+	// Pede o próximo bloco antes de acabar, para a rodada não ficar no caminho das mensagens.
+	if s.confirmedUpTo-gsn < gsnBlockSize/2 {
+		s.requestReservationLocked()
+	}
 	return gsn
+}
+
+// requestReservationLocked pede à maioria a próxima marca (gsnMu travado). Não faz nada se não
+// é líder ou se já há um pedido recente pendente; reenvia se as confirmações demoraram.
+func (s *Sequencer) requestReservationLocked() {
+	s.electMu.RLock()
+	isLeader := s.status == "leader" && s.leader == membership.OwnID
+	term := s.term
+	s.electMu.RUnlock()
+	if !isLeader {
+		return
+	}
+	if s.reservePending > 0 && s.reserveTerm == term && time.Since(s.reserveSentAt) < time.Second {
+		return
+	}
+	if s.reservePending == 0 || s.reserveTerm != term {
+		base := s.confirmedUpTo
+		if s.nextGSN-1 > base {
+			base = s.nextGSN - 1
+		}
+		s.reservePending = base + gsnBlockSize
+		s.reserveTerm = term
+		s.reserveAcks = map[int32]bool{membership.OwnID: true}
+		if s.reservePending > s.acceptedUpTo {
+			s.acceptedUpTo = s.reservePending
+		}
+	}
+	s.reserveSentAt = time.Now()
+	upto := s.reservePending
+	fmt.Printf("[SEQUENCER][RESERVE] term=%d pedindo reserva ate %d\n", term, upto)
+	if len(s.reserveAcks) > len(s.members)/2 { // grupo 0 de 1 nó
+		s.confirmReservationLocked()
+		return
+	}
+	go s.broadcastToMembers(fmt.Sprintf("%s%d:%d", SYSTEM_SEQ_RESERVE, term, upto))
+}
+
+func (s *Sequencer) confirmReservationLocked() {
+	s.confirmedUpTo = s.reservePending
+	fmt.Printf("[SEQUENCER][RESERVE] term=%d reserva CONFIRMADA ate %d (%d/%d)\n",
+		s.reserveTerm, s.confirmedUpTo, len(s.reserveAcks), len(s.members))
+	s.reservePending = 0
+	s.gsnCond.Broadcast()
+}
+
+// HandleReserve: um nó confirma a reserva do líder (se o termo não for antigo) e guarda a marca.
+func (s *Sequencer) HandleReserve(payload string, senderID int32) {
+	var term int64
+	var upto uint64
+	if n, _ := fmt.Sscanf(payload, SYSTEM_SEQ_RESERVE+"%d:%d", &term, &upto); n < 2 {
+		return
+	}
+	s.electMu.RLock()
+	stale := int32(term) < s.term
+	s.electMu.RUnlock()
+	if stale {
+		return
+	}
+	s.gsnMu.Lock()
+	if upto > s.acceptedUpTo {
+		s.acceptedUpTo = upto
+	}
+	s.gsnMu.Unlock()
+	messenger.EnqueuePriorityMsg(&pb.ProtocolMessage{
+		SenderId: membership.OwnID, Sn: -1,
+		Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
+			Req: &pb.ClientRequest{Payload: []byte(fmt.Sprintf("%s%d:%d", SYSTEM_SEQ_RESERVE_ACK, term, upto))},
+		}},
+	}, senderID)
+}
+
+// HandleReserveAck: o líder conta confirmações; com a maioria, libera a numeração até a marca.
+func (s *Sequencer) HandleReserveAck(payload string, senderID int32) {
+	var term int64
+	var upto uint64
+	if n, _ := fmt.Sscanf(payload, SYSTEM_SEQ_RESERVE_ACK+"%d:%d", &term, &upto); n < 2 {
+		return
+	}
+	s.gsnMu.Lock()
+	defer s.gsnMu.Unlock()
+	if s.reservePending != upto || s.reserveTerm != int32(term) {
+		return
+	}
+	s.reserveAcks[senderID] = true
+	if len(s.reserveAcks) > len(s.members)/2 {
+		s.confirmReservationLocked()
+	}
+}
+
+// maxMetaSeen devolve o maior GSN com META conhecido neste nó.
+func (s *Sequencer) maxMetaSeen() uint64 {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
+	var m uint64
+	for gsn := range s.metadata {
+		if gsn > m {
+			m = gsn
+		}
+	}
+	return m
 }
 
 // HandleGSNRequest processa um GSN_REQUEST recebido. Se este nó não for o líder atual, apenas
@@ -288,8 +442,11 @@ func (s *Sequencer) HandleGSNRequest(payload string, senderID int32) {
 		return
 	}
 
-	// Atribui GSN
+	// Atribui GSN (dentro da reserva confirmada pela maioria)
 	gsn := s.allocateGSN()
+	if gsn == 0 {
+		return // sem reserva confirmada: o requester tenta de novo por timeout
+	}
 	fmt.Printf("[SEQUENCER] GSN-ASSIGN gsn=%d reqID=%d requester=%d\n", gsn, reqID, requester)
 
 	// Responde ao requester

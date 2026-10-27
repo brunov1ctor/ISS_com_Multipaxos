@@ -30,6 +30,8 @@ const (
 	SYSTEM_SEQ_VOTE_REQUEST  = "SYSTEM:SEQ_VOTE_REQUEST:"
 	SYSTEM_SEQ_VOTE_RESPONSE = "SYSTEM:SEQ_VOTE_RESPONSE:"
 	SYSTEM_SEQ_HEARTBEAT     = "SYSTEM:SEQ_HEARTBEAT:"
+	SYSTEM_SEQ_RESERVE       = "SYSTEM:SEQ_RESERVE:"     // líder pede reserva de GSN até X
+	SYSTEM_SEQ_RESERVE_ACK   = "SYSTEM:SEQ_RESERVE_ACK:" // nó confirma a reserva
 )
 
 var globalMulticastOrderer *MultiPaxosMulticastOrderer
@@ -173,6 +175,14 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 		}
 		if strings.HasPrefix(payload, SYSTEM_SEQ_VOTE_RESPONSE) {
 			o.seq.HandleVoteResponse(payload, pm.SenderId)
+			return
+		}
+		if strings.HasPrefix(payload, SYSTEM_SEQ_RESERVE_ACK) {
+			o.seq.HandleReserveAck(payload, pm.SenderId)
+			return
+		}
+		if strings.HasPrefix(payload, SYSTEM_SEQ_RESERVE) {
+			o.seq.HandleReserve(payload, pm.SenderId)
 			return
 		}
 		if strings.HasPrefix(payload, SYSTEM_SEQ_HEARTBEAT) {

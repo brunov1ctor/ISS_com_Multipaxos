@@ -21,10 +21,20 @@ import (
 	logger "github.com/rs/zerolog/log"
 )
 
-// gsnRecoverySafetyMargin cobre GSNs alocados pelo líder anterior cujo META
-// ainda não tenha se propagado quando este nó assume a liderança. Pode gerar
-// pequenos saltos no espaço de GSN (inofensivo), nunca reuso.
-const gsnRecoverySafetyMargin = 100
+// startupElectionGrace: timeout do PRIMEIRO timer de eleição, na largada. Os primeiros
+// heartbeats do líder de bootstrap se perdem enquanto as conexões sobem; com o timeout normal
+// um seguidor disparava eleição sem falha nenhuma (visto no Emulab: o Node 0 se reelegia).
+func startupElectionGrace() time.Duration {
+	min := config.Config.SequencerElectionTimeoutMs
+	if min <= 0 {
+		min = 500
+	}
+	g := time.Duration(10*min) * time.Millisecond
+	if g < 5*time.Second {
+		g = 5 * time.Second
+	}
+	return g
+}
 
 // currentLeader retorna o líder atualmente conhecido do sequenciador (thread-safe).
 func (s *Sequencer) currentLeader() int32 {
@@ -55,7 +65,14 @@ func (s *Sequencer) startElectionTimerLocked() {
 	if s.electionTimer != nil {
 		s.electionTimer.Stop()
 	}
-	timeout := electionTimeoutFor(config.Config.SequencerElectionTimeoutMs)
+	s.startElectionTimerLockedFor(electionTimeoutFor(config.Config.SequencerElectionTimeoutMs))
+}
+
+// startElectionTimerLockedFor arma o timer com um timeout específico (electMu travado).
+func (s *Sequencer) startElectionTimerLockedFor(timeout time.Duration) {
+	if s.electionTimer != nil {
+		s.electionTimer.Stop()
+	}
 	s.electionTimer = time.AfterFunc(timeout, s.onElectionTimeout)
 }
 
@@ -63,6 +80,11 @@ func (s *Sequencer) startElectionTimerLocked() {
 // nem vitória — seguidor sem notícia do líder, ou candidato cuja própria eleição não deu quórum
 // a tempo. Em ambos os casos, incrementa o termo, vira candidato, vota em si mesmo e pede votos.
 func (s *Sequencer) onElectionTimeout() {
+	meta := s.maxMetaSeen()
+	s.gsnMu.Lock()
+	accepted := s.acceptedUpTo
+	s.gsnMu.Unlock()
+
 	s.electMu.Lock()
 	if s.status == leader {
 		// Líder não dispara eleição contra si mesmo.
@@ -73,6 +95,9 @@ func (s *Sequencer) onElectionTimeout() {
 	s.status = candidate
 	s.votedFor = membership.OwnID
 	s.votes = map[int32]bool{membership.OwnID: true}
+	// Começa com os próprios valores; os votos recebidos podem aumentá-los (protegidos por electMu).
+	s.voteMaxAccepted = accepted
+	s.voteMaxMeta = meta
 	term := s.term
 	s.startElectionTimerLocked()
 	s.electMu.Unlock()
@@ -111,7 +136,11 @@ func (s *Sequencer) HandleVoteRequest(payload string, senderID int32) {
 	if granted {
 		grantedInt = 1
 	}
-	responsePayload := fmt.Sprintf("%s%d:%d", SYSTEM_SEQ_VOTE_RESPONSE, replyTerm, grantedInt)
+	s.gsnMu.Lock()
+	accepted := s.acceptedUpTo
+	s.gsnMu.Unlock()
+	// Voto leva a maior reserva que este nó confirmou e o maior GSN com META que viu.
+	responsePayload := fmt.Sprintf("%s%d:%d:%d:%d", SYSTEM_SEQ_VOTE_RESPONSE, replyTerm, grantedInt, accepted, s.maxMetaSeen())
 	messenger.EnqueuePriorityMsg(&pb.ProtocolMessage{
 		SenderId: membership.OwnID, Sn: -1,
 		Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
@@ -145,6 +174,17 @@ func (s *Sequencer) HandleVoteResponse(payload string, senderID int32) {
 		s.votes = make(map[int32]bool)
 	}
 	s.votes[senderID] = true
+	var vAcc, vMeta uint64
+	var t2 int64
+	var g2 int
+	if n, _ := fmt.Sscanf(payload, SYSTEM_SEQ_VOTE_RESPONSE+"%d:%d:%d:%d", &t2, &g2, &vAcc, &vMeta); n == 4 {
+		if vAcc > s.voteMaxAccepted {
+			s.voteMaxAccepted = vAcc
+		}
+		if vMeta > s.voteMaxMeta {
+			s.voteMaxMeta = vMeta
+		}
+	}
 	becameLeader := len(s.votes) > len(s.members)/2
 	wonTerm := s.term
 	if becameLeader {
@@ -164,43 +204,46 @@ func (s *Sequencer) HandleVoteResponse(payload string, senderID int32) {
 	}
 }
 
-// resumeGSNCounterOnBecomingLeader recalcula nextGSN a partir do maior GSN já
-// observado via META -- que já é mantido em todo nó por RegisterMetadata,
-// nunca removido -- evitando reemitir um GSN já usado pelo líder anterior.
+// resumeGSNCounterOnBecomingLeader: o novo líder retoma a numeração a partir da maior reserva
+// informada pela maioria que o elegeu (voteMaxAccepted). Toda reserva confirmada foi vista por
+// uma maioria, e duas maiorias sempre se cruzam: nenhum GSN acima dessa marca pode ter sido
+// usado. A sobra (do maior META visto até a marca) é declarada pulada com META_SKIP.
 func (s *Sequencer) resumeGSNCounterOnBecomingLeader() {
-	s.metaMu.RLock()
-	var maxGSN uint64
-	for gsn := range s.metadata {
-		if gsn > maxGSN {
-			maxGSN = gsn
-		}
-	}
-	s.metaMu.RUnlock()
-
-	resumeFrom := maxGSN + 1 + gsnRecoverySafetyMargin
-
+	ownMeta := s.maxMetaSeen()
+	s.electMu.RLock()
+	maxAcc := s.voteMaxAccepted
+	maxMeta := s.voteMaxMeta
+	s.electMu.RUnlock()
 	s.gsnMu.Lock()
-	oldNext := s.nextGSN
-	if resumeFrom > s.nextGSN {
-		s.nextGSN = resumeFrom
+	if s.acceptedUpTo > maxAcc {
+		maxAcc = s.acceptedUpTo
 	}
-	newNext := s.nextGSN
+	if ownMeta > maxMeta {
+		maxMeta = ownMeta
+	}
+	oldNext := s.nextGSN
+	resume := maxAcc + 1
+	if oldNext > resume {
+		resume = oldNext
+	}
+	s.nextGSN = resume
+	s.confirmedUpTo = resume - 1 // só numera depois de uma nova reserva confirmada
+	s.reservePending = 0
+	s.requestReservationLocked()
 	s.gsnMu.Unlock()
 
-	// GSNs [maxGSN+1 .. newNext-1] nunca serão atribuídos por este líder: avisa todo mundo,
-	// senão a entrega em ordem global fica esperando o META deles. Começa do maior entre
-	// maxGSN+1 e o que este nó já numerou antes (oldNext), para não declarar pulado um GSN
-	// que ele mesmo atribuiu num mandato anterior.
-	skipFrom := maxGSN + 1
+	// Sobra declarada pulada: GSNs sem META conhecido pela maioria e abaixo da marca. Começa no
+	// maior entre maxMeta+1 e o que este nó já numerou (se ele foi líder antes).
+	skipFrom := maxMeta + 1
 	if oldNext > skipFrom {
 		skipFrom = oldNext
 	}
-	if newNext > skipFrom {
-		s.PublishMETASkip(skipFrom, newNext-1)
+	if resume-1 >= skipFrom {
+		s.PublishMETASkip(skipFrom, resume-1)
 	}
 
-	fmt.Printf("[SEQUENCER][ELECTION] nextGSN retomado em %d (maxGSN observado via META=%d)\n", newNext, maxGSN)
-	logger.Info().Uint64("nextGSN", newNext).Uint64("maxObservedGSN", maxGSN).Msg("Sequencer resumed GSN counter after election")
+	fmt.Printf("[SEQUENCER][ELECTION] nextGSN retomado em %d (maior reserva da maioria=%d, maior META=%d)\n", resume, maxAcc, maxMeta)
+	logger.Info().Uint64("nextGSN", resume).Uint64("maxReserved", maxAcc).Uint64("maxMeta", maxMeta).Msg("Sequencer resumed GSN counter after election")
 }
 
 // leaderHeartbeatLoop transmite heartbeats periódicos enquanto este nó
