@@ -136,16 +136,17 @@ class ControlBar(QWidget):
              "pedido (single-group GET ou cross-group TX) vem do\n"
              "CrossOpRatio e do CrossOpGroupWeights da Configuracao."),
             ("timeout", "Timeout / Retransmissao",
-             "Com chance aleatoria, simula o lider nao recebendo quorum\n"
+             "No 2o lote proposto, simula o lider nao recebendo quorum\n"
              "de ACCEPTED a tempo e retransmitindo o ACCEPT (acceptRtxEvery\n"
              "no codigo real). Mecanismo real de tolerancia a mensagens\n"
              "perdidas ou atrasadas — reenviar e seguro, duplicatas sao\n"
              "ignoradas pelo protocolo."),
             ("node_failure", "Falha de no",
-             "Com chance aleatoria, simula a queda do lider atual antes do\n"
-             "ACCEPT e dispara um View Change: os demais membros elegem um\n"
-             "novo lider com ballot maior. Mecanismo real de tolerancia a\n"
-             "falhas do MultiPaxos."),
+             "No 2o lote proposto, o lider da instancia cai DE VEZ antes do\n"
+             "ACCEPT (some da tela) e dispara um View Change: os demais\n"
+             "membros elegem um novo lider com ballot maior. Mecanismo real\n"
+             "de tolerancia a falhas do MultiPaxos. So derruba se todos os\n"
+             "grupos do no continuarem com maioria."),
             ("seq_failover", "Falha do lider do sequenciador (G0)",
              "Na 3a mensagem com GSN (1a: reserva; 2a: so META), o lider do\n"
              "grupo 0 para de responder. Os demais elegem um novo lider: cada voto leva a\n"
@@ -176,7 +177,7 @@ class ControlBar(QWidget):
              "drainBuffer libera, o batch e anunciado e o grupo abre a proxima\n"
              "SN. O outro grupo entrega normalmente e responde ao cliente."),
             ("batch_resurrect", "Batch Resurrect",
-             "Com chance aleatoria, simula uma instancia desistindo de\n"
+             "No 2o lote proposto, simula uma instancia desistindo de\n"
              "esperar quorum para uma posicao do log (mecanismo real de\n"
              "Eventual Progress): ela commita um valor nulo e devolve a\n"
              "fila do bucket as requisicoes ja cortadas em lote mas ainda\n"
