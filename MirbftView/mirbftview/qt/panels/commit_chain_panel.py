@@ -203,6 +203,10 @@ class CommitChainPanel(QWidget):
         p.drawText(QRectF(x, y, rect.width() - 10, 11), Qt.AlignLeft | Qt.AlignVCenter, title)
         y += 13
 
+        # Reset zera o relógio da simulação: marcas de mudança do relógio antigo ficariam "no
+        # futuro" (tempo decorrido negativo -> alpha > 255). Descarta essas marcas.
+        if any(v > t for v in self._g0_changed.values()):
+            self._g0_changed = {k: v for k, v in self._g0_changed.items() if v <= t}
         # Detecta mudanças (para acender o que mudou)
         vars_ = self._g0_vars()
         for key, val in vars_:
@@ -219,7 +223,7 @@ class CommitChainPanel(QWidget):
             changed = t - self._g0_changed.get(key, -999) < 70
             if changed:
                 glow = QColor(C["gold"])
-                glow.setAlpha(int(70 * (1 - (t - self._g0_changed[key]) / 70)) + 25)
+                glow.setAlpha(max(0, min(255, int(70 * (1 - (t - self._g0_changed[key]) / 70)) + 25)))
                 p.setPen(Qt.NoPen)
                 p.setBrush(glow)
                 p.drawRoundedRect(QRectF(rect.x() + 3, y - 1, rect.width() - 6, line_h + 1), 3, 3)
