@@ -37,7 +37,7 @@ SCP_RETRY_COUNT = "10"
 
 BASE_DIR = os.environ.get(
     "ISS_BASE_DIR",
-    f"/users/{os.environ.get('USER', 'user')}/iss",
+    f"/tmp/iss-{os.environ.get('USER', 'user')}-base",
 )
 
 # CORREÇÃO: usar remote_work_dir consistente com start-slave.sh

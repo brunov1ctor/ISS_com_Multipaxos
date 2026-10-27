@@ -30,8 +30,8 @@ remote_user="${remote_user:-${USER}}"
 remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
 remote_exp_dir="${remote_exp_dir:-${remote_work_dir}}"
 
-# Diretório leve (configs/TLS) permanece em /users/<user>/iss.
-remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
+# Diretório leve (configs/TLS) em /tmp/iss-<user>-base (local de cada nó; o home NFS é pequeno e compartilhado entre topologias).
+remote_base_dir="${remote_base_dir:-/tmp/iss-${remote_user}-base}"
 
 remote_bin_dir="${remote_bin_dir:-${remote_work_dir}/bin}"
 

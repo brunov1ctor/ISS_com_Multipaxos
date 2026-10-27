@@ -53,7 +53,7 @@ func resolveConfigAddr() (configFile, addr string, ok bool) {
 		if user == "" {
 			user = "user"
 		}
-		base = fmt.Sprintf("/users/%s/iss", user)
+		base = fmt.Sprintf("/tmp/iss-%s-base", user)
 	}
 	configFile = filepath.Join(base, "config", "config.yml")
 	if st, err := os.Stat(configFile); err != nil || st.Size() == 0 {

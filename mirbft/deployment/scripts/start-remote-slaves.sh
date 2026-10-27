@@ -33,7 +33,7 @@
 #   SSH_START_TIMEOUT   - Timeout para SSH (default: 12s)
 #   FORCE_COPY_BINS     - Força cópia de binários mesmo em NFS (default: false)
 #   remote_work_dir     - Diretório de trabalho remoto (default: /tmp/iss-$USER)
-#   remote_base_dir     - Diretório base remoto (default: /users/$USER/iss)
+#   remote_base_dir     - Diretório base remoto (default: /tmp/iss-$USER-base)
 #
 # Notas:
 #   - Binários já foram copiados por deploy-remote.sh para /tmp/iss-user/bin
@@ -80,11 +80,11 @@ SSH_START_TIMEOUT="${SSH_START_TIMEOUT:-12s}"
 
 # Diretórios remotos:
 # - remote_work_dir: diretório temporário de trabalho (/tmp/iss-$USER)
-# - remote_base_dir: diretório base persistente (/users/$USER/iss)
+# - remote_base_dir: diretório base (/tmp/iss-$USER-base)
 # - remote_bin_dir: diretório de binários LOCAL (/tmp/iss-$USER/bin) - evita SIGBUS em NFS
 # - remote_exp_dir: diretório do experimento (usa remote_work_dir como root)
 remote_work_dir="${remote_work_dir:-/tmp/iss-${remote_user}}"
-remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
+remote_base_dir="${remote_base_dir:-/tmp/iss-${remote_user}-base}"
 remote_bin_dir="${remote_work_dir}/bin"
 local_bin_dir="${local_bin_dir:-${GOBIN:-${HOME}/go/bin}}"
 remote_exp_dir="${remote_work_dir}"

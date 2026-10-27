@@ -57,7 +57,7 @@ local_result_fetching_log=result-fetching.log
 #
 # Objetivo:
 # - heavy/work/status/logs/output em /tmp/iss-<user>
-# - configs/TLS em /users/<user>/iss
+# - configs/TLS em /tmp/iss-<user>-base (local; o home NFS é compartilhado entre topologias)
 ###############################################################################
 remote_user="${remote_user:-${USER:-user}}"
 
@@ -75,7 +75,7 @@ remote_user_script_body="$remote_work_dir/user-script-body.sh"
 remote_user_script_uploaded="$remote_work_dir/user-script-uploaded"
 
 # (estável / leve)
-remote_base_dir="${remote_base_dir:-/users/${remote_user}/iss}"
+remote_base_dir="${remote_base_dir:-/tmp/iss-${remote_user}-base}"
 
 # Onde o deploy publica configs do experimento no MASTER:
 remote_config_dir="${remote_config_dir:-$remote_base_dir/experiment-config}"
