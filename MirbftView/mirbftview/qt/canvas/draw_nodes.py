@@ -248,6 +248,11 @@ def draw_nodes(p, sim, node_pos, msg_color):
         if inst.members:
             text += f" \u00b7 {len(inst.members)} ped."
         labels.setdefault(inst.leader, []).append((text, _color(inst.color, C["phase_prepare"])))
+    # Líder do sequenciador (grupo 0): muda após a eleição do cenário de falha.
+    _st = getattr(sim, "_st", sim)
+    if getattr(_st, "seq_leader", None) is not None:
+        labels.setdefault(_st.seq_leader, []).insert(
+            0, (f"★ LÍDER G0 (seq.) · term {getattr(_st, 'seq_term', 0)}", QColor("#22D3EE")))
     for (cid, csn), info in pending.items():
         labels.setdefault(info["proxy"], []).append(
             (f"\U0001f4ec PROXY \u00b7 {info['name']} #{csn}", _color(info.get("color"), "#FF5A5A")))

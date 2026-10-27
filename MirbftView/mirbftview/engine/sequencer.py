@@ -87,6 +87,8 @@ def _failover(st):
                                   detail=f"SEQ_VOTE term={st.seq_term}") for n in alive if n != new])
     st.log_event(Phase.GSN_ASSIGN, "Eleicao do sequenciador",
                  f"Node {old} parou de enviar heartbeat. Node {new} vira candidato (term {st.seq_term}).\n"
+                 f"(No Go vence quem tiver o timer de eleicao sorteado expirando primeiro;\n"
+                 f" aqui, para ficar previsivel, e sempre o menor ID vivo.)\n"
                  f"Votos (reserva aceita): " + ", ".join(f"N{n}={v}" for n, v in sorted(votes.items())) + "\n"
                  f"Maior reserva da maioria = {max_acc}; maior META visto = {max_meta}\n"
                  f"Nenhum GSN acima de {max_acc} pode ter sido usado (maiorias se cruzam).\n"
