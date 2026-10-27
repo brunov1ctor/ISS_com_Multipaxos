@@ -52,7 +52,9 @@ def draw_gsn_meta_panel(p, sim):
     cy += line_h
 
     # Status: quantas senhas distribuidas
-    seq_id = min(sim.groups[0].members) if sim.groups and sim.groups[0].members else 0
+    seq_id = getattr(sim._st, "seq_leader", None)
+    if seq_id is None:
+        seq_id = min(sim.groups[0].members) if sim.groups and sim.groups[0].members else 0
     p.setPen(QColor(C["text2"]))
     p.setFont(QFont("Segoe UI", 7))
     if gsn_val == 0:

@@ -96,6 +96,19 @@ def _draw_eye(p, cx, cy, color, hidden):
         p.drawLine(QPointF(cx - 7, cy + 6), QPointF(cx + 7, cy - 6))
 
 
+def _seq_leader(sim):
+    """Líder ATUAL do sequenciador (grupo 0); muda após a eleição do cenário de falha."""
+    st = getattr(sim, "_st", sim)
+    lid = getattr(st, "seq_leader", None)
+    if lid is not None:
+        return lid
+    return min(sim.groups[0].members) if sim.groups and sim.groups[0].members else 0
+
+
+def _down(sim):
+    return getattr(getattr(sim, "_st", sim), "down_nodes", set())
+
+
 def draw_groups(p, sim, node_pos, hidden=None, eye_rects=None):
     """`hidden`: ids de grupos com a região escondida (só o nome e o olhinho ficam).
     `eye_rects`: dicionário preenchido com a área de clique de cada olhinho (coordenadas da cena)."""
@@ -111,7 +124,7 @@ def draw_groups(p, sim, node_pos, hidden=None, eye_rects=None):
     # preenchimento (cobriria o desenho), desenhado antes das manchas dos outros grupos.
     g0 = next((g for g in sim.groups if g.id == 0 and g.members), None)
     if g0 is not None:
-        g0_points = [node_pos[nid] for nid in g0.members if nid in node_pos]
+        g0_points = [node_pos[nid] for nid in g0.members if nid in node_pos and nid not in _down(sim)]
         if g0_points:
             g0_color = QColor(GROUP_COLORS[0 % len(GROUP_COLORS)])
             offsets = _group_offsets(sim)
@@ -146,7 +159,7 @@ def draw_groups(p, sim, node_pos, hidden=None, eye_rects=None):
     for group in sim.groups:
         if group.id == 0 or not group.members:
             continue
-        points = [node_pos[nid] for nid in group.members if nid in node_pos]
+        points = [node_pos[nid] for nid in group.members if nid in node_pos and nid not in _down(sim)]
         if not points:
             continue
         base_color = QColor(GROUP_COLORS[group.id % len(GROUP_COLORS)])
@@ -196,7 +209,7 @@ def draw_connections(p, sim, node_pos):
         color = QColor(GROUP_COLORS[group.id % len(GROUP_COLORS)])
         color.setAlpha(20)
         p.setPen(QPen(color, 0.8))
-        members = [node_pos[nid] for nid in group.members if nid in node_pos]
+        members = [node_pos[nid] for nid in group.members if nid in node_pos and nid not in _down(sim)]
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 p.drawLine(members[i], members[j])
@@ -363,7 +376,7 @@ def draw_sequencer_glow(p, sim, node_pos):
     meta = sim.meta_stream
     if not meta:
         return
-    seq_id = min(sim.groups[0].members) if sim.groups and sim.groups[0].members else 0
+    seq_id = _seq_leader(sim)
     pos = node_pos.get(seq_id)
     if pos is None:
         return
@@ -389,14 +402,14 @@ def draw_sequencer_glow(p, sim, node_pos):
 def draw_meta_broadcast_lines(p, sim, node_pos):
     if sim.phase != Phase.GSN_ASSIGN:
         return
-    seq_id = min(sim.groups[0].members) if sim.groups and sim.groups[0].members else 0
+    seq_id = _seq_leader(sim)
     seq_pos = node_pos.get(seq_id)
     if seq_pos is None:
         return
     pen = QPen(QColor("#A855F7"), 1.5, Qt.DashLine)
     p.setPen(pen)
     for nid in sim.groups[0].members:
-        if nid == seq_id:
+        if nid == seq_id or nid in _down(sim):
             continue
         npos = node_pos.get(nid)
         if npos:
