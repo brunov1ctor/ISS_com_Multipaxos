@@ -49,7 +49,23 @@ INSTANCE_SEQUENCE = [
     Phase.DONE,
 ]
 
-RETRANSMIT_CHANCE = 0.15
+RETRANSMIT_CHANCE = 0.15  # (não usado: os cenários agora são determinísticos)
+# Cenários didáticos: acontecem UMA vez, no N-ésimo lote proposto (com pedidos) depois do Reset
+# ou de marcar o cenário -- direto ao ponto, sem depender de sorteio.
+SCENARIO_AT_NTH_BATCH = 2
+
+
+def _scenario_fires(st, key: str, req) -> bool:
+    """True quando `req` é o N-ésimo lote (com pedidos) visto por este cenário e ele ainda não
+    disparou nesta execução. Cada lote conta uma vez por cenário."""
+    if not st.scenarios.get(key, False) or key in st.scen_done or not req.members:
+        return False
+    seen = st.scen_seen.setdefault(key, set())
+    seen.add((req.group_id, req.sn))
+    if len(seen) >= SCENARIO_AT_NTH_BATCH:
+        st.scen_done.add(key)
+        return True
+    return False
 
 
 def tick(st: SimState):
@@ -386,22 +402,22 @@ def _advance_instance(st: SimState, req: RequestInfo):
 
     # Cenário: batch_resurrect (GIVE-UP sem quórum): o batch volta aos buckets do líder
     # e a instância segue com um valor vazio (NOP).
-    if next_phase == Phase.ACCEPT and st.scenarios.get('batch_resurrect', False):
-        if req.members and not getattr(req, '_resurrect_done', False) and random.random() < 0.2:
+    if next_phase == Phase.ACCEPT and _scenario_fires(st, 'batch_resurrect', req):
+        if True:
             req._resurrect_done = True
             phases.resurrect_batch(st, req, "a instancia desistiu do quorum (Eventual Progress)")
 
     # Cenário: timeout/retransmissão
     if next_phase == Phase.ACCEPTED and not req._retransmit_done:
-        if st.scenarios.get('timeout', False) and random.random() < RETRANSMIT_CHANCE:
+        if _scenario_fires(st, 'timeout', req):
             req._retransmit_done = True
             phases.phase_retransmit(st)
             req.phase = Phase.RETRANSMIT
             return
 
     # Cenário: falha de nó
-    if next_phase == Phase.ACCEPT and st.scenarios.get('node_failure', False):
-        if not req._failure_done and random.random() < 0.12:
+    if next_phase == Phase.ACCEPT and not req._failure_done and _scenario_fires(st, 'node_failure', req):
+        if True:
             req._failure_done = True
             _trigger_node_failure(st, req)
             return

@@ -66,6 +66,8 @@ class SimState:
         self.gsn = 0
         self.seq_leader = None  # sequenciador (grupo 0) re-inicializado em engine/sequencer.ensure_seq
         self.down_nodes: set = set()   # nós que caíram (crash-stop), ver engine/failure.py
+        self.scen_seen: dict = {}      # cenário -> lotes já vistos (ver tick._scenario_fires)
+        self.scen_done: set = set()    # cenários que já dispararam nesta execução
         self.fail_anim: dict = {}      # nó -> tick em que caiu (animação tremer/sumir)
         for n in getattr(self, "nodes", []):
             n.is_alive = True

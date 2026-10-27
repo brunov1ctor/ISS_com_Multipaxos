@@ -289,6 +289,9 @@ class Simulation:
 
     def set_scenario(self, key: str, enabled: bool, label: str = ""):
         self._st.scenarios[key] = enabled
+        if enabled:  # (re)arma: dispara de novo no 2º lote a partir de agora
+            self._st.scen_done.discard(key)
+            self._st.scen_seen.pop(key, None)
         if key == "seq_failover" and enabled:
             # (Re)arma a falha: o líder ATUAL do grupo 0 cai na 3ª numeração de GSN dele.
             # Sobrevive a Reset/Aplicar (o cenário fica em st.scenarios).
