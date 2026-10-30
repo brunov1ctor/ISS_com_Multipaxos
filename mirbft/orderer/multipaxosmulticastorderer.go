@@ -124,19 +124,13 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 	}
 	fmt.Printf("[MULTICAST] Bootstrap: %d data groups ready (SN 0-%d)\n", len(o.groupOrderers), initialSeg.LastSN())
 
+	// Os segmentos do Manager não são repassados aos grupos: cada grupo já percorre seus SNs num
+	// laço contínuo desde o bootstrap acima (ver runSegment). Repassá-los criava laços duplicados
+	// sobre os mesmos SNs (um por líder com leaderPolicy=Simple). O canal é só drenado, para o
+	// Manager não bloquear ao publicar.
 	segCh := o.mgr.SubscribeOrderer()
 	go func() {
-		for seg := range segCh {
-			o.orderersMu.RLock()
-			for _, ord := range o.groupOrderers {
-				if ord != nil && ord.segmentChan != nil {
-					select {
-					case ord.segmentChan <- seg:
-					default:
-					}
-				}
-			}
-			o.orderersMu.RUnlock()
+		for range segCh {
 		}
 	}()
 	o.orderersMu.RLock()
