@@ -55,6 +55,44 @@ type MultiPaxosOrderer struct {
 	// (válido porque o MultiPaxos só tolera falhas de parada, não Byzantine).
 	groupCommitCount  int32 // atomic: quantos SNs este grupo já comitou localmente, nesta réplica
 	groupCheckpointSN int32 // atomic: maior SN deste grupo confirmado como ponto estável
+
+	// Fase 1 uma vez por líder (só com LeaderPolicy=Single): a promessa vale para todos os SNs
+	// do grupo, e o líder já preparado pula o PREPARE nos SNs seguintes.
+	grpMu             sync.Mutex
+	grpPromised       uint64 // maior ballot prometido neste grupo
+	grpPrepared       bool   // o líder já tem maioria de promessas para grpPreparedBallot
+	grpPreparedBallot int64
+}
+
+func singleLeader() bool { return config.Config.LeaderPolicy == "Single" }
+
+// promiseGroup registra a promessa do ballot b para o grupo; false se já prometeu um maior.
+func (o *MultiPaxosOrderer) promiseGroup(b uint64) bool {
+	o.grpMu.Lock()
+	defer o.grpMu.Unlock()
+	if b < o.grpPromised {
+		return false
+	}
+	o.grpPromised = b
+	return true
+}
+
+func (o *MultiPaxosOrderer) groupPromised() uint64 {
+	o.grpMu.Lock()
+	defer o.grpMu.Unlock()
+	return o.grpPromised
+}
+
+func (o *MultiPaxosOrderer) setGroupPrepared(b int64, ok bool) {
+	o.grpMu.Lock()
+	o.grpPrepared, o.grpPreparedBallot = ok, b
+	o.grpMu.Unlock()
+}
+
+func (o *MultiPaxosOrderer) groupPreparedFor(b int64) bool {
+	o.grpMu.Lock()
+	defer o.grpMu.Unlock()
+	return o.grpPrepared && o.grpPreparedBallot == b
 }
 
 func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {

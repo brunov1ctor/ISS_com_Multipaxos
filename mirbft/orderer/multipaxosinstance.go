@@ -193,11 +193,13 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 		i.currentBallot = nextBallotAfter(ballot)
 		i.leader = -1; i.phase = phaseInit; i.prepared = false
 		i.prepSent = false; i.promiseCount = 0; i.promisedFrom = nil
+		if singleLeader() { i.parent.setGroupPrepared(0, false) }
 	}
 	// Regra de "promessa" do Paxos: um acceptor nunca aceita/promete um ballot menor que o
 	// maior que já prometeu. É isso que impede um líder antigo/lento de sobrescrever uma
 	// decisão já tomada por um líder mais novo.
 	if ballot < i.promisedBallot { return }
+	if singleLeader() && !i.parent.promiseGroup(ballot) { return }
 	i.promisedBallot = ballot
 
 	members := i.members
@@ -225,6 +227,7 @@ func (i *mpxInstance) onPrepare(prepare *pb.MPxPrepare) {
 			i.promiseCount++
 			if i.promiseCount >= i.quorum && !i.prepared {
 				i.prepared = true; i.phase = phasePrepared; go i.ProposeIfDue()
+				if singleLeader() { i.parent.setGroupPrepared(i.currentBallot, true) }
 			}
 		}
 	}
@@ -241,6 +244,7 @@ func (i *mpxInstance) onPromise(from int32, _ *pb.MPxPromise) {
 	if i.promiseCount >= i.quorum && !i.prepared {
 		fmt.Printf("[MPX] sn=%d QUORUM promises=%d/%d\n", i.sn, i.promiseCount, i.quorum)
 		i.prepared = true; i.phase = phasePrepared; go i.ProposeIfDue()
+		if singleLeader() { i.parent.setGroupPrepared(i.currentBallot, true) }
 	}
 }
 
@@ -250,6 +254,7 @@ func (i *mpxInstance) onAccept(from int32, a *pb.MPxAccept) {
 	if i.phase == phaseCommitted { return }
 	ballot := uint64(a.GetBallot())
 	if ballot < i.promisedBallot { return }
+	if singleLeader() && ballot < i.parent.groupPromised() { return }
 	// O ballot já codifica o ID de quem propôs (ver nextBallotAfter), então dois remetentes
 	// diferentes nunca deveriam apresentar o mesmo ballot — se isso acontece aqui, é uma
 	// mensagem duplicada/atrasada de uma rodada já conhecida, e a descartamos.
@@ -542,6 +547,7 @@ func (i *mpxInstance) tick(now time.Time) {
 	if now.Sub(i.roundStartAt) >= i.acceptRtxEvery*3 {
 		i.currentBallot = nextBallotAfter(uint64(i.currentBallot))
 		i.phase = phaseInit; i.prepared = false
+		if singleLeader() { i.parent.setGroupPrepared(0, false) }
 		i.promiseCount = 0; i.promisedFrom = nil
 		i.acceptCount = 0; i.acceptedFrom = nil; i.roundStartAt = now
 		if i.parent.emit != nil { i.sendPrepare() }
@@ -581,7 +587,21 @@ func (i *mpxInstance) SetMembers(members []int32) {
 		i.currentBallot = int64(uint64(0)<<32 | uint64(i.leader))
 		if i.leader == membership.OwnID && !i.prepSent {
 			i.prepSent = true
-			if i.parent.emit != nil { i.sendPrepare() }
+			if singleLeader() {
+				// Começa no ballot atual do grupo (ballots menores seriam recusados).
+				if gp := i.parent.groupPromised(); uint64(i.currentBallot) < gp {
+					if int32(gp&0xffffffff) == membership.OwnID {
+						i.currentBallot = int64(gp)
+					} else {
+						i.currentBallot = nextBallotAfter(gp)
+					}
+				}
+			}
+			if singleLeader() && i.parent.groupPreparedFor(i.currentBallot) {
+				i.prepared = true; i.phase = phasePrepared; go i.ProposeIfDue()
+			} else if i.parent.emit != nil {
+				i.sendPrepare()
+			}
 		}
 	}
 
