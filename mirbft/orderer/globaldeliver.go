@@ -1,4 +1,4 @@
-// Entrega em ordem total global (Défago et al. 2004, Seção 3.2.3).
+// Entrega em ordem total global.
 // GlobalDeliverer: um nó em vários grupos entrega as requisições em ordem de GSN.
 // groupDeliverer: cada grupo entrega o seu log respeitando a ordem de GSN das cross-ops.
 package orderer

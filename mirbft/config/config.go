@@ -151,7 +151,7 @@ type configuration struct {
 	// Maximum size (bytes) of a cross-op batch proposed by CutBatchWithMode. 0 (or unset) falls back to 32KB.
 	CrossOpBatchMaxBytes int `yaml:"CrossOpBatchMaxBytes"`
 
-	// Ordem total do serviço de multicast (Défago, Schiper & Urbán 2004, Seção 3.2.3):
+	// Ordem total do serviço de multicast:
 	// "local" (padrão) = mesma ordem só entre mensagens do mesmo grupo;
 	// "global" = uma única ordem para todas as mensagens (toda mensagem recebe GSN + META).
 	// Vale para o sistema inteiro; não é escolhido por cliente.

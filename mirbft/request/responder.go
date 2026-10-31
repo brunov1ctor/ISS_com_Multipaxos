@@ -73,12 +73,12 @@ func NewResponder() *Responder {
 	}
 }
 
-// SetIsMemberFunc configura Replica Mapper (CSMR Definition 7)
+// SetIsMemberFunc configura a função que diz se um nó pertence a um grupo.
 func (r *Responder) SetIsMemberFunc(f func(groupID uint32, nodeID int32) bool) {
 	r.isMemberFunc = f
 }
 
-// SetGroupMembersFunc configura função R(x) - replication set (Definition 7)
+// SetGroupMembersFunc configura a função que devolve os membros de um grupo.
 func (r *Responder) SetGroupMembersFunc(f func(groupID uint32) []int32) {
 	r.getGroupMembers = f
 }

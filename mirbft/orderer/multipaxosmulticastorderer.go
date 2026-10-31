@@ -579,7 +579,7 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 
 	// Single-group (modo local). No modo global cai no caminho GSN abaixo, mesmo com um
 	// grupo só: sem GSN, um nó em vários grupos não tem como intercalar as filas na mesma
-	// ordem que os outros nós (ordem total global, Défago et al. 2004, Seção 3.2.3).
+	// ordem que os outros nós.
 	if len(req.TouchedGroups) == 1 && config.Config.TotalOrder != "global" {
 		req.GroupId = req.TouchedGroups[0]
 		// All paths use AddDirectToBucket (bypass Buffer/watermark)
