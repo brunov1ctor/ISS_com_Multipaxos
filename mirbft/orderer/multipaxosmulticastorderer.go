@@ -59,28 +59,24 @@ func (o *MultiPaxosMulticastOrderer) groupDeliverer(gid uint32) *groupDeliverer 
 
 // deliverGroup aplica as requisições entregues e notifica o proxy, na ordem final.
 func (o *MultiPaxosMulticastOrderer) deliverGroup(gid uint32, items []deliveredReq) {
-	for start := 0; start < len(items); {
-		// Requisições seguidas do mesmo SN viram um sub-lote.
-		end := start + 1
-		for end < len(items) && items[end].sn == items[start].sn && items[end].leader == items[start].leader {
-			end++
+	sn := items[0].sn
+	all := &pb.Batch{Requests: make([]*pb.ClientRequest, 0, len(items))}
+	mine := &pb.Batch{}
+	for _, it := range items {
+		all.Requests = append(all.Requests, it.req)
+		if it.leader {
+			mine.Requests = append(mine.Requests, it.req)
 		}
-		sn, leader := items[start].sn, items[start].leader
-		sub := &pb.Batch{Requests: make([]*pb.ClientRequest, 0, end-start)}
-		for _, it := range items[start:end] {
-			sub.Requests = append(sub.Requests, it.req)
-			if it.req.GSN > 0 && o.gdeliver != nil {
-				o.gdeliver.OnCommit(it.req)
-			}
+		if it.req.GSN > 0 && o.gdeliver != nil {
+			o.gdeliver.OnCommit(it.req)
 		}
-		if results := ApplyBatch(gid, sn, sub); len(results) > 0 {
-			o.NotifyProxy(sub, sn, results)
-		}
-		// Benchmark: só o líder do SN notifica (results=nil pula as da API).
-		if leader {
-			o.NotifyProxy(sub, sn, nil)
-		}
-		start = end
+	}
+	if results := ApplyBatch(gid, sn, all); len(results) > 0 {
+		o.NotifyProxy(all, sn, results)
+	}
+	// Benchmark: só o líder do SN notifica (results=nil pula as da API).
+	if len(mine.Requests) > 0 {
+		o.NotifyProxy(mine, sn, nil)
 	}
 }
 

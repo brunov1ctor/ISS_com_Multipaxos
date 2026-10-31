@@ -172,8 +172,8 @@ func isCrossOp(req *pb.ClientRequest) bool {
 type groupDeliverer struct {
 	gid uint32
 
-	emitMu sync.Mutex // mantém as entregas na ordem decidida
-	mu     sync.Mutex
+	mu  sync.Mutex
+	out chan []deliveredReq // entregas em ordem, executadas fora do laço do grupo
 
 	log  []logItem // log do grupo ainda não entregue, em ordem de SN
 	head int
@@ -189,13 +189,29 @@ type groupDeliverer struct {
 }
 
 func newGroupDeliverer(gid uint32, onDeliver func([]deliveredReq)) *groupDeliverer {
-	return &groupDeliverer{
+	d := &groupDeliverer{
 		gid:        gid,
 		crossInLog: make(map[uint64]logItem),
 		early:      make(map[uint64]bool),
 		meta:       make(map[uint64][]uint32),
 		onDeliver:  onDeliver,
+		out:        make(chan []deliveredReq, 65536),
 	}
+	go func() {
+		for items := range d.out {
+			// Junta o que já estiver na fila numa entrega só (menos mensagens ao proxy).
+			for more := true; more && len(items) < 8192; {
+				select {
+				case next := <-d.out:
+					items = append(items, next...)
+				default:
+					more = false
+				}
+			}
+			d.onDeliver(items)
+		}
+	}()
+	return d
 }
 
 // Push recebe o próximo lote do log do grupo (chamado em ordem crescente de SN).
@@ -203,8 +219,6 @@ func (d *groupDeliverer) Push(sn int32, batch *pb.Batch, leader bool) {
 	if batch == nil || len(batch.Requests) == 0 {
 		return
 	}
-	d.emitMu.Lock()
-	defer d.emitMu.Unlock()
 	d.mu.Lock()
 	for _, req := range batch.Requests {
 		if req == nil {
@@ -222,9 +236,8 @@ func (d *groupDeliverer) Push(sn int32, batch *pb.Batch, leader bool) {
 		}
 		d.log = append(d.log, it)
 	}
-	out := d.drainLocked()
+	d.send(d.drainLocked())
 	d.mu.Unlock()
-	d.emit(out)
 }
 
 // OnMeta registra o META de uma GSN (de qualquer grupo, para o prefixo avançar).
@@ -232,8 +245,6 @@ func (d *groupDeliverer) OnMeta(gsn uint64, groups []uint32) {
 	if gsn == 0 {
 		return
 	}
-	d.emitMu.Lock()
-	defer d.emitMu.Unlock()
 	d.mu.Lock()
 	if _, ok := d.meta[gsn]; !ok && gsn > d.cursor {
 		d.meta[gsn] = append([]uint32{}, groups...)
@@ -241,9 +252,8 @@ func (d *groupDeliverer) OnMeta(gsn uint64, groups []uint32) {
 			d.metaPrefix++
 		}
 	}
-	out := d.drainLocked()
+	d.send(d.drainLocked())
 	d.mu.Unlock()
-	d.emit(out)
 }
 
 // OnSkip registra GSNs que nunca vão existir (troca de líder do sequenciador).
@@ -251,8 +261,6 @@ func (d *groupDeliverer) OnSkip(from, to uint64) {
 	if from == 0 || to < from {
 		return
 	}
-	d.emitMu.Lock()
-	defer d.emitMu.Unlock()
 	d.mu.Lock()
 	for gsn := from; gsn <= to; gsn++ {
 		if _, ok := d.meta[gsn]; !ok && gsn > d.cursor {
@@ -262,9 +270,8 @@ func (d *groupDeliverer) OnSkip(from, to uint64) {
 	for d.meta[d.metaPrefix+1] != nil {
 		d.metaPrefix++
 	}
-	out := d.drainLocked()
+	d.send(d.drainLocked())
 	d.mu.Unlock()
-	d.emit(out)
 }
 
 func (d *groupDeliverer) touches(groups []uint32) bool {
@@ -347,8 +354,9 @@ func (d *groupDeliverer) drainLocked() []deliveredReq {
 	return out
 }
 
-func (d *groupDeliverer) emit(out []deliveredReq) {
+// send é chamado com d.mu travado, para as entregas saírem na ordem decidida.
+func (d *groupDeliverer) send(out []deliveredReq) {
 	if len(out) > 0 && d.onDeliver != nil {
-		d.onDeliver(out)
+		d.out <- out
 	}
 }
