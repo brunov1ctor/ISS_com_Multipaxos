@@ -180,3 +180,246 @@ func logGlobalDelivery(nodeID int32) func(GlobalDelivery) {
 		fmt.Printf("[GDELIVER] node=%d gsn=%d groups=%v payload=%q\n", nodeID, d.GSN, d.Groups, d.Req.Payload)
 	}
 }
+
+// ---------------------------------------------------------------------------------------------
+// Entrega em ordem por grupo, separada da decisão do consenso.
+//
+// Antes, o lote decidido só entrava no log do grupo depois que todas as suas cross-ops podiam
+// ser entregues na ordem de GSN. Se o lote tinha a cross-op 9480 mas não a 9475 (que ainda não
+// tinha chegado ao líder quando ele cortou o lote), o lote ficava retido; o laço do grupo só
+// propõe o próximo SN depois que o atual entra no log, então a 9475 nunca era proposta e o grupo
+// travava. Com lotes de cross-ops grandes (CrossOpBatchMaxBytes de 1 MB) isso acontecia em
+// segundos.
+//
+// Agora o consenso e a entrega são independentes, como no ISS (instâncias decidem em paralelo, o
+// log é entregue em ordem): todo lote decidido entra no log na hora e o grupo continua propondo.
+// Este entregador percorre o log do grupo em ordem de SN e entrega requisição por requisição:
+//   - operação de um grupo só: entregue na posição em que aparece no log;
+//   - cross-op: entregue só quando toda GSN menor que toca este grupo já foi entregue. Para saber
+//     isso sem depender de quando as mensagens chegam, espera o META de todas as GSNs menores
+//     (mesma regra de prefixo sem buracos do GlobalDeliverer). Enquanto a cabeça do log espera
+//     uma GSN menor que já está mais adiante no log, essa GSN é antecipada.
+//
+// A sequência entregue depende só do conteúdo do log do grupo e dos METAs, não da ordem de
+// chegada das mensagens; por isso toda réplica do grupo entrega a mesma sequência. Cada grupo
+// entrega as cross-ops em ordem crescente de GSN, o que dá a ordem global entre grupos (Défago et
+// al. 2004, Seção 3.2.3).
+
+// deliveredReq é uma requisição entregue pelo groupDeliverer, com o SN do lote de origem.
+type deliveredReq struct {
+	sn     int32
+	leader bool // este nó era o líder do SN de origem (só o líder notifica o proxy no benchmark)
+	req    *pb.ClientRequest
+}
+
+type logItem struct {
+	sn     int32
+	leader bool
+	req    *pb.ClientRequest
+}
+
+func isCrossOp(req *pb.ClientRequest) bool {
+	return req != nil && req.GSN > 0 && len(req.TouchedGroups) > 1
+}
+
+type groupDeliverer struct {
+	gid uint32
+
+	emitMu sync.Mutex // serializa as entregas (ordem de emissão = ordem decidida)
+	mu     sync.Mutex
+
+	// Log do grupo ainda não entregue, em ordem de SN.
+	log  []logItem
+	head int
+
+	// Cross-ops presentes no log ainda não entregues: GSN -> item (para antecipar).
+	crossInLog map[uint64]logItem
+	// GSNs já entregues fora da posição (antecipados); pulados quando a cabeça chega neles.
+	early map[uint64]bool
+
+	// META (só de cross-ops): GSN -> grupos. metaPrefix = maior k com META de 1..k.
+	meta       map[uint64][]uint32
+	metaPrefix uint64
+	// Toda GSN <= cursor já foi resolvida para este grupo (entregue ou não toca o grupo).
+	cursor uint64
+
+	onDeliver func([]deliveredReq)
+}
+
+func newGroupDeliverer(gid uint32, onDeliver func([]deliveredReq)) *groupDeliverer {
+	return &groupDeliverer{
+		gid:        gid,
+		crossInLog: make(map[uint64]logItem),
+		early:      make(map[uint64]bool),
+		meta:       make(map[uint64][]uint32),
+		onDeliver:  onDeliver,
+	}
+}
+
+// Push recebe o próximo lote do log do grupo (chamado em ordem crescente de SN).
+func (d *groupDeliverer) Push(sn int32, batch *pb.Batch, leader bool) {
+	if batch == nil || len(batch.Requests) == 0 {
+		return
+	}
+	d.emitMu.Lock()
+	defer d.emitMu.Unlock()
+	d.mu.Lock()
+	for _, req := range batch.Requests {
+		if req == nil {
+			continue
+		}
+		it := logItem{sn: sn, leader: leader, req: req}
+		if isCrossOp(req) {
+			if req.GSN <= d.cursor || d.early[req.GSN] {
+				continue // já entregue (cópia repetida)
+			}
+			if _, dup := d.crossInLog[req.GSN]; dup {
+				continue
+			}
+			d.crossInLog[req.GSN] = it
+		}
+		d.log = append(d.log, it)
+	}
+	out := d.drainLocked()
+	d.mu.Unlock()
+	d.emit(out)
+}
+
+// OnMeta registra o META de uma GSN (todas as GSNs, não só as deste grupo: as que não tocam o
+// grupo também precisam ser conhecidas para o prefixo avançar).
+func (d *groupDeliverer) OnMeta(gsn uint64, groups []uint32) {
+	if gsn == 0 {
+		return
+	}
+	d.emitMu.Lock()
+	defer d.emitMu.Unlock()
+	d.mu.Lock()
+	if _, ok := d.meta[gsn]; !ok && gsn > d.cursor {
+		d.meta[gsn] = append([]uint32{}, groups...)
+		for d.meta[d.metaPrefix+1] != nil {
+			d.metaPrefix++
+		}
+	}
+	out := d.drainLocked()
+	d.mu.Unlock()
+	d.emit(out)
+}
+
+// OnSkip registra GSNs que nunca vão existir (troca de líder do sequenciador).
+func (d *groupDeliverer) OnSkip(from, to uint64) {
+	if from == 0 || to < from {
+		return
+	}
+	d.emitMu.Lock()
+	defer d.emitMu.Unlock()
+	d.mu.Lock()
+	for gsn := from; gsn <= to; gsn++ {
+		if _, ok := d.meta[gsn]; !ok && gsn > d.cursor {
+			d.meta[gsn] = []uint32{}
+		}
+	}
+	for d.meta[d.metaPrefix+1] != nil {
+		d.metaPrefix++
+	}
+	out := d.drainLocked()
+	d.mu.Unlock()
+	d.emit(out)
+}
+
+func (d *groupDeliverer) touches(groups []uint32) bool {
+	for _, g := range groups {
+		if g == d.gid {
+			return true
+		}
+	}
+	return false
+}
+
+// advanceCursor pula as GSNs já resolvidas e devolve a próxima GSN que este grupo precisa
+// entregar (0 se ainda não dá para saber, por falta de META).
+func (d *groupDeliverer) advanceCursor() uint64 {
+	for d.cursor < d.metaPrefix {
+		next := d.cursor + 1
+		groups := d.meta[next]
+		if len(groups) < 2 || !d.touches(groups) || d.early[next] {
+			delete(d.meta, next)
+			d.cursor = next
+			continue
+		}
+		return next
+	}
+	return 0
+}
+
+func (d *groupDeliverer) markDelivered(gsn uint64) {
+	delete(d.crossInLog, gsn)
+	delete(d.meta, gsn)
+	if gsn == d.cursor+1 {
+		d.cursor = gsn
+	}
+}
+
+func (d *groupDeliverer) drainLocked() []deliveredReq {
+	var out []deliveredReq
+	for d.head < len(d.log) {
+		it := d.log[d.head]
+		if !isCrossOp(it.req) {
+			out = append(out, deliveredReq(it))
+			d.head++
+			continue
+		}
+		c := it.req.GSN
+		if d.early[c] {
+			delete(d.early, c)
+			d.head++
+			continue
+		}
+		next := d.advanceCursor()
+		if next == 0 {
+			break // falta META de alguma GSN menor: esperar
+		}
+		if next == c {
+			out = append(out, deliveredReq(it))
+			d.markDelivered(c)
+			d.head++
+			continue
+		}
+		if next > c {
+			// c não aparece mais como pendente (META diz que não toca este grupo, ou faixa
+			// pulada). Não deveria acontecer para uma cross-op no log deste grupo; entrega na
+			// posição para não travar.
+			out = append(out, deliveredReq(it))
+			delete(d.crossInLog, c)
+			d.head++
+			continue
+		}
+		// next < c: a cabeça espera uma GSN menor. Se ela já está mais adiante no log,
+		// antecipa; senão espera ela ser decidida.
+		ahead, ok := d.crossInLog[next]
+		if !ok {
+			break
+		}
+		out = append(out, deliveredReq(ahead))
+		d.early[next] = true
+		d.markDelivered(next)
+	}
+	// Compacta o log de tempos em tempos.
+	if d.head > 4096 && d.head*2 > len(d.log) {
+		d.log = append([]logItem(nil), d.log[d.head:]...)
+		d.head = 0
+	}
+	return out
+}
+
+func (d *groupDeliverer) emit(out []deliveredReq) {
+	if len(out) > 0 && d.onDeliver != nil {
+		d.onDeliver(out)
+	}
+}
+
+// Pending devolve quantas requisições do log ainda esperam entrega (depuração/testes).
+func (d *groupDeliverer) Pending() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.log) - d.head
+}

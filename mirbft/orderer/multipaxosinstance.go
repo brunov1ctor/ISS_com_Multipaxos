@@ -4,7 +4,6 @@ package orderer
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 	"github.com/hyperledger-labs/mirbft/config"
@@ -417,42 +416,14 @@ func (i *mpxInstance) deliverCommit() {
 		return
 	}
 
-	// Cross-group: verifica ordem GSN para cada cross-op no batch
-	var crossOps []*pb.ClientRequest
-	for _, req := range b.Requests {
-		// Só multi-grupo: a ordem global de mensagens de um grupo só (TotalOrder=global) é
-		// feita por nó, por mensagem, no GlobalDeliverer -- segurar o lote inteiro aqui trava
-		// quando a ordem do consenso do grupo difere da ordem dos GSNs.
-		if len(req.TouchedGroups) > 1 && req.GSN > 0 {
-			crossOps = append(crossOps, req)
-		}
-	}
-	// Testa em ordem crescente de GSN: na ordem do lote, um GSN maior testado antes de um menor
-	// do MESMO lote bloqueava e guardava o lote inteiro com o menor dentro (deadlock).
-	sort.Slice(crossOps, func(a, b int) bool { return crossOps[a].GSN < crossOps[b].GSN })
-	if len(crossOps) > 0 && GetGlobalMulticastOrderer() != nil {
-		fmt.Printf("[MPX] sn=%d CROSS-OP-BATCH count=%d gsn_range=[%d..%d] group=%d\n",
-			i.sn, len(crossOps), crossOps[0].GSN, crossOps[len(crossOps)-1].GSN, i.bucketId)
-		// Try ADeliver for each cross-op GSN in order.
-		// If any GSN blocks, buffer the entire batch at that GSN.
-		for _, cop := range crossOps {
-			if !GetGlobalMulticastOrderer().ADeliver(cop.GSN, i.bucketId, b) {
-				GetGlobalMulticastOrderer().BufferCommit(cop.GSN, i.bucketId, b, i.announce, i.sn, i.lastDigest[:])
-				i.closed = true; traceCommit(i.sn, len(b.Requests))
-				return
-			}
-		}
-	}
-
-	// Announce commit
+	// O lote decidido entra no log do grupo na hora, mesmo que alguma cross-op dele ainda não
+	// possa ser entregue: a ordem de GSN entre grupos é garantida depois, requisição por
+	// requisição, pelo groupDeliverer (groupdeliver.go). Antes o lote ficava retido aqui até
+	// todas as suas cross-ops poderem sair; como o grupo só propõe o próximo SN depois que o
+	// atual entra no log, uma cross-op menor que ficou de fora do lote nunca era proposta e o
+	// grupo travava.
 	if i.announce != nil {
-		fmt.Printf("[MPX] sn=%d DELIVER group=%d nReq=%d\n", i.sn, i.bucketId, len(b.Requests))
 		i.announce(i.sn, b, i.lastDigest[:])
-	}
-	// Entregar estes GSNs pode destravar lotes guardados (BufferCommit) que esperavam por eles;
-	// antes só a chegada de um META novo disparava essa verificação.
-	if len(crossOps) > 0 && GetGlobalMulticastOrderer() != nil {
-		GetGlobalMulticastOrderer().seq.drainBuffer(i.bucketId)
 	}
 	i.closed = true; traceCommit(i.sn, len(b.Requests))
 }

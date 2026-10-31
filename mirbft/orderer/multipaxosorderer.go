@@ -118,13 +118,9 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			ShouldRespond: &shouldRespond, ProposeTs: proposeTs, CommitTs: commitTs})
 		o.recordGroupCommit(sn)
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
-			// CSMR Output Processing: only the leader notifies proxy (avoids 3x duplicate notifications).
-			// NotifyProxy (multipaxosmulticastorderer.go) já filtra requisições da API de cliente
-			// quando chamada com results=nil como aqui -- essas já são notificadas com o valor real
-			// por applyEntryInOrder/ApplyBatch (statemachine.go), em toda réplica.
-			if inst, ok := o.dispatcher.load(sn); ok && inst != nil && inst.leader == membership.OwnID {
-				GetGlobalMulticastOrderer().NotifyProxy(b, sn, nil)
-			}
+			// A resposta ao proxy (NotifyProxy) não sai mais daqui, no commit: sai na entrega,
+			// requisição por requisição, em MultiPaxosMulticastOrderer.deliverGroup, depois que o
+			// groupDeliverer garantiu a ordem de GSN (ver groupdeliver.go).
 			if b.Requests[0].GSN > 0 {
 				GetGlobalMulticastOrderer().RegisterGSNMetadata(b.Requests[0].GSN, b.Requests[0].TouchedGroups)
 			}

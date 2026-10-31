@@ -49,16 +49,43 @@ type MultiPaxosMulticastOrderer struct {
 	proxyPending   sync.Map // key: "clientId:clientSn" -> int32 (proxyNodeID)
 	// Entrega em ordem total global, uma por nó (ver globaldeliver.go)
 	gdeliver       *GlobalDeliverer
+	// Entrega em ordem de GSN dentro de cada grupo de dados deste nó (ver groupdeliver.go).
+	// Criado no Init e só lido depois, sem lock.
+	groupDeliverers map[uint32]*groupDeliverer
 }
 
-// PendingCommit é um commit já decidido pelo grupo mas ainda esperando o META (ver
-// aDeliverInternal em sequencer.go) para poder ser entregue na ordem global correta. A chave
-// (gsn, groupID) já fica em s.pendingCommits[groupID][gsn], então não precisa ser duplicada aqui.
-type PendingCommit struct {
-	batch    *pb.Batch
-	announce func(int32, *pb.Batch, []byte)
-	sn       int32
-	digest   []byte
+func (o *MultiPaxosMulticastOrderer) groupDeliverer(gid uint32) *groupDeliverer {
+	return o.groupDeliverers[gid]
+}
+
+// deliverGroup executa a entrega final de requisições do grupo gid, já na ordem decidida pelo
+// groupDeliverer: aplica na máquina de estados da API e notifica o proxy (o que antes era feito
+// por lote em applyEntryInOrder e, no caso do benchmark, no commit em o.announce).
+func (o *MultiPaxosMulticastOrderer) deliverGroup(gid uint32, items []deliveredReq) {
+	for start := 0; start < len(items); {
+		// Trechos consecutivos do mesmo SN de origem viram um sub-lote.
+		end := start + 1
+		for end < len(items) && items[end].sn == items[start].sn && items[end].leader == items[start].leader {
+			end++
+		}
+		sn, leader := items[start].sn, items[start].leader
+		sub := &pb.Batch{Requests: make([]*pb.ClientRequest, 0, end-start)}
+		for _, it := range items[start:end] {
+			sub.Requests = append(sub.Requests, it.req)
+			if it.req.GSN > 0 && o.gdeliver != nil {
+				o.gdeliver.OnCommit(it.req)
+			}
+		}
+		if results := ApplyBatch(gid, sn, sub); len(results) > 0 {
+			o.NotifyProxy(sub, sn, results)
+		}
+		// Benchmark: só o líder do SN de origem notifica (evita notificação repetida por réplica).
+		// NotifyProxy com results=nil já pula as requisições da API, notificadas acima.
+		if leader {
+			o.NotifyProxy(sub, sn, nil)
+		}
+		start = end
+	}
 }
 
 func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
@@ -80,8 +107,26 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	o.gdeliver = NewGlobalDeliverer(
 		func(gid uint32) bool { return gid != 0 && o.am.IsMember(gid, membership.OwnID) },
 		logGlobalDelivery(membership.OwnID))
-	o.seq.onMeta = o.gdeliver.OnMeta
-	o.seq.onSkip = o.gdeliver.OnSkip
+	o.groupDeliverers = make(map[uint32]*groupDeliverer)
+	for _, gid := range o.am.GetDefinedGroups() {
+		if gid == 0 || !o.am.IsMember(gid, membership.OwnID) {
+			continue
+		}
+		g := gid
+		o.groupDeliverers[g] = newGroupDeliverer(g, func(items []deliveredReq) { o.deliverGroup(g, items) })
+	}
+	o.seq.onMeta = func(gsn uint64, groups []uint32) {
+		o.gdeliver.OnMeta(gsn, groups)
+		for _, d := range o.groupDeliverers {
+			d.OnMeta(gsn, groups)
+		}
+	}
+	o.seq.onSkip = func(from, to uint64) {
+		o.gdeliver.OnSkip(from, to)
+		for _, d := range o.groupDeliverers {
+			d.OnSkip(from, to)
+		}
+	}
 	o.seq.Start()
 	// Create group orderers for DATA groups only (not group 0)
 	for _, gid := range o.am.GetDefinedGroups() {
@@ -271,14 +316,6 @@ func (o *MultiPaxosMulticastOrderer) GetGroupMembers(groupID uint32) []int32 {
 // Delegate to Sequencer
 func (o *MultiPaxosMulticastOrderer) RegisterGSNMetadata(gsn uint64, touchedGroups []uint32) {
 	o.seq.RegisterMetadata(gsn, touchedGroups)
-}
-
-func (o *MultiPaxosMulticastOrderer) ADeliver(gsn uint64, groupID uint32, _ *pb.Batch) bool {
-	return o.seq.ADeliver(gsn, groupID)
-}
-
-func (o *MultiPaxosMulticastOrderer) BufferCommit(gsn uint64, groupID uint32, batch *pb.Batch, announce func(int32, *pb.Batch, []byte), sn int32, digest []byte) {
-	o.seq.BufferCommit(gsn, groupID, batch, announce, sn, digest)
 }
 
 func (o *MultiPaxosMulticastOrderer) sendToGroup(req *pb.ClientRequest, groupID uint32) {

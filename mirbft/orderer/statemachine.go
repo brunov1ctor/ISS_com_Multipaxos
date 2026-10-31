@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"sync"
 
+	"github.com/hyperledger-labs/mirbft/membership"
 	pb "github.com/hyperledger-labs/mirbft/protobufs"
 	"github.com/hyperledger-labs/mirbft/request"
 )
@@ -74,7 +75,7 @@ func (gs *GroupState) delete(key string) bool {
 // addBalance soma delta ao int64 (big-endian) armazenado em key e devolve o novo valor.
 // Sem atomicidade/rollback entre grupos -- ver limitação documentada no plano: débito e
 // crédito de um Transfer aplicam incondicionalmente, cada um na sua réplica, só com ordem
-// relativa consistente garantida pelo GSN/ADeliver, não uma transação 2PC.
+// relativa consistente garantida pelo GSN (groupDeliverer), não uma transação 2PC.
 func (gs *GroupState) addBalance(key string, delta int64) []byte {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
@@ -151,6 +152,20 @@ func (o *MultiPaxosOrderer) applyEntryInOrder(groupID uint32, sn int32, batch *p
 
 	if batch == nil || len(batch.Requests) == 0 {
 		return
+	}
+	// Multicast: o lote vai para o entregador do grupo, que respeita a ordem de GSN das
+	// cross-ops (groupdeliver.go) e chama deliverGroup na ordem final.
+	if mo := GetGlobalMulticastOrderer(); mo != nil {
+		if d := mo.groupDeliverer(groupID); d != nil {
+			leader := false
+			if inst, ok := o.dispatcher.load(sn); ok && inst != nil {
+				inst.mu.Lock()
+				leader = inst.leader == membership.OwnID
+				inst.mu.Unlock()
+			}
+			d.Push(sn, batch, leader)
+			return
+		}
 	}
 	if mo := GetGlobalMulticastOrderer(); mo != nil && mo.gdeliver != nil {
 		for _, req := range batch.Requests {
