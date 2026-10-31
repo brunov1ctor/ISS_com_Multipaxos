@@ -118,9 +118,7 @@ func (o *MultiPaxosOrderer) Init(mgr manager.Manager) {
 			ShouldRespond: &shouldRespond, ProposeTs: proposeTs, CommitTs: commitTs})
 		o.recordGroupCommit(sn)
 		if len(b.Requests) > 0 && GetGlobalMulticastOrderer() != nil {
-			// A resposta ao proxy (NotifyProxy) não sai mais daqui, no commit: sai na entrega,
-			// requisição por requisição, em MultiPaxosMulticastOrderer.deliverGroup, depois que o
-			// groupDeliverer garantiu a ordem de GSN (ver groupdeliver.go).
+			// A notificação ao proxy sai na entrega (deliverGroup), não aqui.
 			if b.Requests[0].GSN > 0 {
 				GetGlobalMulticastOrderer().RegisterGSNMetadata(b.Requests[0].GSN, b.Requests[0].TouchedGroups)
 			}

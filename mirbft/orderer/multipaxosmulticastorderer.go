@@ -49,8 +49,7 @@ type MultiPaxosMulticastOrderer struct {
 	proxyPending   sync.Map // key: "clientId:clientSn" -> int32 (proxyNodeID)
 	// Entrega em ordem total global, uma por nó (ver globaldeliver.go)
 	gdeliver       *GlobalDeliverer
-	// Entrega em ordem de GSN dentro de cada grupo de dados deste nó (ver groupdeliver.go).
-	// Criado no Init e só lido depois, sem lock.
+	// Entregador de cada grupo de dados deste nó (globaldeliver.go); criado no Init.
 	groupDeliverers map[uint32]*groupDeliverer
 }
 
@@ -58,12 +57,10 @@ func (o *MultiPaxosMulticastOrderer) groupDeliverer(gid uint32) *groupDeliverer 
 	return o.groupDeliverers[gid]
 }
 
-// deliverGroup executa a entrega final de requisições do grupo gid, já na ordem decidida pelo
-// groupDeliverer: aplica na máquina de estados da API e notifica o proxy (o que antes era feito
-// por lote em applyEntryInOrder e, no caso do benchmark, no commit em o.announce).
+// deliverGroup aplica as requisições entregues e notifica o proxy, na ordem final.
 func (o *MultiPaxosMulticastOrderer) deliverGroup(gid uint32, items []deliveredReq) {
 	for start := 0; start < len(items); {
-		// Trechos consecutivos do mesmo SN de origem viram um sub-lote.
+		// Requisições seguidas do mesmo SN viram um sub-lote.
 		end := start + 1
 		for end < len(items) && items[end].sn == items[start].sn && items[end].leader == items[start].leader {
 			end++
@@ -79,8 +76,7 @@ func (o *MultiPaxosMulticastOrderer) deliverGroup(gid uint32, items []deliveredR
 		if results := ApplyBatch(gid, sn, sub); len(results) > 0 {
 			o.NotifyProxy(sub, sn, results)
 		}
-		// Benchmark: só o líder do SN de origem notifica (evita notificação repetida por réplica).
-		// NotifyProxy com results=nil já pula as requisições da API, notificadas acima.
+		// Benchmark: só o líder do SN notifica (results=nil pula as da API).
 		if leader {
 			o.NotifyProxy(sub, sn, nil)
 		}

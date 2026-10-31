@@ -416,12 +416,7 @@ func (i *mpxInstance) deliverCommit() {
 		return
 	}
 
-	// O lote decidido entra no log do grupo na hora, mesmo que alguma cross-op dele ainda não
-	// possa ser entregue: a ordem de GSN entre grupos é garantida depois, requisição por
-	// requisição, pelo groupDeliverer (groupdeliver.go). Antes o lote ficava retido aqui até
-	// todas as suas cross-ops poderem sair; como o grupo só propõe o próximo SN depois que o
-	// atual entra no log, uma cross-op menor que ficou de fora do lote nunca era proposta e o
-	// grupo travava.
+	// Entra no log na hora; a ordem de GSN das cross-ops é garantida na entrega (groupDeliverer).
 	if i.announce != nil {
 		i.announce(i.sn, b, i.lastDigest[:])
 	}

@@ -153,8 +153,7 @@ func (o *MultiPaxosOrderer) applyEntryInOrder(groupID uint32, sn int32, batch *p
 	if batch == nil || len(batch.Requests) == 0 {
 		return
 	}
-	// Multicast: o lote vai para o entregador do grupo, que respeita a ordem de GSN das
-	// cross-ops (groupdeliver.go) e chama deliverGroup na ordem final.
+	// Multicast: a entrega passa pelo entregador do grupo (ordem de GSN).
 	if mo := GetGlobalMulticastOrderer(); mo != nil {
 		if d := mo.groupDeliverer(groupID); d != nil {
 			leader := false
