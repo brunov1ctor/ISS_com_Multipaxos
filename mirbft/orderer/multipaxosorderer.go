@@ -29,7 +29,11 @@ func (d *mpxDispatcher) load(sn int32) (*mpxInstance, bool) {
 	if v, ok := d.mm.Load(sn); ok { return v.(*mpxInstance), true }
 	return nil, false
 }
-func (d *mpxDispatcher) store(sn int32, inst *mpxInstance) { d.mm.Store(sn, inst) }
+// loadOrStore registra inst para sn, ou devolve a que já existia (loaded=true).
+func (d *mpxDispatcher) loadOrStore(sn int32, inst *mpxInstance) (*mpxInstance, bool) {
+	v, loaded := d.mm.LoadOrStore(sn, inst)
+	return v.(*mpxInstance), loaded
+}
 
 type MultiPaxosOrderer struct {
 	segmentChan    chan manager.Segment          // segmentos novos publicados pelo manager (consumido por Start)
@@ -44,7 +48,7 @@ type MultiPaxosOrderer struct {
 	am             *AtomicMulticast              // registro de grupos/membros compartilhado (multicast atômico)
 	ownedGroupID   uint32                        // grupo de dados administrado por este orderer (0 = broadcast/standalone)
 	skipHandlerRegistration bool                 // true quando este orderer é filho de um MultiPaxosMulticastOrderer
-	commitNotifyCh chan struct{} // shared channel from parent multicast orderer
+	commits        commitSignal                  // acorda o laço de proposta a cada SN comitado
 
 	// Checkpoint por grupo (ver comentário em recordGroupCommit): como cada nó só enxerga as
 	// decisões dos grupos dos quais é membro, o checkpoint global do Manager (mirlog, baseado em
@@ -62,6 +66,30 @@ type MultiPaxosOrderer struct {
 	grpPromised       uint64 // maior ballot prometido neste grupo
 	grpPrepared       bool   // o líder já tem maioria de promessas para grpPreparedBallot
 	grpPreparedBallot int64
+}
+
+// commitSignal acorda todos os laços que esperam um commit (fecha o canal e cria outro).
+type commitSignal struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+func (c *commitSignal) wait() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ch == nil {
+		c.ch = make(chan struct{})
+	}
+	return c.ch
+}
+
+func (c *commitSignal) fire() {
+	c.mu.Lock()
+	if c.ch != nil {
+		close(c.ch)
+		c.ch = nil
+	}
+	c.mu.Unlock()
 }
 
 func singleLeader() bool { return config.Config.LeaderPolicy == "Single" }
@@ -203,10 +231,10 @@ func (o *MultiPaxosOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 	}
 	inst, ok := o.dispatcher.load(sn)
 	if !ok || inst == nil {
-		inst = o.ensureInstance(sn)
-		if mpx != nil { inst.bucketId = extractGroupID(mpx) }
-		o.dispatcher.store(sn, inst)
-		inst.startWorkers()
+		n := o.ensureInstance(sn)
+		if mpx != nil { n.bucketId = extractGroupID(mpx) }
+		var loaded bool
+		if inst, loaded = o.dispatcher.loadOrStore(sn, n); !loaded { inst.startWorkers() }
 	}
 	inst.enqueue(pm)
 }
@@ -275,10 +303,15 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 		// laço. Antes o laço parava no fim do segmento e só continuava se o checkpoint do grupo
 		// caísse exatamente no último SN dele; quando não caía, o grupo parava de propor em
 		// silêncio e a vazão ia caindo ao longo do experimento.
-		done := func() bool {
-			if isBroadcast { return idx >= len(sns) }
-			return false
+		// ahead(k): k-ésimo SN a partir do atual; false se passa do fim do segmento (broadcast).
+		ahead := func(k int) (int32, bool) {
+			if isBroadcast {
+				if idx+k >= len(sns) { return 0, false }
+				return sns[idx+k], true
+			}
+			return currentSN + int32(k)*numGroups, true
 		}
+		done := func() bool { _, ok := ahead(0); return !ok }
 		advance := func() {
 			if isBroadcast {
 				idx++
@@ -287,34 +320,41 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 			}
 			currentSN += numGroups
 		}
-		if done() { return }
+		window := config.Config.MaxInFlightSNs
+		if window < 1 { window = 1 }
 
-		// commitCh: wakes up loop immediately after a commit (to advance SN and propose next)
-		var commitCh <-chan struct{}
-		if o.commitNotifyCh != nil {
-			commitCh = o.commitNotifyCh
-		}
-
+		// Instâncias da janela já preparadas (evita pegar o mutex delas a cada volta).
+		insts := map[int32]*mpxInstance{}
+		ticked := false
 		for {
+			woke := o.commits.wait() // antes de olhar o log, para não perder um commit
+			// Aplica em ordem os SNs já comitados e já segue para o próximo, sem esperar o tique.
+			for !done() {
+				entry := mirlog.GetEntry(currentSN)
+				if entry == nil { break }
+				o.applyEntryInOrder(gid, currentSN, entry.Batch)
+				delete(insts, currentSN)
+				advance()
+			}
+			if done() { return }
+			// Até "window" SNs em andamento; a aplicação continua em ordem.
+			now := time.Now()
+			for k := 0; k < window; k++ {
+				sn, ok := ahead(k)
+				if !ok { break }
+				inst := insts[sn]
+				if inst == nil {
+					inst = o.getOrCreateInstance(sn, gid, seg, members)
+					insts[sn] = inst
+				}
+				if ticked { go inst.tick(now) }
+				inst.proposeAsync()
+			}
+			ticked = false
 			select {
 			case <-stopCh: return
-			case <-commitCh:
-				if done() { return }
-				if entry := mirlog.GetEntry(currentSN); entry != nil {
-					o.applyEntryInOrder(gid, currentSN, entry.Batch)
-					advance(); continue
-				}
-				inst := o.getOrCreateInstance(currentSN, gid, seg, members)
-				inst.ProposeIfDue()
-			case <-t.C:
-				if done() { return }
-				now := time.Now()
-				if entry := mirlog.GetEntry(currentSN); entry != nil {
-					o.applyEntryInOrder(gid, currentSN, entry.Batch)
-					advance(); continue
-				}
-				inst := o.getOrCreateInstance(currentSN, gid, seg, members)
-				inst.tick(now); inst.ProposeIfDue()
+			case <-woke:
+			case <-t.C: ticked = true
 			}
 		}
 	}(groupId, snOffset)
@@ -327,11 +367,15 @@ func (o *MultiPaxosOrderer) runSegment(seg manager.Segment) {
 func (o *MultiPaxosOrderer) getOrCreateInstance(sn int32, gid uint32, seg manager.Segment, members []int32) *mpxInstance {
 	inst, ok := o.dispatcher.load(sn)
 	if !ok || inst == nil {
-		inst = o.ensureInstance(sn)
-		inst.setSegment(seg); inst.bucketId = gid; inst.SetMembers(members)
-		o.dispatcher.store(sn, inst)
-		inst.startWorkers()
-		return inst
+		n := o.ensureInstance(sn)
+		n.setSegment(seg); n.bucketId = gid
+		var loaded bool
+		if inst, loaded = o.dispatcher.loadOrStore(sn, n); !loaded {
+			// Mensagens que chegarem antes ficam na fila até o worker subir.
+			n.SetMembers(members)
+			n.startWorkers()
+			return n
+		}
 	}
 	inst.mu.Lock()
 	if inst.bucketId == 0 { inst.bucketId = gid }

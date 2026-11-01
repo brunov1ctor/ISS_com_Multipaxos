@@ -5,6 +5,7 @@ package orderer
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 	"github.com/hyperledger-labs/mirbft/config"
 	"github.com/hyperledger-labs/mirbft/manager"
@@ -58,6 +59,7 @@ type mpxInstance struct {
 	leader           int32               // nó que este SN reconhece como líder atual (-1 = ainda não definido)
 	currentBallot    int64               // ballot que este nó está usando/reconhecendo agora (ver nextBallotAfter)
 	inProposal       bool                // trava reentrância de ProposeIfDue (evita duas propostas concorrentes)
+	proposing        int32               // atomic: já há uma goroutine de proposeAsync para esta instância
 	acceptTs         int64               // timestamp de quando este nó aceitou o valor (métricas de latência)
 	lastAcceptedTs   int64               // timestamp do último ACCEPTED recebido (métricas de latência)
 	pendingCommitDigest *[32]byte        // digest de um COMMIT recebido mas ainda não entregável (esperando state transfer)
@@ -381,13 +383,10 @@ func (i *mpxInstance) fetchCommittedValueFromGroup() {
 
 func (i *mpxInstance) deliverCommit() {
 	i.phase = phaseCommitted
-	// Notify parent orderer to advance SN immediately after this function completes
+	// Acorda o laço de proposta para aplicar este SN e propor o próximo.
 	defer func() {
-		if i.parent != nil && i.parent.commitNotifyCh != nil {
-			select {
-			case i.parent.commitNotifyCh <- struct{}{}:
-			default:
-			}
+		if i.parent != nil {
+			i.parent.commits.fire()
 		}
 	}()
 	if i.lastReqBatch != nil {
@@ -429,6 +428,16 @@ func (i *mpxInstance) deliverCommit() {
 }
 
 
+
+// proposeAsync roda ProposeIfDue numa goroutine (o corte do lote pode esperar até o
+// BatchTimeout), no máximo uma por instância.
+func (i *mpxInstance) proposeAsync() {
+	if !atomic.CompareAndSwapInt32(&i.proposing, 0, 1) { return }
+	go func() {
+		defer atomic.StoreInt32(&i.proposing, 0)
+		i.ProposeIfDue()
+	}()
+}
 
 func (i *mpxInstance) ProposeIfDue() {
 	i.mu.Lock()

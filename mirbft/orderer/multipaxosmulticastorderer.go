@@ -123,7 +123,7 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	// Create group orderers for DATA groups only (not group 0)
 	for _, gid := range o.am.GetDefinedGroups() {
 		if gid == 0 { continue } // Group 0 handled by Sequencer
-		ord := &MultiPaxosOrderer{am: o.am, ownedGroupID: gid, skipHandlerRegistration: true, commitNotifyCh: make(chan struct{}, 16)}
+		ord := &MultiPaxosOrderer{am: o.am, ownedGroupID: gid, skipHandlerRegistration: true}
 		ord.segmentChan = make(chan manager.Segment, 64)
 		ord.Init(mngr)
 		o.groupOrderers[gid] = ord
@@ -150,12 +150,7 @@ func (o *MultiPaxosMulticastOrderer) Start(wg *sync.WaitGroup) {
 		// runSegment: grupo 0 (Sequencer) não entra no stride, senão aquele SN nunca é preenchido.
 		firstSN, _ := o.am.GetDataGroupIndex(gid)
 		if firstSN < 0 { firstSN = 0 }
-		inst := ord.ensureInstance(firstSN)
-		inst.setSegment(initialSeg)
-		inst.bucketId = gid
-		inst.SetMembers(members)
-		ord.dispatcher.store(firstSN, inst)
-		inst.startWorkers()
+		ord.getOrCreateInstance(firstSN, gid, initialSeg, members)
 		ord.RunSegmentDirect(initialSeg)
 		fmt.Printf("[MULTICAST] Bootstrap: group=%d firstSN=%d members=%v ready\n", gid, firstSN, members)
 	}
