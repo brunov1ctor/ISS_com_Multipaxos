@@ -151,7 +151,7 @@ type configuration struct {
 	// Maximum size (bytes) of a cross-op batch proposed by CutBatchWithMode. 0 (or unset) falls back to 32KB.
 	CrossOpBatchMaxBytes int `yaml:"CrossOpBatchMaxBytes"`
 
-	// MultiPaxos: quantos SNs cada grupo (ou o broadcast) mantém em andamento ao mesmo tempo. 0 vira 4.
+	// MultiPaxos: quantos SNs cada grupo (ou o broadcast) mantém em andamento ao mesmo tempo. 0 vira 2.
 	MaxInFlightSNs int `yaml:"MaxInFlightSNs"`
 
 	// Ordem total do serviço de multicast:
@@ -246,7 +246,7 @@ func LoadFile(configFileName string) {
 		Config.CrossOpBatchMaxBytes = 32 * 1024
 	}
 	if Config.MaxInFlightSNs <= 0 {
-		Config.MaxInFlightSNs = 4
+		Config.MaxInFlightSNs = 2
 	}
 	logger.Info().Int("MaxInFlightSNs", Config.MaxInFlightSNs).Msg("Config")
 
