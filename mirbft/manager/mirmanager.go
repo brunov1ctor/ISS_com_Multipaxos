@@ -129,7 +129,9 @@ func (mm *MirManager) handleLogEntries(wg *sync.WaitGroup) {
 	}
 
 	var stableCheckpoints chan *pb.StableCheckpoint = nil
-	if config.Config.WaitForCheckpoints {
+	// O multicast usa checkpoint por grupo e o global nunca estabiliza; esperar por ele
+	// para de consumir o log, e o canal cheio trava os commits.
+	if config.Config.WaitForCheckpoints && config.Config.Orderer != "MultiPaxosMulticast" {
 		stableCheckpoints = log.Checkpoints()
 	}
 
