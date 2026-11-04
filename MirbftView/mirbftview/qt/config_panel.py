@@ -66,7 +66,6 @@ _BUILTIN_PRESETS = {
         "num_clients": 1,
         "num_groups": 1,
         "nodes_per_group": 3,
-        "orderer": "MultiPaxosMulticast",
         "batch_size": 1,
         "batch_timeout_s": 10,
         "num_buckets": 3,
@@ -81,7 +80,6 @@ _BUILTIN_PRESETS = {
         "num_groups": 4,
         "nodes_per_group": 3,
         "groups": "1: 0, 1, 2\n2: 2, 3, 4\n3: 0, 4, 1\n4: 1, 3, 4",
-        "orderer": "MultiPaxosMulticast",
         "batch_size": 4096,
         "batch_timeout_s": 10,
         "num_buckets": 16,
@@ -236,10 +234,8 @@ class ConfigPanel(QWidget):
         # Orderer
         layout.addWidget(_section("Orderer / Consenso"))
 
-        self._orderer = _NoScrollComboBox()
-        self._orderer.addItems(["MultiPaxosMulticast", "MultiPaxos", "Pbft", "HotStuff", "Raft"])
-        self._orderer.setCurrentText("MultiPaxosMulticast")
-        layout.addLayout(_row("Orderer:", self._orderer))
+        # O simulador só tem o motor do MultiPaxosMulticast; os outros orderers do Go não são simulados.
+        layout.addWidget(_label("Orderer: MultiPaxosMulticast (único simulado)"))
 
         self._leader_policy = _NoScrollComboBox()
         self._leader_policy.addItems(["Single", "Simple"])
@@ -491,7 +487,6 @@ class ConfigPanel(QWidget):
             "num_groups": self._num_groups.value(),
             "nodes_per_group": self._nodes_per_group.value(),
             "groups": self._groups_text.toPlainText(),
-            "orderer": self._orderer.currentText(),
             "leader_policy": self._leader_policy.currentText(),
             "total_order": self._total_order.currentText(),
             "batch_size": self._batch_size.value(),
@@ -510,7 +505,6 @@ class ConfigPanel(QWidget):
         self._num_groups.setValue(cfg.get("num_groups", 4))
         self._nodes_per_group.setValue(cfg.get("nodes_per_group", 3))
         self._groups_text.setPlainText(cfg.get("groups", ""))
-        self._orderer.setCurrentText(cfg.get("orderer", "MultiPaxosMulticast"))
         self._leader_policy.setCurrentText(cfg.get("leader_policy", "Single"))
         self._total_order.setCurrentText(cfg.get("total_order", "local"))
         self._batch_size.setValue(cfg.get("batch_size", 4096))
@@ -635,7 +629,7 @@ class ConfigPanel(QWidget):
         card.mousePressEvent = _on_card_click
 
         # Details row
-        details = f"{cfg.get('num_nodes','?')} nos | {cfg.get('num_groups','?')} grupos | {cfg.get('orderer','?')} | ordem {cfg.get('total_order','local')} | batch {cfg.get('batch_size','?')}"
+        details = f"{cfg.get('num_nodes','?')} nos | {cfg.get('num_groups','?')} grupos | ordem {cfg.get('total_order','local')} | batch {cfg.get('batch_size','?')}"
         det_lbl = QLabel(details)
         det_lbl.setStyleSheet(f"color: {C['text3']}; font-size: 7pt; border: none; background: transparent;")
         det_lbl.setWordWrap(True)

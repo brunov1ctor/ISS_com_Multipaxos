@@ -9,7 +9,7 @@ from mirbftview.protocol.types import (
 )
 from mirbftview.engine.state import SimState
 from mirbftview.engine.tick import tick as _tick
-from mirbftview.engine.phases import phase_client_send, phase_view_change
+from mirbftview.engine.phases import phase_client_send
 
 
 class Simulation:
@@ -237,15 +237,6 @@ class Simulation:
         for n in self._st.nodes:
             if n.id == node_id:
                 n.is_alive = True
-
-    def trigger_view_change(self, group_id: int = 1):
-        """Força um view change para demonstração (líder atual do grupo dado)."""
-        old_leader = self._st.epoch_mgr.leader_for_group(group_id)
-        all_ids = [n.id for n in self._st.nodes]
-        old_idx = all_ids.index(old_leader) if old_leader in all_ids else 0
-        new_leader = all_ids[(old_idx + 1) % len(all_ids)]
-        new_ballot = group_id + len(all_ids)
-        phase_view_change(self._st, old_leader, new_leader, new_ballot)
 
     # ─── Configuração (usado pelo config_panel) ──────────────────────────
 

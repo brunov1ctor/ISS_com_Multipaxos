@@ -371,6 +371,17 @@ def _advance_instance(st: SimState, req: RequestInfo):
                              f"Vivos {vivos} de {g.members}: precisa de {len(g.members)//2 + 1}.\n"
                              f"O grupo para de decidir (nenhum quorum possivel).", "red")
             return
+        # Líder caído: no Go só o líder propõe, retransmite ou desiste (GIVE-UP) e os grupos
+        # de dados não trocam de líder, então a instância para.
+        if req.leader in st.down_nodes:
+            if not getattr(req, '_leaderdown_logged', False):
+                req._leaderdown_logged = True
+                st.log_event(Phase.VIEW_CHANGE, f"G{req.group_id} PARADO",
+                             f"O lider Node {req.leader} caiu. No codigo Go so o lider propoe,\n"
+                             f"retransmite ou desiste (GIVE-UP), e os grupos de dados nao\n"
+                             f"trocam de lider: o G{req.group_id} para de ordenar. Os outros grupos seguem.",
+                             "red")
+            return
 
     # Instância preparada mas sem pedidos: waitForRequests (sem timeout). A cada rodada
     # tenta cortar de novo; quando corta, a próxima rodada segue para o ACCEPT.
@@ -1010,23 +1021,15 @@ def _touches_down(st: SimState, m) -> bool:
 
 
 def _trigger_node_failure(st: SimState, req: RequestInfo):
-    """Cenário "Falha de nó": o líder desta instância cai DE VEZ (crash-stop) e o grupo faz
-    view change para o próximo membro vivo."""
-    from mirbftview.engine.failure import kill_node, has_quorum
+    """Cenário "Falha de nó": o líder desta instância cai DE VEZ (crash-stop). Como no Go, o
+    grupo não troca de líder e para (ver _advance_instance); os outros grupos seguem."""
+    from mirbftview.engine.failure import kill_node
     old_leader = req.leader
-    group = st.groups[req.group_id]
-    # Só derruba se TODO grupo do nó (inclusive o grupo 0) continuar com maioria viva.
-    for g in st.groups:
-        if old_leader in g.members:
-            remaining = [n for n in g.members if n != old_leader and n not in st.down_nodes]
-            if len(remaining) < len(g.members) // 2 + 1:
-                return  # deixaria G{g.id} sem maioria: não aplica
+    if old_leader == st.seq_leader:
+        # O líder do G0 é outro cenário (seq_failover): espera o lote de um grupo com outro líder.
+        st.scen_done.discard('node_failure')
+        return
     kill_node(st, old_leader, f"Cenario 'Falha de no': lider de G{req.group_id} caiu antes do ACCEPT")
-    new_leader = st.epoch_mgr.leader_for_group(req.group_id)
-    new_ballot = req.ballot + len(st.nodes)
-    phases.phase_view_change(st, old_leader, new_leader, new_ballot)
-    req.phase = Phase.VIEW_CHANGE
-    # Se ele também era o sequenciador, o grupo 0 elege outro na próxima numeração.
 
 
 def _handle_special(st: SimState, req: RequestInfo):

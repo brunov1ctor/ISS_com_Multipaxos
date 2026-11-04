@@ -143,16 +143,18 @@ class ControlBar(QWidget):
              "ignoradas pelo protocolo."),
             ("node_failure", "Falha de no",
              "No 2o lote proposto, o lider da instancia cai DE VEZ antes do\n"
-             "ACCEPT (some da tela) e dispara um View Change: os demais\n"
-             "membros elegem um novo lider com ballot maior. Mecanismo real\n"
-             "de tolerancia a falhas do MultiPaxos. So derruba se todos os\n"
-             "grupos do no continuarem com maioria."),
+             "ACCEPT (some da tela). Como no codigo Go, os grupos de dados\n"
+             "nao trocam de lider: o grupo dele para de ordenar e os outros\n"
+             "grupos seguem. Queda de seguidor nao para o grupo. Nao derruba\n"
+             "o lider do sequenciador (G0), que tem cenario proprio."),
             ("seq_failover", "Falha do lider do sequenciador (G0)",
              "Na 3a mensagem com GSN (1a: reserva; 2a: so META), o lider do\n"
              "grupo 0 para de responder. Os demais elegem um novo lider: cada voto leva a\n"
              "maior reserva de GSN que o no confirmou e o maior META que viu.\n"
              "O novo lider retoma logo apos a maior reserva da maioria (sem\n"
              "palpite) e declara pulados os GSNs sem META (META_SKIP).\n"
+             "Se o no tambem lidera grupos de dados, esses grupos param,\n"
+             "como no Go (grupos de dados nao trocam de lider).\n"
              "Vale a cada execucao (sobrevive ao Reset). Desmarque e marque\n"
              "de novo para derrubar tambem o novo lider (na 3a dele)."),
             ("cross_group", "Forcar cross-group",

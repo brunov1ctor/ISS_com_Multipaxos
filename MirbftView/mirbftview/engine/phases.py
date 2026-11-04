@@ -988,38 +988,6 @@ def phase_checkpoint(st: SimState):
     st.messages = []
 
 
-def phase_view_change(st: SimState, old_leader: int, new_leader: int, new_ballot: int):
-    """View Change — novo ballot proposto após falha do líder."""
-    st.phase = Phase.VIEW_CHANGE
-    st.log_event(Phase.VIEW_CHANGE, "VIEW CHANGE",
-                 f"Lider Node {old_leader} falhou!\n"
-                 f"Novo lider: Node {new_leader} | Ballot: {new_ballot}\n"
-                 f"Followers enviam VIEW_CHANGE",
-                 "red")
-
-    st.info_text = (
-        f"⚠️ Líder caiu! Elegendo substituto...\n\n"
-        f"Node {old_leader} parou de responder.\n"
-        f"Os outros perceberam (timeout) e estão\n"
-        f"elegendo um novo coordenador.\n\n"
-        f"Novo líder: Node {new_leader}\n\n"
-        f"O sistema continua funcionando mesmo com\n"
-        f"falhas — isso é tolerância a faltas!\n\n"
-        f"─── Detalhes ───\n"
-        f"Ballot antigo → novo: {new_ballot}\n"
-        f"Pendências serão re-propostas pelo novo líder."
-    )
-
-    alive_nodes = [n for n in st.nodes if n.is_alive and n.id != old_leader]
-    st.messages = [Message(
-        MsgType.VIEW_CHANGE, n.id, new_leader,
-        label=f"VIEW_CHANGE b={new_ballot}",
-        detail=f"suspect={old_leader}",
-        ballot=new_ballot,
-        sn=-1,
-    ) for n in alive_nodes]
-
-
 def phase_retransmit(st: SimState):
     """Retransmissão — líder não recebeu quorum, reenvia ACCEPT."""
     req = st.current_request

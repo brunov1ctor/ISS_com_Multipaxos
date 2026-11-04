@@ -1,7 +1,9 @@
 """Queda definitiva de nó (crash-stop), usada pelos cenários de falha.
 
-Um nó que cai para de responder até o Reset: não é mais líder (de grupo de dados nem do
-sequenciador), não envia nem recebe mensagens, e seus grupos seguem com a maioria restante.
+Um nó que cai para de responder até o Reset: não envia nem recebe mensagens. Como no Go:
+- seguidor caído: o grupo segue com a maioria restante;
+- líder de grupo de dados caído: o grupo para (não há troca de líder nos grupos de dados);
+- líder do sequenciador (G0) caído: o G0 elege outro (engine/sequencer.py).
 Na tela ele treme, desbota e some (ver qt/canvas/draw_nodes.py).
 """
 
@@ -20,7 +22,7 @@ def alive(st, ids):
 
 
 def kill_node(st, nid: int, reason: str):
-    """Derruba o nó `nid` de vez. Instâncias que ele liderava fazem view change."""
+    """Derruba o nó `nid` de vez. Instâncias que ele liderava param (ver tick._advance)."""
     if is_down(st, nid):
         return
     st.down_nodes.add(nid)
@@ -36,15 +38,13 @@ def kill_node(st, nid: int, reason: str):
     except Exception:
         pass
     led = sorted(i.group_id for i in st.instances.values() if i.leader == nid)
-    for inst in st.instances.values():
-        if inst.leader == nid and inst.phase not in (Phase.DONE, Phase.VIEW_CHANGE):
-            inst.phase = Phase.VIEW_CHANGE  # _handle_special devolve o batch e encerra a posição
     groups = sorted(g.id for g in st.groups if nid in g.members)
     st.log_event(Phase.VIEW_CHANGE, f"Node {nid} CAIU",
                  f"{reason}\n"
                  f"Node {nid} parou de responder (crash-stop): fica fora ate o Reset.\n"
                  f"Grupos afetados: {['G' + str(g) for g in groups]}"
-                 + (f"\nEra lider de {['G' + str(g) for g in led]}: view change." if led else ""),
+                 + (f"\nEra lider de {['G' + str(g) for g in led]}: o grupo para "
+                    f"(o Go nao troca de lider nos grupos de dados)." if led else ""),
                  "red")
 
 
