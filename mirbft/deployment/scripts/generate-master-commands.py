@@ -468,11 +468,18 @@ def run(expID, tokens):
     elif os.path.isdir(outdir):
         sys.stderr.write("{0} already exists. (S)kip / skip (A)ll / (C)ancel? : ".format(outdir))
         sys.stderr.flush()
-        answer = sys.stdin.readline().strip()
+        line = sys.stdin.readline()
+        # sem terminal (stdin no fim) cancela; antes repetia a pergunta para sempre
+        if not line:
+            sys.exit("{0} already exists and stdin is closed.".format(outdir))
+        answer = line.strip()
         while answer not in {"s", "S", "a", "A", "c", "C"}:
             sys.stderr.write("Please answer a, s, or c : ")
             sys.stderr.flush()
-            answer = sys.stdin.readline().strip()
+            line = sys.stdin.readline()
+            if not line:
+                sys.exit("{0} already exists and stdin is closed.".format(outdir))
+            answer = line.strip()
 
         if answer in {"s", "S"}:
             skip = True
