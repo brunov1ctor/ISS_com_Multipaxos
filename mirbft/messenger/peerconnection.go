@@ -245,6 +245,10 @@ type BufferedMultiConnection struct {
 	// permanently closed. May be nil (e.g. in tests), in which case sendMessages falls back to the
 	// old permanent-closure behavior.
 	redial func() pb.Messenger_ListenClient
+
+	// 1 enquanto reconecta: Send descarta em vez de bloquear com o buffer cheio, senão quem
+	// envia a um nó caído (proxy, sequenciador, líder) trava junto.
+	down int32
 }
 
 func NewBufferedMultiConnection(msgSinks []pb.Messenger_ListenClient,
@@ -287,7 +291,7 @@ func (bmc *BufferedMultiConnection) Send(msg *pb.ProtocolMessage) {
 
 	// Setting next to -1 means that the connection should be considered closed after a failure and all outgoing
 	// messages should be ignored.
-	if next == -1 {
+	if next == -1 || atomic.LoadInt32(&bmc.down) == 1 {
 		return
 	}
 
@@ -312,7 +316,7 @@ func (bmc *BufferedMultiConnection) SendPriority(msg *pb.ProtocolMessage) {
 
 		// Setting next to -1 means that the connection should be considered closed after a failure and all outgoing
 		// messages should be ignored.
-		if next == -1 {
+		if next == -1 || atomic.LoadInt32(&bmc.down) == 1 {
 			return
 		}
 
@@ -373,10 +377,12 @@ func (bmc *BufferedMultiConnection) reconnectWithBackoff() pb.Messenger_ListenCl
 		return nil
 	}
 
+	atomic.StoreInt32(&bmc.down, 1)
 	delay := reconnectInitialDelay
 	for {
 		if sink := bmc.redial(); sink != nil {
 			logger.Info().Msg("Reconnected to peer after send failure.")
+			atomic.StoreInt32(&bmc.down, 0)
 			return sink
 		}
 		time.Sleep(delay)
