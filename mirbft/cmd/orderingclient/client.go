@@ -901,8 +901,13 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 		c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", config.Config.CrossOpProxyNodeID).Msg("Sending to proxy for preprocessing")
 		return []int32{config.Config.CrossOpProxyNodeID}
 	}
-	// No fixed proxy: round-robin by ClientSn instead of always node 0.
 	nodeIDs := membership.AllNodeIDs()
+	// Broadcast com Single: só o líder (primeiro nó) propõe e o nó que recebe não repassa,
+	// então a requisição tem que ir direto para ele.
+	if config.Config.Orderer == "MultiPaxos" && config.Config.LeaderPolicy == "Single" {
+		return []int32{nodeIDs[0]}
+	}
+	// No fixed proxy: round-robin by ClientSn instead of always node 0.
 	proxyID := nodeIDs[int(req.RequestId.ClientSn)%len(nodeIDs)]
 	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", proxyID).Msg("Sending to round-robin proxy for preprocessing")
 	return []int32{proxyID}
