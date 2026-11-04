@@ -81,7 +81,7 @@ ViewChangeTimeout:  VIEWCHANGETIMEOUT  # Timeout (ms) to start a view change whe
 # Tracing configuration
 EventBufferSize: 2097152 # 2 * (2^20) Capacity of the tracing event buffer, in number of events.
 TraceSampling:   1       # Only trace one out of TraceSampling events.
-ClientTraceSampling: 10 # Only trace one out of ClientTraceSampling events at the client.
+ClientTraceSampling: 7 # Only trace one out of ClientTraceSampling events at the client.
 
 # Client configuration
 ClientsPerProcess:    CLIENTS       # Number of concurrent clients on each client machine (running as threads in a single process).

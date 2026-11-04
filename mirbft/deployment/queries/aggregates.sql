@@ -324,9 +324,9 @@ WHERE event = 'REQ_FINISHED'
 -- Throughput (without cutting off start and end)
 -- export throughput-raw.val
 --
--- !!!!! Multiplying by 10 for sampling
+-- Multiplica pela amostragem do cliente (ClientTraceSampling = 7; 10 coincidia com o rodízio de 5 nós)
 -- TODO parametrize the sumpling multiplier
-SELECT 10 * 1000000.0 * count() / (max(ts) - min(ts))
+SELECT 7 * 1000000.0 * count() / (max(ts) - min(ts))
 FROM request
 WHERE event = 'REQ_FINISHED'
 -- (throughput[req/sec])
@@ -334,9 +334,9 @@ WHERE event = 'REQ_FINISHED'
 -- Throughput, using truncated request data
 -- export throughput-trunc.val
 --
--- !!!!! Multiplying by 10 for sampling
+-- Multiplica pela amostragem do cliente (ClientTraceSampling = 7; 10 coincidia com o rodízio de 5 nós)
 -- TODO parametrize the sumpling multiplier
-SELECT 10 * 1000000.0 * count() / (max(ts) - min(ts))
+SELECT 7 * 1000000.0 * count() / (max(ts) - min(ts))
 FROM request_truncated
 WHERE event = 'REQ_FINISHED'
 -- (throughput[req/sec])

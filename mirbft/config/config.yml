@@ -94,7 +94,7 @@ BatchTimeout: 50            # Timeout (ms) to cut batch when the bucket has less
 # PBFT Instance config
 DisabledViewChange: false   # This flag disables the view change messages and nodes instead panic, so that bugs in the normal case operation can be detected.
 ViewChangeTimeout: 20000    # Timeout (ms) to start a view change when an instance is not progressing.
-ClientTraceSampling: 10     # Only trace one out of ClientTraceSampling events at the client.
+ClientTraceSampling: 7     # Only trace one out of ClientTraceSampling events at the client.
 
 # Tracing configuration
 EventBufferSize: 1048576    # (2^20) Capacity of the tracing event buffer, in number of events.
