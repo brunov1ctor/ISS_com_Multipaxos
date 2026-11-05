@@ -92,11 +92,15 @@ func (bt *BufferedTrace) Event(e EventType, sampledVal int64, val0 int64) {
 	// Check bounds.
 	// TODO: Try removing the bound check (while making sure the buffer is big enough)
 	//       and see impact on performance.
+	// Buffer cheio: descarta o evento (escrever fora do limite derrubava o processo).
 	if int(index) >= bt.BufferCapacity {
-		logger.Error().
-			Int32("index", index).
-			Int("capacity", config.Config.EventBufferSize).
-			Msg("Trace event index exceeds capacity.")
+		if int(index) == bt.BufferCapacity {
+			logger.Error().
+				Int32("index", index).
+				Int("capacity", config.Config.EventBufferSize).
+				Msg("Trace event buffer full; discarding further events.")
+		}
+		return
 	}
 
 	// Add event to trace.
@@ -231,6 +235,9 @@ func (bt *BufferedTrace) Stop() {
 	traceLogger := zerolog.New(bufWriter)
 
 	nEvents := atomic.LoadInt32(&bt.offset)
+	if int(nEvents) > bt.BufferCapacity {
+		nEvents = int32(bt.BufferCapacity)
+	}
 	//nProtocolEvents := atomic.LoadInt32(&bt.protocolOffset)
 	//nRequestEvents := atomic.LoadInt32(&bt.requestOffset)
 	//nEthereumEvents := atomic.LoadInt32(&bt.ethereumOffset)
