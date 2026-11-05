@@ -12,6 +12,8 @@ package orderer
 import (
 	"fmt"
 	"math/rand"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/hyperledger-labs/mirbft/config"
@@ -76,11 +78,87 @@ func (s *Sequencer) startElectionTimerLockedFor(timeout time.Duration) {
 	s.electionTimer = time.AfterFunc(timeout, s.onElectionTimeout)
 }
 
-// onElectionTimeout dispara quando o timer de eleição deste nó expira sem heartbeat do líder
-// nem vitória — seguidor sem notícia do líder, ou candidato cuja própria eleição não deu quórum
-// a tempo. Em ambos os casos, incrementa o termo, vira candidato, vota em si mesmo e pede votos.
+// minElectionTimeout é o prazo mínimo sem notícia do líder para um nó aceitar trocá-lo.
+func minElectionTimeout() time.Duration {
+	ms := config.Config.SequencerElectionTimeoutMs
+	if ms <= 0 {
+		ms = 500
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// onElectionTimeout dispara quando o timer de eleição expira sem notícia do líder. Antes de
+// subir o termo, pergunta aos outros se aceitariam trocar de líder (pré-votação): sob carga, um
+// heartbeat atrasado num só nó não derruba um líder que a maioria ainda ouve.
 func (s *Sequencer) onElectionTimeout() {
+	s.electMu.Lock()
+	if s.status == leader {
+		s.electMu.Unlock()
+		return
+	}
+	s.preVoteTerm = s.term + 1
+	s.preVotes = map[int32]bool{membership.OwnID: true}
+	next := s.preVoteTerm
+	won := len(s.preVotes) > len(s.members)/2
+	s.startElectionTimerLocked()
+	s.electMu.Unlock()
+	if won {
+		s.startElection()
+		return
+	}
+	s.broadcastToMembers(fmt.Sprintf("%s%d:%d", SYSTEM_SEQ_PREVOTE_REQUEST, next, membership.OwnID))
+}
+
+// HandlePreVoteRequest concede o pré-voto só se este nó também não ouve o líder há um prazo
+// mínimo de eleição. Não muda termo nem voto.
+func (s *Sequencer) HandlePreVoteRequest(payload string, senderID int32) {
+	var term int64
+	var candidateID int32
+	if n, _ := fmt.Sscanf(payload, SYSTEM_SEQ_PREVOTE_REQUEST+"%d:%d", &term, &candidateID); n < 2 {
+		return
+	}
+	s.electMu.RLock()
+	granted := int32(term) > s.term && s.status != leader && time.Since(s.lastLeaderContact) >= minElectionTimeout()
+	s.electMu.RUnlock()
+	g := 0
+	if granted {
+		g = 1
+	}
+	messenger.EnqueuePriorityMsg(&pb.ProtocolMessage{
+		SenderId: membership.OwnID, Sn: -1,
+		Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
+			Req: &pb.ClientRequest{Payload: []byte(fmt.Sprintf("%s%d:%d", SYSTEM_SEQ_PREVOTE_RESPONSE, term, g))},
+		}},
+	}, senderID)
+}
+
+// HandlePreVoteResponse: com a maioria dos pré-votos, começa a eleição de fato.
+func (s *Sequencer) HandlePreVoteResponse(payload string, senderID int32) {
+	var term int64
+	var g int
+	if n, _ := fmt.Sscanf(payload, SYSTEM_SEQ_PREVOTE_RESPONSE+"%d:%d", &term, &g); n < 2 || g == 0 {
+		return
+	}
+	s.electMu.Lock()
+	if s.status == leader || int32(term) != s.preVoteTerm || s.term+1 != int32(term) || s.preVotes == nil {
+		s.electMu.Unlock()
+		return
+	}
+	s.preVotes[senderID] = true
+	won := len(s.preVotes) > len(s.members)/2
+	if won {
+		s.preVotes = nil
+	}
+	s.electMu.Unlock()
+	if won {
+		s.startElection()
+	}
+}
+
+// startElection incrementa o termo, vira candidato, vota em si mesmo e pede votos.
+func (s *Sequencer) startElection() {
 	meta := s.maxMetaSeen()
+	holes := s.metaHoles(meta)
 	s.gsnMu.Lock()
 	accepted := s.acceptedUpTo
 	s.gsnMu.Unlock()
@@ -98,6 +176,7 @@ func (s *Sequencer) onElectionTimeout() {
 	// Começa com os próprios valores; os votos recebidos podem aumentá-los (protegidos por electMu).
 	s.voteMaxAccepted = accepted
 	s.voteMaxMeta = meta
+	s.voteHoles = holes
 	term := s.term
 	s.startElectionTimerLocked()
 	s.electMu.Unlock()
@@ -139,8 +218,11 @@ func (s *Sequencer) HandleVoteRequest(payload string, senderID int32) {
 	s.gsnMu.Lock()
 	accepted := s.acceptedUpTo
 	s.gsnMu.Unlock()
-	// Voto leva a maior reserva que este nó confirmou e o maior GSN com META que viu.
-	responsePayload := fmt.Sprintf("%s%d:%d:%d:%d", SYSTEM_SEQ_VOTE_RESPONSE, replyTerm, grantedInt, accepted, s.maxMetaSeen())
+	// Voto leva a maior reserva que este nó confirmou, o maior GSN com META que viu e os GSNs
+	// abaixo dele que ficaram sem META.
+	meta := s.maxMetaSeen()
+	responsePayload := fmt.Sprintf("%s%d:%d:%d:%d:%s", SYSTEM_SEQ_VOTE_RESPONSE, replyTerm, grantedInt, accepted, meta,
+		encodeRanges(s.metaHoles(meta)))
 	messenger.EnqueuePriorityMsg(&pb.ProtocolMessage{
 		SenderId: membership.OwnID, Sn: -1,
 		Msg: &pb.ProtocolMessage_GsnReqForward{GsnReqForward: &pb.GSNReqForward{
@@ -185,6 +267,9 @@ func (s *Sequencer) HandleVoteResponse(payload string, senderID int32) {
 			s.voteMaxMeta = vMeta
 		}
 	}
+	if f := strings.Split(strings.TrimPrefix(payload, SYSTEM_SEQ_VOTE_RESPONSE), ":"); len(f) >= 5 {
+		s.voteHoles = append(s.voteHoles, decodeRanges(f[4])...)
+	}
 	becameLeader := len(s.votes) > len(s.members)/2
 	wonTerm := s.term
 	if becameLeader {
@@ -213,6 +298,7 @@ func (s *Sequencer) resumeGSNCounterOnBecomingLeader() {
 	s.electMu.RLock()
 	maxAcc := s.voteMaxAccepted
 	maxMeta := s.voteMaxMeta
+	holes := append([][2]uint64{}, s.voteHoles...)
 	s.electMu.RUnlock()
 	s.gsnMu.Lock()
 	if s.acceptedUpTo > maxAcc {
@@ -240,6 +326,12 @@ func (s *Sequencer) resumeGSNCounterOnBecomingLeader() {
 	}
 	if resume-1 >= skipFrom {
 		s.PublishMETASkip(skipFrom, resume-1)
+	}
+	// GSNs abaixo do maior META que ficaram sem META (o proxy parou antes de publicar):
+	// sem isso a entrega de todos os grupos espera por eles para sempre.
+	holes = append(holes, s.metaHoles(maxMeta)...)
+	if len(holes) > 0 {
+		go s.recoverMetaHoles(holes)
 	}
 
 	fmt.Printf("[SEQUENCER][ELECTION] nextGSN retomado em %d (maior reserva da maioria=%d, maior META=%d)\n", resume, maxAcc, maxMeta)
@@ -294,12 +386,167 @@ func (s *Sequencer) HandleHeartbeat(payload string, senderID int32) {
 	s.leader = leaderID
 	s.votedFor = leaderID
 	s.status = follower
+	s.lastLeaderContact = time.Now()
 	s.startElectionTimerLocked()
 	s.electMu.Unlock()
 
 	if wasLeader && leaderID != membership.OwnID {
 		fmt.Printf("[SEQUENCER][ELECTION] Cedendo liderança: heartbeat term=%d de leader=%d\n", term, leaderID)
 		logger.Info().Int32("term", int32(term)).Int32("newLeader", leaderID).Msg("Sequencer stepping down")
+	}
+}
+
+// maxHoleScan limita quantos GSNs abaixo do maior META são examinados atrás de buracos.
+const maxHoleScan = 200000
+
+// metaQueryWait é quanto o novo líder espera os METAs republicados antes de pular o que faltar.
+const metaQueryWait = 2 * time.Second
+
+// metaHoles devolve, em faixas, os GSNs até `upto` sem META conhecido e fora das faixas puladas.
+func (s *Sequencer) metaHoles(upto uint64) [][2]uint64 {
+	if upto == 0 {
+		return nil
+	}
+	from := uint64(1)
+	if upto > maxHoleScan {
+		from = upto - maxHoleScan + 1
+	}
+	s.skipMu.Lock()
+	skips := make([][2]uint64, 0, len(s.skipRanges))
+	for r := range s.skipRanges {
+		skips = append(skips, r)
+	}
+	s.skipMu.Unlock()
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
+	var out [][2]uint64
+	for g := from; g <= upto; g++ {
+		if _, ok := s.metadata[g]; ok || inRanges(skips, g) {
+			continue
+		}
+		out = addToRanges(out, g)
+	}
+	return out
+}
+
+func inRanges(rs [][2]uint64, g uint64) bool {
+	for _, r := range rs {
+		if g >= r[0] && g <= r[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// addToRanges acrescenta g (em ordem crescente) à lista de faixas.
+func addToRanges(rs [][2]uint64, g uint64) [][2]uint64 {
+	if n := len(rs); n > 0 && rs[n-1][1]+1 == g {
+		rs[n-1][1] = g
+		return rs
+	}
+	return append(rs, [2]uint64{g, g})
+}
+
+// encodeRanges escreve as faixas como "a-b,c-d" (até 512 faixas, para o voto não crescer demais).
+func encodeRanges(rs [][2]uint64) string {
+	if len(rs) > 512 {
+		rs = rs[len(rs)-512:]
+	}
+	parts := make([]string, len(rs))
+	for i, r := range rs {
+		parts[i] = fmt.Sprintf("%d-%d", r[0], r[1])
+	}
+	return strings.Join(parts, ",")
+}
+
+func decodeRanges(s string) [][2]uint64 {
+	var out [][2]uint64
+	for _, p := range strings.Split(s, ",") {
+		var a, b uint64
+		if n, _ := fmt.Sscanf(p, "%d-%d", &a, &b); n == 2 && a > 0 && b >= a {
+			out = append(out, [2]uint64{a, b})
+		}
+	}
+	return out
+}
+
+// metaOf devolve os grupos do META de um GSN, ou nil se ele não é conhecido aqui.
+func (s *Sequencer) metaOf(gsn uint64) []uint32 {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
+	if g, ok := s.metadata[gsn]; ok {
+		return append([]uint32{}, g...)
+	}
+	return nil
+}
+
+func (s *Sequencer) isSkipped(gsn uint64) bool {
+	s.skipMu.Lock()
+	defer s.skipMu.Unlock()
+	for r := range s.skipRanges {
+		if gsn >= r[0] && gsn <= r[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// recoverMetaHoles (novo líder): republica os METAs que tem, pede a todos os que não tem e,
+// depois de metaQueryWait, declara pulados os que ninguém republicou.
+func (s *Sequencer) recoverMetaHoles(holes [][2]uint64) {
+	set := make(map[uint64]bool)
+	for _, r := range holes {
+		for g := r[0]; g <= r[1] && len(set) < maxHoleScan; g++ {
+			set[g] = true
+		}
+	}
+	gsns := make([]uint64, 0, len(set))
+	for g := range set {
+		gsns = append(gsns, g)
+	}
+	sort.Slice(gsns, func(i, j int) bool { return gsns[i] < gsns[j] })
+
+	var missing [][2]uint64
+	republished := 0
+	for _, g := range gsns {
+		if groups := s.metaOf(g); groups != nil {
+			s.sendMETA(g, groups)
+			republished++
+		} else if !s.isSkipped(g) {
+			missing = addToRanges(missing, g)
+		}
+	}
+	fmt.Printf("[SEQUENCER][META-HOLES] %d GSNs sem META em algum votante: %d republicados, faltam %s\n",
+		len(gsns), republished, encodeRanges(missing))
+	if len(missing) == 0 {
+		return
+	}
+	s.broadcastToMembers(SYSTEM_META_QUERY + encodeRanges(missing))
+	time.Sleep(metaQueryWait)
+	if !s.IsLeader() {
+		return
+	}
+	var still [][2]uint64
+	for _, r := range missing {
+		for g := r[0]; g <= r[1]; g++ {
+			if s.metaOf(g) == nil && !s.isSkipped(g) {
+				still = addToRanges(still, g)
+			}
+		}
+	}
+	for _, r := range still {
+		s.PublishMETASkip(r[0], r[1])
+	}
+}
+
+// HandleMETAQuery: republica os METAs pedidos pelo novo líder que este nó conhece.
+func (s *Sequencer) HandleMETAQuery(payload string) {
+	for _, r := range decodeRanges(strings.TrimPrefix(payload, SYSTEM_META_QUERY)) {
+		for g := r[0]; g <= r[1]; g++ {
+			if groups := s.metaOf(g); groups != nil {
+				s.sendMETA(g, groups)
+			}
+		}
 	}
 }
 

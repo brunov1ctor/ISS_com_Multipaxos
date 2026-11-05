@@ -58,6 +58,7 @@ type Sequencer struct {
 	// Eleição: maiores valores informados pelos votos recebidos neste termo
 	voteMaxAccepted uint64
 	voteMaxMeta     uint64
+	voteHoles       [][2]uint64 // GSNs sem META informados pelos votantes (faixas)
 
 	// Pending GSN requests (aguardando resposta do líder)
 	requestsPending map[uint64]chan uint64
@@ -86,6 +87,10 @@ type Sequencer struct {
 	status          string
 	votes           map[int32]bool
 	electionTimer   *time.Timer
+	// Pré-votação: quando ouviu o líder pela última vez, e os pré-votos do termo pretendido.
+	lastLeaderContact time.Time
+	preVoteTerm       int32
+	preVotes          map[int32]bool
 
 	// Chamado a cada META novo (entrega global por nó, ver globaldeliver.go)
 	onMeta func(gsn uint64, touchedGroups []uint32)
@@ -349,9 +354,14 @@ func (s *Sequencer) HandleReserve(payload string, senderID int32) {
 	if n, _ := fmt.Sscanf(payload, SYSTEM_SEQ_RESERVE+"%d:%d", &term, &upto); n < 2 {
 		return
 	}
-	s.electMu.RLock()
+	s.electMu.Lock()
 	stale := int32(term) < s.term
-	s.electMu.RUnlock()
+	if !stale && senderID == s.leader && s.status != "leader" {
+		// Reserva do líder também é sinal de vida (o heartbeat pode atrasar sob carga).
+		s.lastLeaderContact = time.Now()
+		s.startElectionTimerLocked()
+	}
+	s.electMu.Unlock()
 	if stale {
 		return
 	}
@@ -513,8 +523,11 @@ func (s *Sequencer) PublishMETA(gsn uint64, touchedGroups []uint32) {
 
 	// Registra localmente
 	s.RegisterMetadata(gsn, touchedGroups)
+	s.sendMETA(gsn, touchedGroups)
+}
 
-	// Broadcast META para todos os nós (com prioridade para evitar buffer overflow)
+// sendMETA envia o META de um GSN a todos os outros nós (com prioridade para evitar buffer overflow).
+func (s *Sequencer) sendMETA(gsn uint64, touchedGroups []uint32) {
 	metaPayload := fmt.Sprintf("%s%d", SYSTEM_META_STREAM, gsn)
 	for _, nodeID := range membership.AllNodeIDs() {
 		if nodeID == membership.OwnID {

@@ -24,9 +24,12 @@ import (
 const (
 	SYSTEM_META_STREAM = "SYSTEM:META_STREAM:"
 	SYSTEM_META_SKIP   = "SYSTEM:META_SKIP:" // faixa de GSNs pulada por um novo líder (ver resumeGSNCounterOnBecomingLeader)
+	SYSTEM_META_QUERY  = "SYSTEM:META_QUERY:" // novo líder pede os METAs que lhe faltam; quem tiver, republica
 	SYSTEM_GSN_REQUEST = "SYSTEM:GSN_REQUEST:"
 
 	// GSN sequencer leader election (failover)
+	SYSTEM_SEQ_PREVOTE_REQUEST  = "SYSTEM:SEQ_PREVOTE_REQUEST:"  // pergunta antes de subir o termo
+	SYSTEM_SEQ_PREVOTE_RESPONSE = "SYSTEM:SEQ_PREVOTE_RESPONSE:"
 	SYSTEM_SEQ_VOTE_REQUEST  = "SYSTEM:SEQ_VOTE_REQUEST:"
 	SYSTEM_SEQ_VOTE_RESPONSE = "SYSTEM:SEQ_VOTE_RESPONSE:"
 	SYSTEM_SEQ_HEARTBEAT     = "SYSTEM:SEQ_HEARTBEAT:"
@@ -188,6 +191,10 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			o.seq.HandleMETASkip(payload)
 			return
 		}
+		if strings.HasPrefix(payload, SYSTEM_META_QUERY) {
+			o.seq.HandleMETAQuery(payload)
+			return
+		}
 		// META_STREAM -> Sequencer
 		if strings.HasPrefix(payload, SYSTEM_META_STREAM) {
 			req := gsnForward.Req
@@ -195,6 +202,14 @@ func (o *MultiPaxosMulticastOrderer) HandleMessage(pm *pb.ProtocolMessage) {
 			return
 		}
 		// Sequencer leader election (failover)
+		if strings.HasPrefix(payload, SYSTEM_SEQ_PREVOTE_REQUEST) {
+			o.seq.HandlePreVoteRequest(payload, pm.SenderId)
+			return
+		}
+		if strings.HasPrefix(payload, SYSTEM_SEQ_PREVOTE_RESPONSE) {
+			o.seq.HandlePreVoteResponse(payload, pm.SenderId)
+			return
+		}
 		if strings.HasPrefix(payload, SYSTEM_SEQ_VOTE_REQUEST) {
 			o.seq.HandleVoteRequest(payload, pm.SenderId)
 			return
