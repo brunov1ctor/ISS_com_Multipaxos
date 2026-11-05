@@ -907,10 +907,38 @@ func (c *client) guessTargetOrderers(req *pb.ClientRequest) []int32 {
 	if config.Config.Orderer == "MultiPaxos" && config.Config.LeaderPolicy == "Single" {
 		return []int32{nodeIDs[0]}
 	}
+	// PBFT, HotStuff e Raft também não repassam: como no ISS original, a requisição vai aos
+	// líderes dos buckets dela na época atual (os pendentes são reenviados quando a época muda).
+	if config.Config.Orderer != "MultiPaxos" && config.Config.Orderer != "MultiPaxosMulticast" {
+		return c.bucketLeaders(req)
+	}
 	// No fixed proxy: round-robin by ClientSn instead of always node 0.
 	proxyID := nodeIDs[int(req.RequestId.ClientSn)%len(nodeIDs)]
 	c.log.Trace().Int32("clSn", req.RequestId.ClientSn).Int32("proxy", proxyID).Msg("Sending to round-robin proxy for preprocessing")
 	return []int32{proxyID}
+}
+
+// bucketLeaders devolve, sem repetição, os líderes do bucket da requisição e dos reqFanout-1
+// buckets anteriores, segundo a atribuição da época atual.
+func (c *client) bucketLeaders(req *pb.ClientRequest) []int32 {
+	b := request.GetBucketNr(req)
+	seen := make(map[int32]bool)
+	var out []int32
+	for i := 0; i < reqFanout; i++ {
+		if l, ok := c.currentBucketAssignment[b]; ok && !seen[l] {
+			seen[l] = true
+			out = append(out, l)
+		}
+		if b > 0 {
+			b--
+		} else {
+			b = c.maxBucketID
+		}
+	}
+	if len(out) == 0 {
+		return membership.AllNodeIDs()
+	}
+	return out
 }
 
 // Creates a string representation of a bucket assignment for the purpose of using it as a map key.
