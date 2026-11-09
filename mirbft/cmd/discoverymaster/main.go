@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -89,7 +90,11 @@ func main() {
 	// ✅ Load IP to ID mapping from instance-info if available
 	instanceInfoPath := os.Getenv("INSTANCE_INFO_PATH")
 	if instanceInfoPath == "" {
-		instanceInfoPath = "/tmp/iss-Bruno/config/instance-info" // Default path
+		user := os.Getenv("USER")
+		if user == "" {
+			user = "user"
+		}
+		instanceInfoPath = fmt.Sprintf("/tmp/iss-%s/config/instance-info", user)
 	}
 	if err := masterSrv.LoadIPToIDMapping(instanceInfoPath); err != nil {
 		logger.Warn().Err(err).Str("path", instanceInfoPath).Msg("Could not load instance-info, using dynamic IDs")

@@ -5,6 +5,7 @@ package orderer
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,7 +92,9 @@ func (o *MultiPaxosMulticastOrderer) Init(mngr manager.Manager) {
 	fmt.Printf("[MULTICAST] NewAtomicMulticast: group0 members=%v\n", o.am.GetGroupMembers(0))
 	o.groupOrderers = make(map[uint32]*MultiPaxosOrderer)
 	// Load groups
-	if o.groupsFilePath == "" { o.groupsFilePath = "/tmp/iss-Bruno/config/groups.yml" }
+	if o.groupsFilePath == "" {
+		o.groupsFilePath = defaultGroupsFilePath()
+	}
 	if err := o.am.LoadGroupsFromYAML(o.groupsFilePath); err != nil {
 		logger.Fatal().Err(err).Msg("Failed to load groups")
 	}
@@ -611,4 +614,16 @@ func (o *MultiPaxosMulticastOrderer) PreprocessRequest(req *pb.ClientRequest) bo
 		}, groupID)
 	}
 	return true
+}
+
+// defaultGroupsFilePath usa GROUPS_FILE ou o diretório de trabalho do deploy (/tmp/iss-$USER).
+func defaultGroupsFilePath() string {
+	if p := os.Getenv("GROUPS_FILE"); p != "" {
+		return p
+	}
+	user := os.Getenv("USER")
+	if user == "" {
+		user = "user"
+	}
+	return fmt.Sprintf("/tmp/iss-%s/config/groups.yml", user)
 }
